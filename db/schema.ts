@@ -67,3 +67,35 @@ export const siteContent = sqliteTable("site_content", {
   value: text("value").notNull(),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const visitSessions = sqliteTable("visit_sessions", {
+  id: text("id").primaryKey(),
+  startedAt: text("started_at").notNull(),
+  lastSeenAt: text("last_seen_at").notNull(),
+  source: text("source").notNull(),
+  medium: text("medium").notNull().default(""),
+  campaign: text("campaign").notNull().default(""),
+  referrer: text("referrer").notNull().default(""),
+  device: text("device").notNull().default(""),
+  browser: text("browser").notNull().default(""),
+  landingPage: text("landing_page").notNull(),
+  currentPage: text("current_page").notNull(),
+  activeSeconds: integer("active_seconds").notNull().default(0),
+  displayName: text("display_name").notNull().default(""),
+  facebookUrl: text("facebook_url").notNull().default(""),
+  declaredPurpose: text("declared_purpose").notNull().default(""),
+}, (table) => [
+  index("visit_sessions_seen").on(table.lastSeenAt),
+  index("visit_sessions_source").on(table.source, table.startedAt),
+]);
+
+export const visitEvents = sqliteTable("visit_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  sessionId: text("session_id").notNull(),
+  occurredAt: text("occurred_at").notNull(),
+  type: text("type").notNull(),
+  page: text("page").notNull(),
+  label: text("label").notNull().default(""),
+}, (table) => [
+  index("visit_events_session").on(table.sessionId, table.id),
+]);

@@ -19,13 +19,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="vi">
+    <html lang="vi" suppressHydrationWarning>
       <head>
         <link rel="stylesheet" href="/fonts/fonts.css" />
-        <link rel="stylesheet" href="/styles.css" />
-        <link rel="stylesheet" href="/couture.css" />
+        <link rel="stylesheet" href="/styles.css?v=2.3" />
+        <link rel="stylesheet" href="/couture.css?v=117.0" />
+        <link rel="stylesheet" href="/site-tools.css?v=144.0" />
+        <link rel="stylesheet" href="/admin-refinements.css?v=6" />
       </head>
-      <body>{children}</body>
+      <body suppressHydrationWarning>{children}</body>
     </html>
   );
 }

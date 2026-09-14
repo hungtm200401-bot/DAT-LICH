@@ -5,3 +5,11 @@ body {
   margin: 0;
   background: #fff;
 }
+
+/* Luôn giữ hiển thị ảnh khi hover */
+.fashion-photo img.fashion-full,
+a:hover > .fashion-photo img.fashion-full,
+a:hover .fashion-photo img:first-child,
+.couture a:hover .fashion-photo > img:first-child {
+  opacity: 1 !important;
+}

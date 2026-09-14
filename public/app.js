@@ -1,6 +1,25 @@
 (() => {
   'use strict';
 
+  // Guaranteed critical schedule styles injection (bulletproof against browser CSS caching)
+  if (typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.head) {
+    let sEl = document.getElementById('schv2-critical-styles');
+    if (!sEl) {
+      sEl = document.createElement('style');
+      sEl.id = 'schv2-critical-styles';
+      document.head.appendChild(sEl);
+    }
+    sEl.textContent = `
+      .schv2-calendar { overflow-y: auto !important; max-height: 860px !important; box-sizing: border-box !important; }
+      .schv2-header-row { position: sticky !important; top: 0 !important; z-index: 30 !important; display: grid !important; grid-template-columns: 66px repeat(7, 1fr) !important; grid-template-rows: 62px !important; height: 62px !important; min-height: 62px !important; max-height: 62px !important; overflow: hidden !important; border-bottom: 1px solid #e5e7eb !important; background: #fafafa !important; box-sizing: border-box !important; }
+      .schv2-grid-body { position: relative !important; display: grid !important; grid-template-columns: 66px repeat(7, 1fr) !important; overflow: visible !important; max-height: none !important; box-sizing: border-box !important; }
+      .schv2-day-header { height: 62px !important; box-sizing: border-box !important; padding: 6px 2px !important; }
+      .schv2-hour-col-head { height: 62px !important; box-sizing: border-box !important; }
+      .schv2-wed-header { background: #fafafa !important; }
+      .schv2-wed-col { background: #ffffff !important; }
+    `;
+  }
+
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const money = (value) => new Intl.NumberFormat('vi-VN').format(value) + 'đ';
@@ -47,6 +66,27 @@
     return `<svg class="ui-icon ui-icon-${name}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${title}${paths[name] || paths.more}</svg>`;
   };
 
+  const localIso = (date = new Date()) => {
+    const d = new Date(date);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const defaultBookingTime = (dateIso = localIso()) => {
+    const today = localIso();
+    const defaultTimes = ['07:00','08:00','09:30','10:00','13:00','14:00','15:30','16:00','18:00'];
+    if (dateIso > today) return '09:30';
+    const now = new Date();
+    const curMinutes = now.getHours() * 60 + now.getMinutes();
+    const nextSlot = defaultTimes.find(t => {
+      const [h, m] = t.split(':').map(Number);
+      return (h * 60 + m) > curMinutes + 15;
+    });
+    return nextSlot || '18:00';
+  };
+
   const defaultState = {
     brand: {
       name: 'HOÀN',
@@ -67,8 +107,8 @@
     ],
     booking: {
       serviceId: 'party',
-      date: new Date(Date.now()+86400000).toLocaleDateString('en-CA',{timeZone:'Asia/Ho_Chi_Minh'}),
-      time: '09:30',
+      date: localIso(),
+      time: defaultBookingTime(),
       locationType: 'client',
       address: '',
       city: 'Hà Nội',
@@ -94,38 +134,79 @@
     notifications: [],
     audit: [],
     settings: { autoConfirm: false, zaloReminder: true, emailReminder: true, bookingWindow: '60', deposit: '200000', timezone: 'GMT+7', scheduleOpen: true },
-    adminWeekOffset: 1,
+    adminWeekOffset: 0,
     backendReady: false,
     backendError: ''
   };
 
   const loadState = () => {
+    const today = localIso();
     try {
       const saved = JSON.parse(localStorage.getItem('hoanMakeupDraft'));
-      if (!saved) return structuredClone(defaultState);
-      return { ...structuredClone(defaultState), booking: { ...defaultState.booking, ...(saved.booking || {}) }, adminWeekOffset: saved.adminWeekOffset === undefined ? 1 : Number(saved.adminWeekOffset) };
+      if (!saved) {
+        const s = structuredClone(defaultState);
+        s.booking.date = today;
+        s.booking.time = defaultBookingTime(today);
+        return s;
+      }
+      const loaded = {
+        ...structuredClone(defaultState),
+        booking: { ...defaultState.booking, ...(saved.booking || {}) },
+        adminWeekOffset: saved.adminWeekOffset === undefined ? 0 : Number(saved.adminWeekOffset)
+      };
+      if (!loaded.booking.date || loaded.booking.date < today) {
+        loaded.booking.date = today;
+        loaded.booking.time = defaultBookingTime(today);
+      }
+      if (!loaded.booking.time) {
+        loaded.booking.time = defaultBookingTime(loaded.booking.date);
+      }
+      return loaded;
     } catch {
-      return structuredClone(defaultState);
+      const s = structuredClone(defaultState);
+      s.booking.date = today;
+      s.booking.time = defaultBookingTime(today);
+      return s;
     }
   };
   let state = loadState();
+  let siteTools;
+  if (typeof window !== 'undefined') window.state = state;
   const saveState = (message) => {
-    localStorage.setItem('hoanMakeupDraft', JSON.stringify({ booking: state.booking, adminWeekOffset: state.adminWeekOffset }));
+    try {
+      localStorage.setItem('hoanMakeupDraft', JSON.stringify({ booking: state.booking, adminWeekOffset: state.adminWeekOffset }));
+      localStorage.setItem('hoanDepositSyncTrigger', String(Date.now()));
+    } catch { /* storage may be blocked in iframe / test sandbox */ }
     if (message) toast(message);
   };
+  const currentToday = localIso();
+  if (!state.booking.date || state.booking.date < currentToday) {
+    state.booking.date = currentToday;
+    state.booking.time = defaultBookingTime(currentToday);
+    saveState();
+  }
+  if (!state.booking.time) {
+    state.booking.time = defaultBookingTime(state.booking.date);
+    saveState();
+  }
   const service = (id = state.booking.serviceId) => state.services.find(s => s.id === id) || state.services[0];
   const currentTotal = () => service().price + Number(state.booking.travelFee || 0);
   const dateLabel = (iso = state.booking.date) => {
-    const [y,m,d] = iso.split('-');
+    const [y,m,d] = (iso || localIso()).split('-');
     return `${d}/${m}/${y}`;
   };
-  let bookingCode = localStorage.getItem('hoanLastBookingCode') || 'CHƯA TẠO';
+  let bookingCode = 'CHƯA TẠO';
+  try { bookingCode = localStorage.getItem('hoanLastBookingCode') || 'CHƯA TẠO'; } catch {}
 
   async function api(payload) {
+    if (payload && window.parent !== window && new URLSearchParams(location.search).get('cmsPreview') === '1') throw new Error('Bản xem trước không gửi dữ liệu nghiệp vụ.');
     const options = payload ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {};
     const response = await fetch('/api/data', options);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Không thể kết nối dữ liệu');
+    if (payload?.action === 'createAppointment') siteTools?.conversion('Đã gửi yêu cầu đặt lịch');
+    if (payload?.action === 'createRequest') siteTools?.conversion('Đã gửi yêu cầu liên hệ');
+    if (payload?.action === 'saveContent') siteTools?.contentSaved();
     return data;
   }
 
@@ -140,11 +221,13 @@
       state.scheduleSlots = data.scheduleSlots || [];
       state.brand = { ...state.brand, ...(data.brand || {}) };
       state.settings = { ...state.settings, ...(data.settings || {}) };
+      ensureScheduleSeedData();
       state.backendReady = true;
       state.backendError = '';
       if (!silent) render();
     } catch (error) {
       state.backendError = error.message;
+      ensureScheduleSeedData();
       if (!silent) render();
     }
   }
@@ -163,12 +246,6 @@
     weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: 'Asia/Ho_Chi_Minh'
   }).format(date).replace(/^./, c => c.toUpperCase());
 
-  const localIso = (date) => {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  };
 
   function mondayForOffset(offset = 0) {
     const now = new Date();
@@ -188,16 +265,47 @@
 
   function editorialMenu(key) {
     const groups = {
-      services: {title:'Dịch vụ trang điểm',intro:'Một diện mạo dành riêng cho bạn.',all:'/services',links:[['Trang điểm cá nhân','/services/personal','natural.png','Trong trẻo mỗi ngày'],['Trang điểm dự tiệc','/services/party','evening.png','Sắc nét trong từng khoảnh khắc'],['Trang điểm chụp ảnh','/services/photo','natural.png','Vẻ đẹp trước ống kính'],['Trang điểm cô dâu','/services/bridal','bridal-new.png','Dành cho ngày đặc biệt']]},
-      gallery: {title:'Bộ sưu tập',intro:'Khám phá dấu ấn của HOÀN.',all:'/gallery',links:[['Khám phá các diện mạo','/gallery','evening.png','Những diện mạo của HOÀN'],['Phong cách cá nhân','/services/personal','natural.png','Vẻ đẹp tự nhiên'],['Cảm hứng cô dâu','/services/bridal','bridal.png','Thanh lịch và tinh tế']]},
-      about: {title:'Thế giới của HOÀN',intro:'Lắng nghe gương mặt. Tôn vinh nét riêng.',all:'/about',links:[['Câu chuyện của tôi','/about','hero.png','Vẻ đẹp được thiết kế riêng'],['Trải nghiệm dịch vụ','/services','natural.png','Chăm chút từng chi tiết'],['Tư vấn và hỗ trợ','/support','bridal.png','Đồng hành cùng bạn']]}
+      services: {
+        title: 'Dịch vụ',
+        all: '/services',
+        links: [
+          ['Trang điểm cá nhân', '/services/personal'],
+          ['Trang điểm dự tiệc', '/services/party'],
+          ['Trang điểm chụp ảnh', '/services/photo'],
+          ['Trang điểm cô dâu', '/services/bridal']
+        ]
+      },
+      gallery: {
+        title: 'Bộ sưu tập',
+        all: '/gallery',
+        links: [
+          ['Khám phá các diện mạo', '/gallery'],
+          ['Phong cách cá nhân', '/services/personal'],
+          ['Cảm hứng cô dâu', '/services/bridal']
+        ]
+      },
+      about: {
+        title: 'Về Hoàn',
+        all: '/about',
+        links: [
+          ['Câu chuyện của HOÀN', '/about'],
+          ['Trải nghiệm dịch vụ', '/services'],
+          ['Tư vấn và hỗ trợ', '/support']
+        ]
+      }
     };
-    const g=groups[key]; if(!g)return '';
-    return `<section class="editorial-menu" id="nav-panel-${key}" aria-label="${g.title}" hidden><div class="editorial-inner"><div class="editorial-copy"><p class="editorial-eyebrow">HOÀN MAKEUP ARTIST</p><h2>${g.title}</h2><p class="editorial-intro">${g.intro}</p><div class="editorial-links">${g.links.map((l,i)=>`<a href="#${l[1]}" data-preview="${i}" class="${i===0?'is-preview':''}"><span>${l[0]}</span>${icon('arrow')}</a>`).join('')}</div><a class="editorial-all" href="#${g.all}">Khám phá tất cả ${icon('arrow')}</a></div><div class="editorial-images">${g.links.map((l,i)=>`<a class="editorial-image ${i===0?'is-visible':''}" href="#${l[1]}" data-image="${i}" ${i!==0?'inert':''}><img src="/assets/${l[2]}" alt="${l[3]}" width="800" height="1000"><span>${l[3]} ${icon('arrow')}</span></a>`).join('')}</div><button class="editorial-close" aria-label="Đóng menu">×</button></div></section>`;
+    const g = groups[key]; if (!g) return '';
+    return `<div class="editorial-menu compact-dropdown" id="nav-panel-${key}" aria-label="${g.title}" hidden>
+      <div class="dropdown-links">
+        ${g.links.map(l => `<a href="#${l[1]}" class="dropdown-item"><span>${l[0]}</span>${icon('arrow')}</a>`).join('')}
+        <a class="dropdown-item dropdown-all" href="#${g.all}"><span>Xem tất cả</span>${icon('arrow')}</a>
+      </div>
+    </div>`;
   }
 
   function fashionPhoto(name, label) {
-    return `<span class="fashion-photo"><img class="fashion-full" src="/assets/${name}" alt="${label}" loading="lazy" width="1024" height="1536"><img class="fashion-detail" src="/assets/${name}" alt="" aria-hidden="true" loading="lazy" width="1024" height="1536"><span class="photo-discover">Xem chi tiết ${icon('arrow')}</span></span>`;
+    const src = esc(assetUrl(name));
+    return `<span class="fashion-photo"><img class="fashion-full" src="${src}" alt="${esc(label)}" loading="lazy" width="1024" height="1536"><img class="fashion-detail" src="${src}" alt="" aria-hidden="true" loading="lazy" width="1024" height="1536"><span class="photo-discover">Xem chi tiết ${icon('arrow')}</span></span>`;
   }
 
   const galleryItems = [
@@ -248,7 +356,8 @@
     ['bridal','Ngày của riêng bạn','bridal-new.png','bridal'],['natural','Nét trong trẻo','natural.png','personal'],
     ['evening','Sắc thái cuốn hút','evening.png','party'],['detail','Ánh nhìn cuốn hút','bridal-new.png','bridal'],['portrait','Sắc thái tự nhiên','natural.png','personal']
   ];
-  const imageFor = s => s.id==='bridal'?'bridal-new.png':s.id==='personal'||s.id==='photo'?'natural.png':'evening.png';
+  const assetUrl = value => /^(\/assets\/|\/api\/uploads\?|https:\/\/)/.test(value || '') ? value : '/assets/' + (value || 'natural.png');
+  const imageFor = s => s.id==='bridal'?(state.brand.bridalImage||'bridal-new.png'):s.id==='personal'||s.id==='photo'?(state.brand.personalImage||'natural.png'):(state.brand.partyImage||'evening.png');
   const field = (name,label,type='text',required=false,value=state.booking[name]||'') => `<label class="ct-field">${label}${required?' *':''}<input name="${name}" type="${type}" value="${esc(value)}" ${required?'required':''} ${type==='tel'?'inputmode="tel" pattern="[+0-9 ()-]{9,16}"':''}></label>`;
   const selectField = (name,label,options,value=state.booking[name]) => `<label class="ct-field">${label}<select name="${name}">${options.map(x=>`<option ${value===x?'selected':''}>${esc(x)}</option>`).join('')}</select></label>`;
   function brandMarkup() {
@@ -261,26 +370,50 @@
   function publicFooter() {
     const current=(location.hash.slice(1)||'/').split('?')[0];
     const isAbout=current==='/about';
-    const socialLinks=isAbout?`<div class="ct-footer-socials" aria-label="Kênh mạng xã hội của Hoàn"><span class="ct-social-instagram" aria-label="Instagram" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.3" cy="6.8" r="1" fill="currentColor" stroke="none"/></svg></span><span class="ct-social-facebook" aria-label="Facebook" role="img">f</span><span class="ct-social-youtube" aria-label="YouTube" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12c0 2.75-.32 4.45-.72 5.37a2.5 2.5 0 0 1-1.4 1.4C17.95 19.18 16.24 19.5 12 19.5s-5.95-.32-6.88-.73a2.5 2.5 0 0 1-1.4-1.4C3.32 16.45 3 14.75 3 12s.32-4.45.72-5.37a2.5 2.5 0 0 1 1.4-1.4C6.05 4.82 7.76 4.5 12 4.5s5.95.32 6.88.73a2.5 2.5 0 0 1 1.4 1.4C20.68 7.55 21 9.25 21 12Z"/><path d="m10 8.8 5 3.2-5 3.2Z" fill="currentColor" stroke="none"/></svg></span><span class="ct-social-tiktok" aria-label="TikTok" role="img">♪</span></div>`:'';
-    const tagline=isAbout?'<p class="ct-footer-tagline">Vẻ đẹp bắt đầu từ sự thấu hiểu</p>':'';
-    return `<footer class="public-footer couture-footer ${isAbout?'ct-about-footer':''}">${brandMarkup()}<nav aria-label="Thông tin và hỗ trợ">${[['support','Hỗ trợ'],['lookup','Tra cứu lịch'],['policies','Chính sách'],['contact','Liên hệ']].map(([p,t])=>`<a ${current.startsWith('/'+p)?'aria-current="page"':''} href="#/${p}">${t}</a>`).join('')}</nav>${socialLinks}${tagline}</footer>`;
+    const isContact=current==='/contact';
+    const socialLinks=isAbout?`<div class="ct-footer-socials" aria-label="Kênh mạng xã hội của Hoàn"><span class="ct-social-instagram" aria-label="Instagram" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.3" cy="6.8" r="1" fill="currentColor" stroke="none"/></svg></span><span class="ct-social-facebook" aria-label="Facebook" role="img">f</span><span class="ct-social-youtube" aria-label="YouTube" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12c0 2.75-.32 4.45-.72 5.37a2.5 2.5 0 0 1-1.4 1.4C17.95 19.18 16.24 19.5 12 19.5s-5.95-.32-6.88-.73a2.5 2.5 0 0 1-1.4-1.4C3.32 16.45 3 14.75 3 12s.32-4.45.72-5.37a2.5 2.5 0 0 1 1.4-1.4C20.68 7.55 21 9.25 21 12Z"/><path d="m10 8.8 5 3.2-5 3.2Z" fill="currentColor" stroke="none"/></svg></span><span class="ct-social-tiktok" aria-label="TikTok" role="img">♪</span></div>`:'';
+    const tagline=isAbout?`<p class="ct-footer-tagline">${esc(state.brand.tagline || 'Vẻ đẹp bắt đầu từ sự thấu hiểu')}</p>`:'';
+    const footerNav = [['support','Hỗ trợ'],['lookup','Tra cứu lịch'],['policies','Chính sách'],['contact','Liên hệ']];
+    if (isContact) {
+      return `<footer class="public-footer couture-footer ct-contact-footer"><nav aria-label="Thông tin và hỗ trợ">${footerNav.map(([p,t],i)=>`${i>0?'<span class="footer-sep">|</span>':''}<a ${current.startsWith('/'+p)?'aria-current="page" class="active"':''} href="#/${p}">${t}</a>`).join('')}</nav><span class="ct-footer-note">Bản duyệt giao diện — kênh liên hệ sẽ dùng thông tin thật</span></footer>`;
+    }
+    return `<footer class="public-footer couture-footer ${isAbout?'ct-about-footer':''}">${brandMarkup()}<nav aria-label="Thông tin và hỗ trợ">${footerNav.map(([p,t],i)=>`${i>0?'<span class="footer-sep">|</span>':''}<a ${current.startsWith('/'+p)?'aria-current="page"':''} href="#/${p}">${t}</a>`).join('')}</nav>${socialLinks}${tagline}</footer>`;
   }
   function ctPage(active,title,body,breadcrumb=title,wide=false) {
     return `<div class="page couture ct-page-${active||'default'}">${publicHeader(active)}<main id="main" class="ct-main ${wide?'ct-wide':''}"><div class="breadcrumbs"><a href="#/">Trang chủ</a><span>/</span>${esc(breadcrumb)}</div>${title?`<h1 class="ct-title">${title}</h1>`:''}${body}</main>${publicFooter()}</div>`;
   }
   function bookingInvite() {
-    return `<section class="ct-invite"><h2>Cuộc hẹn dành riêng cho bạn</h2><a class="btn" href="#/booking/service">Chọn dịch vụ ${icon('chevron')}</a><a class="btn" href="#/booking/time">${icon('calendar')} Chọn ngày</a><a class="btn btn-dark" href="#/booking/service">ĐẶT LỊCH</a></section>`;
+    const b = state.brand || {};
+    const inviteTitle = b.inviteTitle || 'Cuộc hẹn dành riêng cho bạn';
+    const inviteBtn = b.inviteBtnLabel || 'ĐẶT LỊCH';
+    return `<section class="ct-invite"><h2>${esc(inviteTitle)}</h2><a class="btn" href="#/booking/service">Chọn dịch vụ ${icon('chevron')}</a><a class="btn" href="#/booking/time">${icon('calendar')} Chọn ngày</a><a class="btn btn-dark" href="#/booking/service">${esc(inviteBtn)}</a></section>`;
   }
   function pageHome() {
-    return `<div class="page couture">${publicHeader('home')}<main id="main"><section class="ct-campaign"><img src="/assets/campaign.png" alt="Cảm hứng trang điểm cô dâu HOÀN" fetchpriority="high" width="1536" height="1024"><div class="ct-campaign-copy"><h1>Một ngày của bạn.<br>Một dấu ấn của Hoàn.</h1><p>TRANG ĐIỂM CÁ NHÂN & CÔ DÂU</p><a class="link" href="#/services">Khám phá ${icon('arrow')}</a></div></section><section class="ct-editorial"><header><p class="ct-overline">NGHỆ THUẬT CỦA SỰ TINH TẾ</p><h2>Đẹp từ những điều rất riêng</h2></header><div class="ct-bridal-story"><a href="#/services/bridal">${fashionPhoto('bridal-new.png','Trang điểm cô dâu')}</a><div><h2>Khoảnh khắc<br>cô dâu</h2><p>Tôn lên đường nét.<br>Giữ trọn nét riêng.</p><a class="btn" href="#/services/bridal">KHÁM PHÁ</a></div><a class="ct-detail-crop" href="#/look/detail">${fashionPhoto('bridal-new.png','Chi tiết phong cách cô dâu')}</a></div></section><section class="ct-evening"><div><h2>Sắc thái của buổi tối</h2><a class="link" href="#/services/party">Trang điểm dự tiệc ${icon('arrow')}</a></div><a href="#/services/party">${fashionPhoto('evening.png','Phong cách dự tiệc')}</a></section>${bookingInvite()}</main>${publicFooter()}</div>`;
+    const b = state.brand || {};
+    const heroTitle = esc(b.homeTitle || 'Một ngày của bạn.\nMột dấu ấn của Hoàn.').replace(/\n|&lt;br\s*\/?&gt;/gi, '<br>');
+    const heroSubtitle = b.homeSubtitle || 'TRANG ĐIỂM CÁ NHÂN & CÔ DÂU';
+    const overline = b.editorialOverline || 'NGHỆ THUẬT CỦA SỰ TINH TẾ';
+    const edTitle = b.editorialTitle || 'Đẹp từ những điều rất riêng';
+    const bridalTitle = esc(b.bridalStoryTitle || 'Khoảnh khắc\ncô dâu').replace(/\n|&lt;br\s*\/?&gt;/gi, '<br>');
+    const bridalDesc = esc(b.bridalStoryDesc || 'Tôn lên đường nét.\nGiữ trọn nét riêng.').replace(/\n|&lt;br\s*\/?&gt;/gi, '<br>');
+    const eveningTitle = b.eveningTitle || 'Sắc thái của buổi tối';
+    const campImg = esc(assetUrl(b.campaignImage || '/assets/campaign.png'));
+    const bridalImg = b.bridalImage || 'bridal-new.png';
+    const partyImg = b.partyImage || 'evening.png';
+    return `<div class="page couture">${publicHeader('home')}<main id="main"><section class="ct-campaign"><img src="${campImg}" alt="Cảm hứng trang điểm cô dâu ${esc(b.name||'HOÀN')}" fetchpriority="high" width="1536" height="1024" onerror="this.src='/assets/campaign.png'"><div class="ct-campaign-copy"><h1>${heroTitle}</h1><p>${esc(heroSubtitle)}</p><a class="link" href="#/services">Khám phá ${icon('arrow')}</a></div></section><section class="ct-editorial"><header><p class="ct-overline">${esc(overline)}</p><h2>${esc(edTitle)}</h2></header><div class="ct-bridal-story"><a href="#/services/bridal">${fashionPhoto(bridalImg,'Trang điểm cô dâu')}</a><div><h2>${bridalTitle}</h2><p>${bridalDesc}</p><a class="btn" href="#/services/bridal">KHÁM PHÁ</a></div><a class="ct-detail-crop" href="#/look/detail">${fashionPhoto(bridalImg,'Chi tiết phong cách cô dâu')}</a></div></section><section class="ct-evening"><div><h2>${esc(eveningTitle)}</h2><a class="link" href="#/services/party">Trang điểm dự tiệc ${icon('arrow')}</a></div><a href="#/services/party">${fashionPhoto(partyImg,'Phong cách dự tiệc')}</a></section>${bookingInvite()}</main>${publicFooter()}</div>`;
   }
   function pageServices() {
+    const b = state.brand || {};
+    const srvTitle = b.servicesPageTitle || 'Dịch vụ trang điểm';
+    const srvSubtitle = b.servicesPageSubtitle || 'Lựa chọn dành cho khoảnh khắc của bạn.';
+    const consultTitle = b.consultTitle || 'Tìm phong cách phù hợp';
+    const consultDesc = b.consultDesc || 'Chia sẻ dịp tham dự, trang phục và mong muốn của bạn cùng Hoàn.';
     const filter=new URLSearchParams(location.hash.split('?')[1]).get('filter')||'all';
-    return ctPage('services','Dịch vụ trang điểm',`<p class="ct-subtitle">Lựa chọn dành cho khoảnh khắc của bạn.</p><nav class="ct-tabs">${[['all','Tất cả'],['personal','Cá nhân'],['party','Dự tiệc'],['bridal','Cô dâu']].map(([v,t])=>`<a class="${filter===v?'active':''}" href="#/services?filter=${v}">${t}</a>`).join('')}</nav><section class="ct-service-grid">${state.services.filter(s=>s.enabled&&(filter==='all'||s.id===filter)).map(s=>`<article><a href="#/services/${s.id}">${fashionPhoto(imageFor(s),esc(s.name))}</a><h2>${esc(s.name)}</h2><p>${esc(s.description)}</p><p class="ct-service-meta">${s.contact?'Tư vấn riêng':`${money(s.price)} · ${s.duration} phút`}</p><a class="link" href="#/services/${s.id}">Xem chi tiết ${icon('arrow')}</a><button class="btn btn-wide" data-action="choose-service" data-id="${s.id}">CHỌN DỊCH VỤ</button></article>`).join('')}</section><section class="ct-consult"><img src="/assets/natural.png" alt="Phong cách trang điểm tự nhiên" loading="lazy"><div><h2>Tìm phong cách phù hợp</h2><p>Chia sẻ dịp tham dự, trang phục và mong muốn của bạn cùng Hoàn.</p><a class="btn" href="#/contact">NHẬN TƯ VẤN</a></div></section>`,'Dịch vụ',true);
+    return ctPage('services',srvTitle,`<p class="ct-subtitle">${esc(srvSubtitle)}</p><nav class="ct-tabs">${[['all','Tất cả'],['personal','Cá nhân'],['party','Dự tiệc'],['bridal','Cô dâu']].map(([v,t])=>`<a class="${filter===v?'active':''}" href="#/services?filter=${v}">${t}</a>`).join('')}</nav><section class="ct-service-grid">${state.services.filter(s=>s.enabled&&(filter==='all'||s.id===filter)).map(s=>`<article><a href="#/services/${s.id}">${fashionPhoto(imageFor(s),esc(s.name))}</a><h2>${esc(s.name)}</h2><p>${esc(s.description)}</p><p class="ct-service-meta">${s.contact?'Tư vấn riêng':`${money(s.price)} · ${s.duration} phút`}</p><a class="link" href="#/services/${s.id}">Xem chi tiết ${icon('arrow')}</a><button class="btn btn-wide" data-action="choose-service" data-id="${s.id}">CHỌN DỊCH VỤ</button></article>`).join('')}</section><section class="ct-consult"><img src="/assets/natural.png" alt="Phong cách trang điểm tự nhiên" loading="lazy"><div><h2>${esc(consultTitle)}</h2><p>${esc(consultDesc)}</p><a class="btn" href="#/contact">NHẬN TƯ VẤN</a></div></section>`,'Dịch vụ',true);
   }
   function pageServiceDetail(id) {
     const s=state.services.find(s=>s.id===id);if(!s)return ctPage('services','Không tìm thấy dịch vụ','<a href="#/services">Xem các dịch vụ</a>');
-    return ctPage(id==='bridal'?'bridal':'services','',`<section class="ct-product-detail"><div>${fashionPhoto(imageFor(s),esc(s.name))}</div><article><p class="ct-overline">HOÀN MAKEUP ARTIST</p><h1>${esc(s.name)}</h1><p>${esc(s.description)}</p><p class="ct-price">${s.contact?'Trao đổi để nhận tư vấn':money(s.price)}</p><p>${icon('clock')} ${s.duration} phút · Phí di chuyển được báo trước khi đặt cọc.</p><h3>Trải nghiệm của bạn</h3><ul><li>Trao đổi phong cách, trang phục và dịp tham dự.</li><li>Chuẩn bị da và trang điểm theo đường nét.</li><li>Kiểm tra và hoàn thiện diện mạo.</li></ul><button class="btn btn-dark btn-wide" data-action="choose-service" data-id="${s.id}">${s.contact?'YÊU CẦU TƯ VẤN':'CHỌN NGÀY VÀ GIỜ'}</button><a class="link" href="#/policies/deposit">Chính sách đặt cọc ${icon('arrow')}</a></article></section>`,`Dịch vụ / ${s.name}`,true);
+    return ctPage(id==='bridal'?'bridal':'services','',`<section class="ct-product-detail"><div>${fashionPhoto(imageFor(s),esc(s.name))}</div><article><p class="ct-overline">${esc(state.brand?.name||'HOÀN')} MAKEUP ARTIST</p><h1>${esc(s.name)}</h1><p>${esc(s.description)}</p><p class="ct-price">${s.contact?'Trao đổi để nhận tư vấn':money(s.price)}</p><p>${icon('clock')} ${s.duration} phút · Phí di chuyển được báo trước khi đặt cọc.</p><h3>Trải nghiệm của bạn</h3><ul><li>Trao đổi phong cách, trang phục và dịp tham dự.</li><li>Chuẩn bị da và trang điểm theo đường nét.</li><li>Kiểm tra và hoàn thiện diện mạo.</li></ul><button class="btn btn-dark btn-wide" data-action="choose-service" data-id="${s.id}">${s.contact?'YÊU CẦU TƯ VẤN':'CHỌN NGÀY VÀ GIỜ'}</button><a class="link" href="#/policies/deposit">Chính sách đặt cọc ${icon('arrow')}</a></article></section>`,`Dịch vụ / ${s.name}`,true);
   }
   function pageGallery(filter='all') {
     const visible=lookItems.filter(x=>filter==='all'||x[3]===filter);
@@ -291,7 +424,24 @@
     return ctPage('gallery',x[1],`<section class="ct-product-detail"><div class="${x[0]==='detail'?'ct-detail-crop':''}">${fashionPhoto(x[2],x[1])}</div><article><p class="ct-overline">${esc(service(x[3]).name)}</p><h2>${x[1]}</h2><p>Lựa chọn điểm nhấn theo đường nét, trang phục và mong muốn của bạn.</p><button class="btn btn-dark" data-action="look-book" data-id="${x[3]}" data-style="${x[1]}">ĐẶT LỊCH PHONG CÁCH NÀY</button><a class="link" href="#/gallery">Trở về bộ sưu tập</a></article></section>`,'Bộ sưu tập / '+x[1]);
   }
   function pageAbout() {
-    return ctPage('about','Vẻ đẹp bắt đầu từ sự thấu hiểu',`<section class="ct-about"><div class="ct-about-img-wrap"><img src="/assets/about-process.png" alt="Quá trình trang điểm môi" loading="lazy" width="342" height="174"><p class="ct-about-caption">Ảnh minh họa quá trình trang điểm</p></div><article><h2>HOÀN MAKEUP ARTIST</h2><p>Mỗi người có đường nét, phong cách và mong muốn riêng. Buổi trang điểm bắt đầu từ việc lắng nghe những điều đó.</p><hr><p>Từ lớp nền đến điểm nhấn cuối cùng, hướng thiết kế của Hoàn là sự hài hòa với gương mặt, trang phục và dịp tham dự.</p></article></section><section class="ct-process"><h2>Một buổi hẹn cùng Hoàn</h2><div>${[['Lắng nghe mong muốn','Hiểu nhu cầu, phong cách và dịp tham dự.'],['Thống nhất phong cách','Tư vấn và lựa chọn hướng trang điểm phù hợp.'],['Trang điểm & hoàn thiện','Thực hiện theo phong cách đã thống nhất.'],['Kiểm tra diện mạo','Cùng xem lại và điều chỉnh để bạn tự tin.']].map(([t,d],i)=>`<article><span>0${i+1}</span><h3>${t}</h3><p>${d}</p></article>`).join('')}</div></section><div class="ct-about-photos"><img src="/assets/about-brushes.png" alt="Cọ trang điểm" loading="lazy" width="385" height="91"><img src="/assets/about-eye.png" alt="Trang điểm mắt" loading="lazy" width="330" height="91"></div><div class="ct-center-cta"><h2>Cùng tìm nét đẹp của bạn</h2><a class="btn btn-dark" href="#/booking/service">ĐẶT LỊCH</a><a class="btn" href="#/contact">TRAO ĐỔI VỚI HOÀN</a></div>`,'Về Hoàn',true);
+    const b = state.brand || {};
+    const aboutTitle = b.aboutTitle || 'Vẻ đẹp bắt đầu từ sự thấu hiểu';
+    const aboutCaption = b.aboutCaption || 'Ảnh minh họa quá trình trang điểm';
+    const aboutImg = esc(assetUrl(b.aboutImage || '/assets/about-process.png'));
+    const brandName = b.name || 'HOÀN';
+    const brandRole = b.role || 'MAKEUP ARTIST';
+    const bio1 = b.aboutBio1 || b.aboutBio || 'Mỗi người có đường nét, phong cách và mong muốn riêng. Buổi trang điểm bắt đầu từ việc lắng nghe những điều đó.';
+    const bio2 = b.aboutBio2 || 'Từ lớp nền đến điểm nhấn cuối cùng, hướng thiết kế của Hoàn là sự hài hòa với gương mặt, trang phục và dịp tham dự.';
+    const p1Title = b.processStep1Title || 'Lắng nghe mong muốn';
+    const p1Desc = b.processStep1Desc || 'Hiểu nhu cầu, phong cách và dịp tham dự.';
+    const p2Title = b.processStep2Title || 'Thống nhất phong cách';
+    const p2Desc = b.processStep2Desc || 'Tư vấn và lựa chọn hướng trang điểm phù hợp.';
+    const p3Title = b.processStep3Title || 'Trang điểm & hoàn thiện';
+    const p3Desc = b.processStep3Desc || 'Thực hiện theo phong cách đã thống nhất.';
+    const p4Title = b.processStep4Title || 'Kiểm tra diện mạo';
+    const p4Desc = b.processStep4Desc || 'Cùng xem lại và điều chỉnh để bạn tự tin.';
+    const ctaTitle = b.aboutCtaTitle || 'Cùng tìm nét đẹp của bạn';
+    return ctPage('about',aboutTitle,`<section class="ct-about"><div class="ct-about-img-wrap"><img src="${aboutImg}" alt="${esc(aboutCaption)}" loading="lazy" width="342" height="174" onerror="this.src='/assets/about-process.png'"><p class="ct-about-caption">${esc(aboutCaption)}</p></div><article><h2>${esc(brandName)} ${esc(brandRole)}</h2><p>${esc(bio1)}</p><hr><p>${esc(bio2)}</p></article></section><section class="ct-process"><h2>Một buổi hẹn cùng ${esc(brandName)}</h2><div>${[[p1Title,p1Desc],[p2Title,p2Desc],[p3Title,p3Desc],[p4Title,p4Desc]].map(([t,d],i)=>`<article><span>0${i+1}</span><h3>${esc(t)}</h3><p>${esc(d)}</p></article>`).join('')}</div></section><div class="ct-about-photos"><img src="/assets/about-brushes.png" alt="Cọ trang điểm" loading="lazy" width="385" height="91"><img src="/assets/about-eye.png" alt="Trang điểm mắt" loading="lazy" width="330" height="91"></div><div class="ct-center-cta"><h2>${esc(ctaTitle)}</h2><a class="btn btn-dark" href="#/booking/service">ĐẶT LỊCH</a><a class="btn" href="#/contact">TRAO ĐỔI VỚI ${esc(brandName)}</a></div>`,'Về Hoàn',true);
   }
   function pageSupport() {
     const q=new URLSearchParams(location.hash.split('?')[1]).get('q')||'';
@@ -303,17 +453,168 @@
     return ctPage('support',label,`<article class="ct-article"><ol>${(articles[id]||[]).map(t=>`<li>${t}</li>`).join('')}</ol><div class="ct-actions"><a class="btn btn-dark" href="#/${id==='booking'?'booking/service':'lookup'}">${id==='booking'?'BẮT ĐẦU ĐẶT LỊCH':'TRA CỨU LỊCH'}</a><a class="btn" href="#/contact">LIÊN HỆ HOÀN</a></div><a class="link" href="#/support">${icon('back')} Tất cả hướng dẫn</a></article>`,'Hỗ trợ / '+label);
   }
   function pagePolicies(tab) {
-    if(!tab)return ctPage('policies','Chính sách dịch vụ',`<p class="ct-subtitle">Chọn mục để xem đầy đủ điều kiện áp dụng.</p><section class="ct-policy-list">${policySections.map(([id,title,desc],i)=>`<a href="#/policies/${id}"><span class="ct-index">0${i+1}</span><div><h2>${title}</h2><p>${desc}</p></div>${icon('arrow')}</a>`).join('')}</section><div class="ct-center-cta">Cần giải thích thêm? <a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a></div>`,'Chính sách');
+    const b = state.brand || {};
+    const s = state.settings || {};
+    const depositStandard = money(Number(s.deposit || 200000));
+    const title = b.policiesPageTitle || 'Chính sách dịch vụ';
+    const subtitle = b.policiesPageSubtitle || 'Chọn mục để xem đầy đủ điều kiện áp dụng.';
+    if(!tab)return ctPage('policies',title,`<p class="ct-subtitle">${esc(subtitle)}</p><section class="ct-policy-list">${policySections.map(([id,pTitle,pDesc],i)=>`<a href="#/policies/${id}"><span class="ct-index">0${i+1}</span><div><h2>${pTitle}</h2><p>${pDesc}</p></div>${icon('arrow')}</a>`).join('')}</section><div class="ct-center-cta">Cần giải thích thêm? <a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a></div>`,'Chính sách');
     const policy=policySections.find(p=>p[0]===tab);if(!policy)return pagePolicies();
-    const content={booking:['Chọn dịch vụ, ngày giờ và địa điểm. Giá dịch vụ và phí di chuyển được hiển thị trước khi gửi yêu cầu.','Yêu cầu được lưu vào hệ thống. Lịch chỉ được xác nhận sau khi Hoàn kiểm tra thông tin và khoản cọc theo thỏa thuận.'],deposit:[`Mức cọc tiêu chuẩn hiện tại: ${money(Number(state.settings.deposit))}. Khoản cọc được trừ vào tổng chi phí.`,`Thông báo chuyển khoản không đồng nghĩa đã nhận tiền. Hoàn kiểm tra giao dịch thực tế trước khi ghi nhận.`,`Số tiền còn lại hiển thị trên trang lịch hẹn và được thanh toán sau buổi hẹn.`],change:['Bạn có thể gửi yêu cầu đổi ngày giờ trong trang quản lý lịch.','Yêu cầu trước giờ hẹn ít nhất 24 giờ được xem xét đổi miễn phí một lần, tùy lịch còn trống. Khoản cọc được chuyển sang lịch mới khi yêu cầu được duyệt.'],cancel:['Yêu cầu hủy trước 48 giờ được xem xét hoàn cọc. Trong vòng 48 giờ, khoản cọc có thể không được hoàn.','Số tiền và phương thức hoàn được Hoàn trao đổi trước khi xử lý. Trường hợp bất khả kháng được xem xét riêng.'],late:['Hãy liên hệ Hoàn nếu bạn dự kiến đến muộn hoặc cần thay đổi thời gian.','Nếu muộn quá 15 phút, thời lượng dịch vụ có thể cần điều chỉnh theo lịch tiếp theo.'],travel:['Hoàn phục vụ tại địa chỉ khách cung cấp trong khu vực đã thống nhất.','Phí di chuyển được thông báo trước khi đặt cọc. Nếu địa điểm thay đổi, chi phí cần được kiểm tra lại.'],privacy:['Thông tin liên hệ, địa điểm, lịch hẹn và mong muốn trang điểm được dùng để tổ chức buổi hẹn và hỗ trợ khách hàng.','Thông tin tình trạng da, dị ứng và ảnh tham khảo do bạn cung cấp giúp chuẩn bị dịch vụ.','Bạn có thể liên hệ Hoàn để yêu cầu kiểm tra, cập nhật hoặc xóa thông tin của mình.']};
+    const content={
+      booking:[
+        b.policyBooking1 || 'Chọn dịch vụ, ngày giờ và địa điểm. Giá dịch vụ và phí di chuyển được hiển thị trước khi gửi yêu cầu.',
+        b.policyBooking2 || 'Yêu cầu được lưu vào hệ thống. Lịch chỉ được xác nhận sau khi Hoàn kiểm tra thông tin và khoản cọc theo thỏa thuận.'
+      ],
+      deposit:[
+        b.policyDeposit || `Mức cọc tiêu chuẩn hiện tại: ${depositStandard}. Khoản cọc được trừ vào tổng chi phí.`,
+        'Thông báo chuyển khoản không đồng nghĩa đã nhận tiền. Hoàn kiểm tra giao dịch thực tế trước khi ghi nhận.',
+        'Số tiền còn lại hiển thị trên trang lịch hẹn và được thanh toán sau buổi hẹn.'
+      ],
+      change:[
+        b.policyChange || 'Bạn có thể gửi yêu cầu đổi ngày giờ trong trang quản lý lịch.',
+        'Yêu cầu trước giờ hẹn ít nhất 24 giờ được xem xét đổi miễn phí một lần, tùy lịch còn trống. Khoản cọc được chuyển sang lịch mới khi yêu cầu được duyệt.'
+      ],
+      cancel:[
+        b.policyCancel || 'Yêu cầu hủy trước 48 giờ được xem xét hoàn cọc. Trong vòng 48 giờ, khoản cọc có thể không được hoàn.',
+        'Số tiền và phương thức hoàn được Hoàn trao đổi trước khi xử lý. Trường hợp bất khả kháng được xem xét riêng.'
+      ],
+      late:[
+        b.policyLate || 'Hãy liên hệ Hoàn nếu bạn dự kiến đến muộn hoặc cần thay đổi thời gian.',
+        'Nếu muộn quá 15 phút, thời lượng dịch vụ có thể cần điều chỉnh theo lịch tiếp theo.'
+      ],
+      travel:[
+        b.policyTravel || 'Hoàn phục vụ tại địa chỉ khách cung cấp trong khu vực đã thống nhất.',
+        'Phí di chuyển được thông báo trước khi đặt cọc. Nếu địa điểm thay đổi, chi phí cần được kiểm tra lại.'
+      ],
+      privacy:[
+        b.policyPrivacy || 'Thông tin liên hệ, địa điểm, lịch hẹn và mong muốn trang điểm được dùng để tổ chức buổi hẹn và hỗ trợ khách hàng.',
+        'Thông tin tình trạng da, dị ứng và ảnh tham khảo do bạn cung cấp giúp chuẩn bị dịch vụ.',
+        'Bạn có thể liên hệ Hoàn để yêu cầu kiểm tra, cập nhật hoặc xóa thông tin của mình.'
+      ]
+    };
     return ctPage('policies',policy[1],`<article class="ct-article">${(content[tab]||[]).map((t,i)=>`<section><h2>0${i+1}</h2><p>${t}</p></section>`).join('')}<div class="ct-actions"><a class="btn" href="#/policies">TẤT CẢ CHÍNH SÁCH</a><a class="btn" href="#/contact">LIÊN HỆ HOÀN</a></div></article>`,'Chính sách / '+policy[1]);
   }
-  function contactLinks() {
-    const b=state.brand;const phone=(b.phone||'').replace(/\D/g,'');const validPhone=phone&&phone!=='0901234567';
-    return `${validPhone?`<a class="btn" href="https://zalo.me/${phone}" target="_blank" rel="noreferrer">${icon('mail')} Nhắn qua Zalo ${icon('arrow')}</a><a class="btn" href="tel:${phone}">${icon('phone')} ${esc(b.phone)}</a>`:''}${b.email?`<a class="btn" href="mailto:${esc(b.email)}">${icon('mail')} Gửi email</a>`:''}${!validPhone&&!b.email?'<p>Gửi lời nhắn bên cạnh để Hoàn liên hệ lại với bạn.</p>':''}`;
-  }
   function pageContact() {
-    return ctPage('contact','Trao đổi cùng Hoàn',`<p class="ct-subtitle">Chia sẻ mong muốn hoặc vấn đề bạn cần hỗ trợ.</p><section class="ct-contact"><aside><h2>Kết nối trực tiếp</h2>${contactLinks()}<hr><p>Bạn đã đặt lịch?</p><a class="link" href="#/lookup">Đến trang tra cứu lịch ${icon('arrow')}</a></aside><form data-form="contact" class="ct-form"><h2>Gửi lời nhắn</h2><div class="ct-form-grid">${field('name','Họ và tên','text',true,'')}${field('phone','Số điện thoại','tel',true,'')}</div>${field('email','Email (không bắt buộc)','email',false,'')}${selectField('subject','Nội dung cần trao đổi',['Tư vấn trang điểm','Đặt lịch','Đặt cọc & thanh toán','Đổi / hủy lịch','Vấn đề khác'])}${field('code','Mã lịch hẹn (nếu có)','text',false,'')}<label class="ct-field">Lời nhắn *<textarea name="message" required rows="5" maxlength="4000"></textarea></label><label class="ct-check"><input type="checkbox" required> Tôi đồng ý <a href="#/policies/privacy">chính sách bảo mật</a>.</label><button class="btn btn-dark btn-wide">GỬI LỜI NHẮN</button><p class="ct-form-status" role="status"></p></form></section>`,'Liên hệ');
+    const b = state.brand;
+    const phone = (b.phone || '').replace(/\D/g, '');
+    const email = esc(b.email || '');
+    const zaloUrl = `https://zalo.me/${(b.zaloPhone || b.phone || '').replace(/\D/g, '')}`;
+
+    return ctPage('contact','Trao đổi cùng Hoàn',`<p class="ct-subtitle">Chia sẻ mong muốn hoặc vấn đề bạn cần hỗ trợ.</p>
+      <section class="ct-contact-layout">
+        <aside class="ct-contact-sidebar">
+          <h2>Kết nối trực tiếp</h2>
+          <div class="contact-channels">
+            <a href="${zaloUrl}" target="_blank" rel="noreferrer" class="contact-channel-card">
+              <span class="channel-left">
+                <svg class="channel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+                </svg>
+                <span class="channel-name">Nhắn qua Zalo</span>
+              </span>
+              <span class="channel-arrow">↗</span>
+            </a>
+
+            <a href="tel:${phone}" class="contact-channel-card">
+              <span class="channel-left">
+                <svg class="channel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+                </svg>
+                <span class="channel-name">Gọi cho Hoàn</span>
+              </span>
+              <span class="channel-arrow">↗</span>
+            </a>
+
+            <a href="mailto:${email}" class="contact-channel-card">
+              <span class="channel-left">
+                <svg class="channel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <rect width="20" height="16" x="2" y="4" rx="2"/>
+                  <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
+                </svg>
+                <span class="channel-name">Gửi email</span>
+              </span>
+              <span class="channel-arrow">↗</span>
+            </a>
+          </div>
+
+          <div class="contact-lookup-box">
+            <p class="contact-lookup-label">Bạn đã đặt lịch?</p>
+            <a class="contact-lookup-link" href="#/lookup">Đến trang tra cứu lịch ↗</a>
+          </div>
+
+          <div class="contact-image-wrap">
+            <img src="/assets/contact-brushes.jpg" alt="Dụng cụ trang điểm chuyên nghiệp HOÀN" loading="lazy">
+          </div>
+        </aside>
+
+        <form data-form="contact" class="ct-contact-form-main">
+          <h2>Gửi lời nhắn</h2>
+          
+          <div class="contact-grid-2">
+            <label class="contact-field-wrap">
+              <span class="contact-label">Họ và tên *</span>
+              <input type="text" name="name" required placeholder="Nhập họ và tên">
+            </label>
+            <label class="contact-field-wrap">
+              <span class="contact-label">Số điện thoại *</span>
+              <input type="tel" name="phone" required placeholder="Nhập số điện thoại">
+            </label>
+          </div>
+
+          <label class="contact-field-wrap">
+            <span class="contact-label">Email</span>
+            <input type="email" name="email" placeholder="Nhập email (không bắt buộc)">
+          </label>
+
+          <label class="contact-field-wrap">
+            <span class="contact-label">Nội dung cần trao đổi *</span>
+            <div class="contact-select-wrap">
+              <select name="subject" required>
+                <option value="" disabled selected>Chọn chủ đề</option>
+                <option value="Tư vấn trang điểm">Tư vấn trang điểm</option>
+                <option value="Đặt lịch & kiểm tra lịch">Đặt lịch & kiểm tra lịch</option>
+                <option value="Đặt cọc & thanh toán">Đặt cọc & thanh toán</option>
+                <option value="Đổi / hủy lịch">Đổi / hủy lịch</option>
+                <option value="Vấn đề khác">Vấn đề khác</option>
+              </select>
+              <svg class="select-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </div>
+          </label>
+
+          <label class="contact-field-wrap">
+            <span class="contact-label">Mã lịch hẹn</span>
+            <input type="text" name="code" placeholder="Nhập mã lịch hẹn (không bắt buộc)">
+          </label>
+
+          <label class="contact-field-wrap">
+            <span class="contact-label">Lời nhắn *</span>
+            <textarea name="message" required rows="4" placeholder="Mô tả mong muốn hoặc vấn đề cần hỗ trợ..."></textarea>
+          </label>
+
+          <div class="contact-attach-row">
+            <button type="button" class="contact-attach-btn" data-action="ct-contact-attach">
+              <svg class="attach-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+              <span>Đính kèm ảnh tham khảo (không bắt buộc)</span>
+            </button>
+            <input type="file" id="contact-file-input" accept="image/*" multiple hidden>
+            <span class="contact-file-status" hidden></span>
+          </div>
+
+          <label class="contact-check-label">
+            <input type="checkbox" required>
+            <span>Tôi đồng ý chính sách bảo mật</span>
+          </label>
+
+          <button type="submit" class="contact-submit-btn">GỬI LỜI NHẮN</button>
+          <p class="ct-form-status" role="status"></p>
+        </form>
+      </section>`,
+      'Liên hệ'
+    );
   }
   function pageLookup() {
     return ctPage('lookup','Tra cứu lịch hẹn',`<p class="ct-subtitle">Xem trạng thái và quản lý lịch đã đặt cùng Hoàn.</p><form class="ct-lookup ct-form" data-form="lookup">${field('code','Mã lịch hẹn','text',true,'')}${field('phone','Số điện thoại đặt lịch','tel',true,'')}<button class="btn btn-dark btn-wide">TRA CỨU LỊCH HẸN</button><p class="ct-form-status" role="status"></p><p class="ct-secure">${icon('lock')} Thông tin được dùng để xác minh lịch của bạn.</p><p>Không nhớ mã lịch? <a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a></p></form>`,'Tra cứu lịch');
@@ -321,7 +622,7 @@
   function progress(step) {
     const names=['Dịch vụ','Thời gian','Địa điểm','Thông tin','Đặt cọc','Xác nhận'];
     const stepRoutes = ['/booking/service', '/booking/time', '/booking/location', '/booking/info', '/booking/deposit', '/booking/confirm'];
-    return `<nav class="booking-progress ct-progress" aria-label="Tiến trình đặt lịch">${names.map((t,i)=>`<div class="progress-step ${i+1===step?'active':''}" ${i+1===step?'aria-current="step"':''} data-action="go-step" data-target="${stepRoutes[i]}" style="cursor:pointer;" title="${t}"><b class="step-num">0${i+1}</b><span class="step-label">${t}</span></div>`).join('')}</nav>`;
+    return `<nav class="booking-progress ct-progress mockup-progress" aria-label="Tiến trình đặt lịch">${names.map((t,i)=>`${i>0?'<span class="step-connector"></span>':''}<div class="progress-step ${i+1===step?'active':''}${i+1<step?' done':''}" ${i+1===step?'aria-current="step"':''} data-action="go-step" data-target="${stepRoutes[i]}" style="cursor:pointer;" title="${t}"><b class="step-num">${i+1}</b><span class="step-label">${t}</span></div>`).join('')}</nav>`;
   }
   function bookingShell(step,body,nextPath,nextLabel,summary='',hasCustomFooter=false) {
     return `<div class="page couture">${publicHeader()}<main id="main" class="ct-main ct-booking">${progress(step)}${body}${hasCustomFooter?'':`<footer class="ct-booking-footer"><div>${summary||`${esc(service().name)} · ${service().contact?'Tư vấn riêng':money(currentTotal())}`}</div><div class="ct-actions"><button class="btn" data-action="booking-back" data-step="${step}">Quay lại</button>${nextPath?`<button class="btn btn-dark" data-action="ct-next" data-next="${nextPath}" data-step="${step}">${nextLabel}</button>`:''}</div></footer>`}</main>${publicFooter()}</div>`;
@@ -330,15 +631,33 @@
     return bookingShell(1,`<h1 class="ct-title">Chọn dịch vụ trang điểm</h1><p class="ct-subtitle">Lựa chọn dành cho khoảnh khắc của bạn.</p><section class="ct-service-grid ct-select-services">${state.services.filter(s=>s.enabled).map(s=>`<button class="ct-service-option ${s.id===state.booking.serviceId?'selected':''}" data-action="booking-service" data-id="${s.id}"><img src="/assets/${imageFor(s)}" alt="${esc(s.name)}"><h2>${esc(s.name)}</h2><p>${s.contact?'Tư vấn riêng':`${money(s.price)} · ${s.duration} phút`}</p><span>${s.id===state.booking.serviceId?'✓ Đã chọn':'Chọn dịch vụ'}</span></button>`).join('')}</section>`,'/booking/time','TIẾP TỤC · THỜI GIAN');
   }
   function calendarMarkup() {
+    const today = localIso();
+    if (!state.booking.date || state.booking.date < today) {
+      state.booking.date = today;
+    }
     const d=new Date((state.calendarMonth||state.booking.date).slice(0,7)+'-01T12:00:00');const y=d.getFullYear(),m=d.getMonth(),offset=(d.getDay()+6)%7;
-    const today=localIso(new Date()),end=new Date();end.setDate(end.getDate()+Number(state.settings.bookingWindow||60));
+    const end=new Date();end.setDate(end.getDate()+Number(state.settings.bookingWindow||60));
     return `<div class="ct-calendar"><header><button class="icon-btn" data-action="ct-month" data-delta="-1" aria-label="Tháng trước">${icon('back')}</button><h3>Tháng ${m+1}, ${y}</h3><button class="icon-btn" data-action="ct-month" data-delta="1" aria-label="Tháng sau">${icon('arrow')}</button></header><div class="ct-calendar-grid">${['T2','T3','T4','T5','T6','T7','CN'].map(t=>`<span>${t}</span>`).join('')}${'<span></span>'.repeat(offset)}${Array.from({length:new Date(y,m+1,0).getDate()},(_,i)=>{const iso=`${y}-${String(m+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`;return `<button class="${iso===state.booking.date?'selected':''}" data-action="ct-date" data-date="${iso}" ${iso<today||iso>localIso(end)?'disabled':''} aria-label="${dateLabel(iso)}" aria-pressed="${iso===state.booking.date}">${i+1}</button>`}).join('')}</div></div>`;
   }
   function availableTimes() {
     return [...new Set(['07:00','08:00','09:30','10:00','13:00','14:00','15:30','16:00','18:00',...state.scheduleSlots.filter(s=>s.slotDate===state.booking.date).map(s=>s.slotTime)])].sort();
   }
   function pageBookingTime() {
-    return bookingShell(2,`<h1 class="ct-title">Chọn ngày và giờ</h1><p class="ct-subtitle">Thời gian hiển thị theo giờ Việt Nam.</p><section class="ct-time-layout">${calendarMarkup()}<div><h2>Giờ bắt đầu · ${dateLabel()}</h2><div class="ct-time-slots">${availableTimes().map(t=>{const no=slotUnavailable(state.booking.date,t)||!state.settings.scheduleOpen;return `<button class="btn ${state.booking.time===t&&!no?'btn-dark':''}" data-action="time-select" data-time="${t}" ${no?'disabled':''}>${t}</button>`}).join('')}</div><p>${icon('clock')} Thời lượng: ${service().duration} phút</p><p class="muted">Giờ đã có lịch hoặc được chặn sẽ không thể chọn.</p></div></section>`,'/booking/location','TIẾP TỤC · ĐỊA ĐIỂM');
+    const today = localIso();
+    if (!state.booking.date || state.booking.date < today) {
+      state.booking.date = today;
+      state.booking.time = '';
+    }
+    const times = availableTimes();
+    if (state.booking.time && slotUnavailable(state.booking.date, state.booking.time)) {
+      state.booking.time = '';
+    }
+    if (!state.booking.time) {
+      const firstAvail = times.find(t => !slotUnavailable(state.booking.date, t));
+      state.booking.time = firstAvail || defaultBookingTime(state.booking.date);
+      saveState();
+    }
+    return bookingShell(2,`<h1 class="ct-title">Chọn ngày và giờ</h1><p class="ct-subtitle">Thời gian hiển thị theo giờ Việt Nam.</p><section class="ct-time-layout">${calendarMarkup()}<div><h2>Giờ bắt đầu · ${dateLabel()}</h2><div class="ct-time-slots">${times.map(t=>{const no=slotUnavailable(state.booking.date,t)||!state.settings.scheduleOpen;return `<button class="btn ${state.booking.time===t&&!no?'btn-dark':''}" data-action="time-select" data-time="${t}" ${no?'disabled':''}>${t}</button>`}).join('')}</div><p>${icon('clock')} Thời lượng: ${service().duration} phút</p><p class="muted">Giờ đã có lịch hoặc được chặn sẽ không thể chọn.</p></div></section>`,'/booking/location','TIẾP TỤC · ĐỊA ĐIỂM');
   }
 
   const VIETNAM_LOCATIONS = {
@@ -803,13 +1122,297 @@
     return `<figure class="ct-payment-qr"><img src="${esc(url)}" alt="Mã QR nhận tiền của Hoàn"><figcaption>Mã QR nhận tiền · HOÀN</figcaption><a class="link" href="${esc(url)}" target="_blank" rel="noopener">Mở ảnh QR</a></figure>`;
   }
   function bankReady() { return !!(state.settings.bankName&&state.settings.bankAccount&&state.settings.bankOwner); }
-  function pageBookingDeposit() {
-    const deposit=Math.min(Number(state.settings.deposit||200000),currentTotal());state.booking.deposit=deposit;
-    return bookingShell(5,`<h1 class="ct-title">Đặt cọc giữ lịch</h1><p class="ct-subtitle">Kiểm tra toàn bộ chi phí trước khi gửi yêu cầu.</p><section class="ct-two-col"><article><p class="ct-overline">THANH TOÁN ĐẶT CỌC</p><h2>Quét mã. Giữ khoảnh khắc.</h2>${paymentQR()}${bankReady()?`<div class="ct-notice">Thông tin nhận tiền sẽ được hiển thị cùng mã lịch sau khi bạn hoàn tất yêu cầu.</div><div class="ct-money-row"><span>Ngân hàng</span><b>${esc(state.settings.bankName)}</b></div><div class="ct-money-row"><span>Chủ tài khoản</span><b>${esc(state.settings.bankOwner)}</b></div>`:`<div class="ct-notice">Hoàn sẽ gửi thông tin chuyển khoản khi tiếp nhận yêu cầu đặt lịch.</div>`}<p>Khoản cọc chỉ được ghi nhận sau khi Hoàn kiểm tra giao dịch thật.</p><a class="link" href="#/policies/deposit">Đặt cọc & thanh toán ${icon('arrow')}</a><form data-form="deposit" class="ct-form"><label class="ct-check"><input type="checkbox" name="depositConsent" ${state.booking.depositConsent?'checked':''} required> Tôi đã đọc và đồng ý chính sách đặt cọc.</label></form></article><aside class="ct-summary"><h2>Chi tiết thanh toán</h2><p>${esc(service().name)}<br>${dateLabel()} · ${state.booking.time}</p>${paymentRows(currentTotal(),deposit)}<p class="muted">Khoản cọc được trừ vào tổng chi phí.</p></aside></section>`,'/booking/confirm','TIẾP TỤC · XÁC NHẬN');
+  function statusTrack(isPaid, isPending) {
+    const isUnpaid = !isPaid && !isPending;
+    return `
+      <div class="ct-deposit-status-track" role="status" aria-label="Tiến trình thanh toán cọc">
+        <div class="track-step ${isUnpaid ? 'active' : 'done'}">
+          <span class="track-dot"></span>
+          <span class="track-text">Chưa thanh toán</span>
+        </div>
+        <span class="track-arrow">→</span>
+        <div class="track-step ${isPending ? 'active' : isPaid ? 'done' : 'pending'}">
+          <span class="track-dot"></span>
+          <span class="track-text">Chờ đối soát</span>
+        </div>
+        <span class="track-arrow">→</span>
+        <div class="track-step ${isPaid ? 'active confirmed' : 'pending'}">
+          <span class="track-dot ${isPaid ? 'check-dot' : ''}">${isPaid ? '✓' : ''}</span>
+          <span class="track-text">Đã nhận cọc</span>
+        </div>
+      </div>
+    `;
   }
+  function pageBookingDeposit() {
+    const s = service();
+    const servicePrice = s.price > 0 ? s.price : (s.id === 'bridal' ? 850000 : 650000);
+    const travelFee = Number(state.booking.travelFee || (state.booking.locationType === 'client' ? 50000 : 0));
+    const total = servicePrice + travelFee;
+    const deposit = Math.min(Number(state.settings.deposit || 200000), currentTotal());
+    state.booking.deposit = deposit;
+    const code = state.booking.code || (state.appointments[0]?.code) || ('LK' + Math.floor(1000 + Math.random() * 9000));
+    state.booking.code = code;
+    const apt = getAppointment(code) || state.appointments.find(x => x.code === code);
+    const isPaid = apt
+      ? (apt.paymentStatus === 'received' || apt.status === 'confirmed')
+      : (!!state.booking.depositPaid || state.booking.depositStatus === 'received');
+    const isPending = !isPaid && (
+      (apt && apt.paymentStatus === 'pending_verification') ||
+      !!state.booking.depositReported ||
+      state.booking.depositStatus === 'pending_verification'
+    );
+    const paid = isPaid ? deposit : (apt?.deposit || 0);
+    const remaining = Math.max(0, total - paid);
+    const receiptData = state.booking.receiptData || '';
+    const receiptName = state.booking.receiptName || '';
+
+    const bankName = state.settings.bankName || '';
+    const bankOwner = state.settings.bankOwner || '';
+    const bankAccount = state.settings.bankAccount || '';
+    const customQr = state.settings.paymentQrUrl && /^\/api\/uploads\?key=references(?:%2F|\/)[a-zA-Z0-9.-]+$/.test(state.settings.paymentQrUrl) ? state.settings.paymentQrUrl : '';
+    const vietQrUrl = bankAccount ? `https://img.vietqr.io/image/MB-${bankAccount}-compact2.png?amount=${deposit}&addInfo=HOAN%20${code}&accountName=${encodeURIComponent(bankOwner)}` : '';
+    const qrUrl = customQr || vietQrUrl;
+    const canPay = !!(bankAccount || customQr);
+
+    const body = `
+      <div class="ct-deposit-page">
+        <!-- Top header row -->
+        <div class="ct-deposit-top-bar">
+          <div class="ct-deposit-header-left">
+            <div class="ct-deposit-overline">05 / ĐẶT CỌC — THIẾT KẾ ĐỀ XUẤT</div>
+            <h1 class="ct-deposit-title">Đặt cọc giữ lịch</h1>
+            <p class="ct-deposit-subtitle">Kiểm tra chi phí trước khi chuyển khoản.</p>
+          </div>
+          
+          <div class="ct-deposit-timer-badge">
+            <div class="timer-top">
+              <svg class="timer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+              <span class="timer-label">Giữ chỗ:</span>
+              <span class="timer-countdown" id="deposit-timer">15:00</span>
+            </div>
+            <div class="timer-sub">Thời gian minh họa; căn cơ chế giữ chỗ thực tế.</div>
+          </div>
+        </div>
+
+        <!-- Mobile Deposit Amount Banner -->
+        <div class="ct-deposit-mobile-banner">
+          <div class="mb-label">Cọc cần thanh toán</div>
+          <div class="mb-amount">${money(deposit)}</div>
+          <div class="mb-sub">Cọc minh họa</div>
+        </div>
+
+        <!-- Main 2-Column Grid -->
+        <div class="ct-deposit-grid">
+          <!-- Left Column: Payment Details Card -->
+          <div class="ct-deposit-payment-card">
+            <!-- Tabs -->
+            <div class="ct-deposit-tabs">
+              <button type="button" class="deposit-tab active">Chuyển khoản / VietQR</button>
+              <button type="button" class="deposit-tab disabled" data-action="ct-tab-momo" title="Cổng thanh toán MoMo">MoMo · Chưa kết nối</button>
+            </div>
+
+            <!-- QR Box with 4 Corner Brackets -->
+            <div class="ct-deposit-qr-wrap">
+              <div class="ct-deposit-qr-box">
+                <span class="corner-bracket top-left"></span>
+                <span class="corner-bracket top-right"></span>
+                <span class="corner-bracket bottom-left"></span>
+                <span class="corner-bracket bottom-right"></span>
+                ${qrUrl
+                  ? `<img src="${esc(qrUrl)}" alt="Mã VietQR thanh toán cọc" style="width:100%;height:100%;object-fit:contain;">`
+                  : `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;">
+                      <div class="qr-placeholder-title">VỊ TRÍ MÃ QR</div>
+                      <div class="qr-placeholder-sub">Hiển thị khi đã cấu hình</div>
+                    </div>`
+                }
+              </div>
+            </div>
+
+            <!-- Bank Details Table -->
+            <div class="ct-deposit-bank-info">
+              <div class="bank-row">
+                <span class="bank-label">Ngân hàng</span>
+                <span class="bank-val">${esc(bankName || 'Chưa cấu hình')}</span>
+              </div>
+              <div class="bank-row">
+                <span class="bank-label">Chủ tài khoản</span>
+                <span class="bank-val">${esc(bankOwner || 'Chưa cấu hình')}</span>
+              </div>
+              <div class="bank-row">
+                <span class="bank-label">Số tài khoản</span>
+                <span class="bank-val-wrap">
+                  <span class="bank-val">${esc(bankAccount || 'Chưa cấu hình')}</span>
+                  ${bankAccount ? `
+                    <button type="button" class="bank-copy-icon-btn" data-action="ct-copy-account" data-value="${esc(bankAccount)}" title="Sao chép số tài khoản">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                      </svg>
+                    </button>
+                  ` : ''}
+                </span>
+              </div>
+              <div class="bank-note">Thông tin nhận tiền sẽ do Hoàn thiết lập.</div>
+            </div>
+
+            <!-- Transfer Content Box -->
+            <div class="ct-deposit-field-group">
+              <label class="deposit-field-label">Nội dung chuyển khoản</label>
+              <div class="deposit-copy-input">
+                <input type="text" readonly value="HOAN ${esc(code)}" id="transfer-code-val">
+                <button type="button" class="copy-btn" data-action="ct-copy-transfer" title="Sao chép nội dung">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="deposit-field-sub">Nội dung được tạo theo từng lịch</div>
+            </div>
+
+            <!-- Receipt Upload Box -->
+            <div class="ct-deposit-field-group">
+              <label class="deposit-field-label">Đính kèm ảnh chuyển khoản (không bắt buộc)</label>
+              <div class="deposit-upload-dropzone" data-action="ct-trigger-receipt">
+                <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                <div class="upload-prompt">${receiptData ? '✓ ' + esc(receiptName || 'Đã tải ảnh') : 'Chọn ảnh hoặc kéo thả vào đây'}</div>
+                <div class="upload-hint">JPG, PNG (tối đa 5MB)</div>
+                <input type="file" id="deposit-receipt-file" accept="image/*" style="display:none;">
+              </div>
+              ${receiptData ? `
+                <div class="receipt-attached-card">
+                  <img src="${receiptData}" class="receipt-thumb" alt="Bill đính kèm">
+                  <div class="receipt-info">
+                    <span class="receipt-name">✓ ${esc(receiptName || 'bill-chuyen-khoan.jpg')}</span>
+                    <span class="receipt-status">Đã tải ảnh bill chuyển khoản thành công</span>
+                  </div>
+                  <button type="button" class="btn-remove-receipt" data-action="ct-remove-receipt" title="Gỡ ảnh">×</button>
+                </div>
+              ` : ''}
+              <div class="deposit-field-sub">Ảnh chuyển khoản giúp kiểm tra, không thay thế xác nhận giao dịch.</div>
+            </div>
+
+            <!-- Action Buttons: report transfer or proceed -->
+            <div class="ct-deposit-actions">
+              ${isPaid ? `
+                <button type="button" class="btn-deposit-paid btn-deposit-confirmed" data-action="ct-deposit-confirmed-proceed">TIẾP TỤC XÁC NHẬN LỊCH →</button>
+              ` : isPending ? `
+                <button type="button" class="btn-deposit-paid btn-deposit-pending" data-action="ct-deposit-confirmed-proceed">ĐANG CHỜ ĐỐI SOÁT · TIẾP TỤC →</button>
+              ` : `
+                <button type="button" class="btn-deposit-paid" data-action="ct-report-transfer">TÔI ĐÃ CHUYỂN KHOẢN</button>
+              `}
+              <a href="#/contact" class="btn-deposit-contact">Liên hệ Hoàn</a>
+            </div>
+            <div class="deposit-actions-sub ${isPaid ? 'deposit-confirmed-note' : ''}">
+              ${isPaid 
+                ? '✓ Quản trị viên đã xác nhận nhận cọc — nhấn để hoàn tất lịch hẹn.' 
+                : isPending
+                ? 'Đã ghi nhận thông báo chuyển khoản — đang chờ đối soát.'
+                : 'Vui lòng quét mã QR hoặc chuyển khoản, sau đó nhấn "Tôi đã chuyển khoản".'}
+            </div>
+          </div>
+
+          <!-- Right Column: Invoice & Breakdown -->
+          <div class="ct-deposit-summary-card">
+            <div class="summary-card-header">
+              <h2>Chi tiết thanh toán</h2>
+              <span class="summary-sub">Số tiền minh họa theo bản cũ.</span>
+            </div>
+
+            <div class="summary-rows">
+              <div class="summary-row">
+                <span>Dịch vụ</span>
+                <b>${esc(s.name)}</b>
+              </div>
+              <div class="summary-row">
+                <span>Giá dịch vụ</span>
+                <span>${money(servicePrice)}</span>
+              </div>
+              <div class="summary-row">
+                <span>Phí di chuyển</span>
+                <span>${money(travelFee)}</span>
+              </div>
+              <div class="summary-row summary-row-total">
+                <span>Tổng chi phí</span>
+                <b>${money(total)}</b>
+              </div>
+              <div class="summary-row summary-row-deposit">
+                <span>Cọc cần thanh toán</span>
+                <strong>${money(deposit)}</strong>
+              </div>
+              <div class="summary-row">
+                <span>Còn lại sau khi nhận cọc</span>
+                <span>${money(remaining)}</span>
+              </div>
+              <div class="summary-row">
+                <span>Đã nhận hiện tại</span>
+                <span>${money(paid)}</span>
+              </div>
+            </div>
+
+            <!-- Policy Consent Checkbox -->
+            <div class="ct-deposit-policy-wrap">
+              <div class="policy-check-row">
+                <label class="policy-checkbox-label">
+                  <input type="checkbox" id="deposit-policy-consent" ${state.booking.depositConsent !== false ? 'checked' : ''}>
+                  <span>Tôi đồng ý <button type="button" class="policy-text-btn" data-action="ct-open-deposit-policy">chính sách đặt cọc</button></span>
+                </label>
+                <button type="button" class="policy-text-btn" data-action="ct-open-reschedule-policy">Đổi lịch &amp; hoàn cọc</button>
+              </div>
+              <div class="policy-sub">Khoản cọc được trừ vào tổng chi phí.</div>
+            </div>
+
+            <!-- Important Notice Box -->
+            <div class="ct-deposit-notice-box">
+              <div class="notice-icon">!</div>
+              <div class="notice-body">
+                <div class="notice-title">Thông tin quan trọng</div>
+                <p>Bấm báo chuyển khoản chỉ chuyển sang chờ đối soát.</p>
+                <p>Chỉ ghi nhận đã nhận cọc sau khi kiểm tra giao dịch thật.</p>
+              </div>
+            </div>
+
+            <!-- Status Track -->
+            ${statusTrack(isPaid, isPending)}
+
+            <!-- Footnote with Info Icon -->
+            <div class="ct-deposit-footer-info">
+              <div class="info-row">
+                <span class="info-icon">ⓘ</span>
+                <span>Hết thời gian giữ chỗ: kiểm tra lại lịch trước khi thanh toán.</span>
+              </div>
+              <div class="info-row sub-indent">
+                <span>Đã chuyển nhưng hết hạn: liên hệ Hoàn để đối soát.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    return bookingShell(5, body, null, '', '', true);
+  }
+
   function pageBookingConfirm() {
-    const b=state.booking;
-    return bookingShell(6,`<h1 class="ct-title">Kiểm tra lịch hẹn</h1><section class="ct-two-col"><article><h2>Thông tin buổi hẹn</h2>${[['Dịch vụ',service().name,'service'],['Ngày giờ',dateLabel()+' · '+b.time,'time'],['Địa điểm',[b.address,b.ward,b.district,b.city].filter(Boolean).join(', '),'location'],['Phong cách',b.style,'info'],['Tình trạng da',b.skin,'info'],['Dị ứng',[b.allergy,b.allergyNote].filter(Boolean).join(' · '),'info'],['Khách hàng',b.name+' · '+b.phone,'info'],['Lời nhắn',b.note||'Không có','info']].map(([t,v,p])=>`<div class="ct-review-row"><span>${t}</span><b>${esc(v)}</b><a href="#/booking/${p}">Chỉnh sửa</a></div>`).join('')}<div class="ct-upload-previews">${(b.references||[]).map(r=>`<img src="${r}" alt="Ảnh phong cách đã chọn">`).join('')}</div></article><aside class="ct-summary"><h2>Yêu cầu đặt lịch</h2>${paymentRows(currentTotal(),b.deposit)}<p>Lịch được tạo ở trạng thái chờ xác nhận. Bạn theo dõi và thanh toán cọc tại trang lịch hẹn.</p><button class="btn btn-dark btn-wide" data-action="complete-booking">GỬI YÊU CẦU ĐẶT LỊCH</button></aside></section>`,null,'');
+
+    const b = state.booking;
+    const apt = getAppointment(b.code) || state.appointments.find(x => x.code === b.code);
+    const isPaid = apt
+      ? (apt.paymentStatus === 'received' || apt.status === 'confirmed')
+      : (!!b.depositPaid || b.depositStatus === 'received');
+    const isPending = !isPaid && (
+      (apt && apt.paymentStatus === 'pending_verification') ||
+      !!b.depositReported ||
+      b.depositStatus === 'pending_verification'
+    );
+    return bookingShell(6, `<h1 class="ct-title">Kiểm tra lịch hẹn</h1><section class="ct-two-col"><article><h2>Thông tin buổi hẹn</h2>${[['Dịch vụ',service().name,'service'],['Ngày giờ',dateLabel()+' · '+b.time,'time'],['Địa điểm',[b.address,b.ward,b.district,b.city].filter(Boolean).join(', '),'location'],['Phong cách',b.style,'info'],['Tình trạng da',b.skin,'info'],['Dị ứng',[b.allergy,b.allergyNote].filter(Boolean).join(' · '),'info'],['Khách hàng',b.name+' · '+b.phone,'info'],['Lời nhắn',b.note||'Không có','info']].map(([t,v,p])=>`<div class="ct-review-row"><span>${t}</span><b>${esc(v)}</b><a href="#/booking/${p}">Chỉnh sửa</a></div>`).join('')}<div class="ct-upload-previews">${(b.references||[]).map(r=>`<img src="${r}" alt="Ảnh phong cách đã chọn">`).join('')}</div></article><aside class="ct-summary"><h2>Yêu cầu đặt lịch</h2>${statusTrack(isPaid, isPending)}${paymentRows(currentTotal(),b.deposit,isPaid?b.deposit:0)}<p>Lịch được tạo ở trạng thái chờ xác nhận. Bạn theo dõi và thanh toán cọc tại trang lịch hẹn.</p><button class="btn btn-dark btn-wide" data-action="complete-booking">GỬI YÊU CẦU ĐẶT LỊCH</button></aside></section>`, null, '');
   }
   function getAppointment(code=bookingCode) {
     return state.appointments.find(a=>a.code===code);
@@ -818,12 +1421,19 @@
     return ctPage('lookup','Không tìm thấy lịch hẹn',`<div class="ct-center-cta"><p>Vui lòng tra cứu lại bằng mã lịch và số điện thoại của bạn.</p><a class="btn btn-dark" href="#/lookup">TRA CỨU LỊCH</a></div>`);
   }
   function pageBookingSuccess() {
-    const a=getAppointment();if(!a)return missingBooking();
-    return ctPage('lookup','Yêu cầu đặt lịch đã được ghi nhận',`<section class="ct-result"><div class="success-icon">${icon('check')}</div><p>Hoàn sẽ kiểm tra thông tin và khoản cọc để xác nhận lịch của bạn.</p><p class="ct-overline">MÃ LỊCH HẸN</p><h2>${esc(a.code)}</h2><div class="ct-status">${a.paymentStatus==='pending_verification'?'Chờ đối soát':'Chưa thanh toán cọc'} · ${statusLabel(a.status)}</div><div class="ct-summary"><h2>${esc(service(a.serviceId).name)}</h2><p>${dateLabel(a.date)} · ${a.time}</p><p>${esc([a.address,a.ward,a.district].filter(Boolean).join(', '))}</p><div class="ct-money-row"><span>Tổng chi phí</span><strong>${money(a.total)}</strong></div></div><a class="btn btn-dark" href="#/booking/${a.code}">XEM & QUẢN LÝ LỊCH HẸN</a></section>`,'Đặt lịch / Kết quả');
+    const a = getAppointment();
+    if (!a) return missingBooking();
+    return ctPage('lookup', 'Yêu cầu đặt lịch đã được ghi nhận', `<section class="ct-result"><div class="success-icon">${icon('check')}</div><p>Hoàn sẽ kiểm tra thông tin và khoản cọc để xác nhận lịch của bạn.</p><p class="ct-overline">MÃ LỊCH HẸN</p><h2>${esc(a.code)}</h2><div class="ct-status">${a.paymentStatus==='pending_verification'?'Chờ đối soát':'Chưa thanh toán cọc'} · ${statusLabel(a.status)}</div><div class="ct-summary"><h2>${esc(service(a.serviceId).name)}</h2><p>${dateLabel(a.date)} · ${a.time}</p><p>${esc([a.address,a.ward,a.district].filter(Boolean).join(', '))}</p><div class="ct-money-row"><span>Tổng chi phí</span><strong>${money(a.total)}</strong></div></div><a class="btn btn-dark" href="#/booking/${a.code}">XEM & QUẢN LÝ LỊCH HẸN</a></section>`, 'Đặt lịch / Kết quả');
   }
   function pageBookingDetail(code) {
-    const a=getAppointment(code);if(!a)return missingBooking();const meta=state.bookingDetails?.[code]||{};const s=service(a.serviceId);const needed=Number(meta.depositRequired||Math.min(Number(state.settings.deposit),a.total));
-    return ctPage('lookup','Chi tiết lịch hẹn',`<div class="ct-detail-top"><b>${esc(a.code)}</b><span class="ct-status">${statusLabel(a.status)}</span><span class="ct-status">${a.paymentStatus==='received'?'Đã nhận cọc':a.paymentStatus==='pending_verification'?'Chờ đối soát':'Chưa thanh toán'}</span></div><section class="ct-two-col"><article><h2>Thông tin buổi hẹn</h2>${[['Dịch vụ',s.name],['Ngày',dateLabel(a.date)],['Giờ bắt đầu',a.time],['Địa điểm',[a.address,a.ward,a.district,meta.city].filter(Boolean).join(', ')],['Khách hàng',a.customer],['Điện thoại',a.phone],['Phong cách',a.style],['Ghi chú',a.note]].map(([t,v])=>`<div class="ct-money-row"><span>${t}</span><b>${esc(v||'—')}</b></div>`).join('')}<div class="ct-upload-previews">${(meta.references||[]).map(r=>`<img src="${r}" alt="Ảnh phong cách tham khảo">`).join('')}</div>${meta.skin?`<p>Tình trạng da: ${esc(meta.skin)} · Dị ứng: ${esc(meta.allergy)} ${esc(meta.allergyNote||'')}</p>`:''}<div class="ct-actions">${a.status!=='cancelled'&&a.status!=='completed'?`<a class="btn" href="#/booking/${code}/reschedule">Yêu cầu đổi lịch</a><a class="btn" href="#/booking/${code}/cancel">Yêu cầu hủy / hoàn cọc</a>`:''}<button class="btn" data-action="ct-calendar-download" data-code="${code}">Thêm vào lịch</button></div><h3>Chuẩn bị cho buổi hẹn</h3><p>Giữ da sạch và dưỡng ẩm nhẹ. Chuẩn bị ảnh trang phục, phong cách nếu có.</p><a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a>${(state.requests||[]).filter(r=>r.code===code).map(r=>`<div class="ct-notice"><b>${esc(r.subject)}</b><p>${esc(r.status==='resolved'?'Đã xử lý':'Chờ xử lý')}</p>${r.reply?`<p>${esc(r.reply)}</p>`:''}</div>`).join('')}</article><aside class="ct-summary"><h2>Thanh toán</h2>${paymentRows(a.total,needed,a.deposit,meta.travelFee??Math.max(0,a.total-s.price))}${a.deposit>0?`<a class="btn btn-dark btn-wide" href="#/booking/${code}/receipt">XEM BIÊN NHẬN</a>`:''}${a.deposit<needed&&a.status!=='cancelled'?paymentInstructions(a):''}<button class="btn btn-wide" data-action="ct-refresh">KIỂM TRA TRẠNG THÁI</button></aside></section>`,'Tra cứu lịch / '+code);
+    const a = getAppointment(code);
+    if (!a) return missingBooking();
+    const meta = state.bookingDetails?.[code] || {};
+    const s = service(a.serviceId);
+    const needed = Number(meta.depositRequired || Math.min(Number(state.settings.deposit), a.total));
+    const isPaid = a.paymentStatus === 'received' || a.deposit >= needed || a.status === 'confirmed';
+    const isPending = !isPaid && a.paymentStatus === 'pending_verification';
+    return ctPage('lookup', 'Chi tiết lịch hẹn', `<div class="ct-detail-top"><b>${esc(a.code)}</b><span class="ct-status">${statusLabel(a.status)}</span><span class="ct-status">${isPaid ? 'Đã nhận cọc' : isPending ? 'Chờ đối soát' : 'Chưa thanh toán'}</span></div><section class="ct-two-col"><article><h2>Thông tin buổi hẹn</h2>${[['Dịch vụ',s.name],['Ngày',dateLabel(a.date)],['Giờ bắt đầu',a.time],['Địa điểm',[a.address,a.ward,a.district,meta.city].filter(Boolean).join(', ')],['Khách hàng',a.customer],['Điện thoại',a.phone],['Phong cách',a.style],['Ghi chú',a.note]].map(([t,v])=>`<div class="ct-money-row"><span>${t}</span><b>${esc(v||'—')}</b></div>`).join('')}<div class="ct-upload-previews">${(meta.references||[]).map(r=>`<img src="${r}" alt="Ảnh phong cách tham khảo">`).join('')}</div>${meta.skin?`<p>Tình trạng da: ${esc(meta.skin)} · Dị ứng: ${esc(meta.allergy)} ${esc(meta.allergyNote||'')}</p>`:''}<div class="ct-actions">${a.status!=='cancelled'&&a.status!=='completed'?`<a class="btn" href="#/booking/${code}/reschedule">Yêu cầu đổi lịch</a><a class="btn" href="#/booking/${code}/cancel">Yêu cầu hủy / hoàn cọc</a>`:''}<button class="btn" data-action="ct-calendar-download" data-code="${code}">Thêm vào lịch</button></div><h3>Chuẩn bị cho buổi hẹn</h3><p>Giữ da sạch và dưỡng ẩm nhẹ. Chuẩn bị ảnh trang phục, phong cách nếu có.</p><a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a>${(state.requests||[]).filter(r=>r.code===code).map(r=>`<div class="ct-notice"><b>${esc(r.subject)}</b><p>${esc(r.status==='resolved'?'Đã xử lý':'Chờ xử lý')}</p>${r.reply?`<p>${esc(r.reply)}</p>`:''}</div>`).join('')}</article><aside class="ct-summary"><h2>Thanh toán</h2>${statusTrack(isPaid, isPending)}${paymentRows(a.total,needed,a.deposit,meta.travelFee??Math.max(0,a.total-s.price))}${a.deposit>0?`<a class="btn btn-dark btn-wide" href="#/booking/${code}/receipt">XEM BIÊN NHẬN</a>`:''}${a.deposit<needed&&a.status!=='cancelled'?paymentInstructions(a):''}<button class="btn btn-wide" data-action="ct-refresh">KIỂM TRA TRẠNG THÁI</button></aside></section>`, 'Tra cứu lịch / ' + code);
   }
   function paymentInstructions(a) {
     if(!bankReady()&&!paymentQR())return `<div class="ct-notice">Hoàn sẽ cung cấp thông tin nhận tiền khi liên hệ với bạn.</div><a class="btn btn-wide" href="#/contact">LIÊN HỆ HOÀN</a>`;
@@ -850,17 +1460,20 @@
     ['overview','grid','Tổng quan'],['appointments','calendar','Lịch hẹn'],['schedule','clock','Lịch làm việc'],
     ['services','tag','Dịch vụ'],['customers','user','Khách hàng'],['payments','card','Tiền cọc'],['promotions','ticket','Mã ưu đãi'],
     ['gallery','image','Bộ sưu tập'],['content','content','Nội dung website'],['notifications','bell','Thông báo'],['requests','mail','Yêu cầu hỗ trợ'],
-    ['reports','report','Báo cáo'],['permissions','shield','Phân quyền'],['audit','log','Nhật ký'],['settings','settings','Cài đặt']
+    ['reports','report','Báo cáo'],['permissions','shield','Phân quyền'],['audit','log','Nhật ký'],['settings','settings','Cài đặt'],
+    ['visitors','user','Khách truy cập website']
   ];
 
   function adminShell(active, body, title, subtitle, actions = '') {
     const groups = [
-      ['VẬN HÀNH',['overview','appointments','schedule']],
+      ['VẬN HÀNH',['overview','appointments','schedule','requests']],
       ['DỮ LIỆU',['services','customers','payments','promotions']],
       ['NỘI DUNG',['gallery','content','notifications']],
-      ['HỆ THỐNG',['reports','permissions','audit','settings']]
+      ['HỆ THỐNG',['reports','permissions','audit','settings']],
+      ['KHÁCH TRUY CẬP',['visitors']]
     ];
-    return `<div class="admin-page"><header class="admin-top"><a class="admin-brand" href="#/admin">HOÀN <small>QUẢN TRỊ VẬN HÀNH</small></a><label class="admin-search-wrap">${icon('search')}<input class="admin-search" id="admin-global-search" placeholder="Tìm lịch hẹn, khách hàng hoặc giao dịch..."></label><div class="admin-user"><button class="admin-notification" aria-label="Thông báo">${icon('bell')}<b>3</b></button><span class="system-label"><i class="status-dot"></i> Hệ thống ổn định</span><span class="admin-profile"><i>HN</i><span>Hoàn Nguyễn<small>Quản trị viên</small></span></span></div></header><div class="admin-layout"><aside class="admin-sidebar">${groups.map(g=>`<div class="admin-group-title">${g[0]}</div>${g[1].map(key=>{const l=adminLinks.find(x=>x[0]===key);return `<a class="admin-link ${active===key?'active':''}" href="#/admin/${key==='overview'?'':key}">${icon(l[1],l[2])}<span>${l[2]}</span></a>`}).join('')}`).join('')}</aside><main id="main" class="admin-content"><header class="admin-head"><div>${active==='overview'?'<div class="admin-kicker">TRUNG TÂM VẬN HÀNH</div>':''}<h1>${title}</h1><p>${subtitle}</p></div><div class="admin-head-actions">${actions}</div></header>${body}</main></div></div>`;
+    const headHtml = active === 'schedule' ? '' : `<header class="admin-head"><div>${active==='overview'?'<div class="admin-kicker">TRUNG TÂM VẬN HÀNH</div>':''}<h1>${title}</h1><p>${subtitle}</p></div><div class="admin-head-actions">${actions}</div></header>`;
+    return `<div class="admin-page"><header class="admin-top"><a class="admin-brand" href="#/admin">HOÀN <small>QUẢN TRỊ VẬN HÀNH</small></a><label class="admin-search-wrap">${icon('search')}<input class="admin-search" id="admin-global-search" placeholder="Tìm lịch hẹn, khách hàng hoặc giao dịch..."></label><div class="admin-user"><a class="admin-view-site-btn" href="#/" target="_blank" title="Xem website khách đặt lịch"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg><span>Xem website</span></a><button class="admin-notification" aria-label="Thông báo" data-action="goto-notifications" title="3 thông báo mới">${icon('bell')}<b>3</b></button><span class="system-label"><i class="status-dot"></i> Hệ thống ổn định</span><span class="admin-profile" data-action="goto-profile" title="Hoàn Nguyễn - Quản trị viên"><i>HN</i><span>Hoàn Nguyễn<small>Quản trị viên</small></span></span></div></header><div class="admin-layout"><aside class="admin-sidebar">${groups.map(g=>`<div class="admin-group-title">${g[0]}</div>${g[1].map(key=>{const l=adminLinks.find(x=>x[0]===key);return `<a class="admin-link ${active===key?'active':''}" href="#/admin/${key==='overview'?'':key}">${icon(l[1],l[2])}<span>${l[2]}</span></a>`}).join('')}`).join('')}</aside><main id="main" class="admin-content" data-admin-page="${active}">${headHtml}${body}</main></div></div>`;
   }
 
   function adminOverview() {
@@ -877,7 +1490,10 @@
   }
 
   function appointmentsTable(rows) {
-    return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Giờ</th><th>Khách hàng</th><th>Dịch vụ</th><th>Khu vực</th><th>Thanh toán</th><th>Trạng thái</th><th></th></tr></thead><tbody>${rows.length?rows.map(a=>`<tr><td class="numeric">${a.time}</td><td><b>${a.customer}</b><br><small class="numeric">${a.phone}</small></td><td>${service(a.serviceId).name}</td><td>${a.district||'—'}</td><td class="numeric">${a.deposit>0?'Đã cọc '+money(a.deposit):'Chờ đối soát'}</td><td><span class="badge ${a.status==='confirmed'?'success':a.status==='pending'?'warning':''}">${statusLabel(a.status)}</span></td><td><div class="table-actions"><button class="mini-action" data-action="admin-view-appointment" data-code="${a.code}">Xem</button><button class="mini-action" data-action="admin-status" data-code="${a.code}">Đổi trạng thái</button></div></td></tr>`).join(''):'<tr><td colspan="7"><div class="empty-table">Chưa có lịch hẹn. Lịch khách đặt sẽ xuất hiện tại đây.</div></td></tr>'}</tbody></table></div>`;
+    return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Giờ</th><th>Khách hàng</th><th>Dịch vụ</th><th>Khu vực</th><th>Thanh toán</th><th>Trạng thái</th><th style="min-width:320px;">Thao tác</th></tr></thead><tbody>${rows.length?rows.map(a=>{
+      const isConf = (a.status === 'confirmed' || a.paymentStatus === 'received');
+      return `<tr class="clickable-row" data-action="admin-view-appointment" data-code="${a.code}" title="Nhấp vào dòng để xem chi tiết lịch hẹn"><td class="numeric"><b>${a.time}</b></td><td><b class="row-hover-link">${esc(a.customer)}</b><br><small class="numeric" style="color:#6b7280;">${a.phone}</small></td><td>${service(a.serviceId).name}</td><td>${a.district||'—'}</td><td class="numeric">${a.deposit>0?'Đã cọc '+money(a.deposit):'Chờ đối soát'}</td><td><span class="badge ${a.status==='confirmed'?'success':a.status==='pending'?'warning':''}">${statusLabel(a.status)}</span></td><td><div class="table-actions"><button class="action-btn action-btn-view" data-action="admin-view-appointment" data-code="${a.code}" title="Xem chi tiết lịch hẹn">${icon('eye')}<span>Xem</span></button><button class="action-btn action-btn-edit" data-action="admin-edit-appointment" data-code="${a.code}" title="Chỉnh sửa thông tin lịch hẹn">${icon('edit')}<span>Sửa</span></button><button class="action-btn action-btn-delete" data-action="admin-delete-appointment" data-code="${a.code}" title="Xóa lịch hẹn khỏi hệ thống">${icon('trash')}<span>Xóa</span></button><button class="action-btn action-btn-status" data-action="admin-status" data-code="${a.code}" title="Đổi trạng thái lịch">${icon('clock')}<span>Trạng thái</span></button>${!isConf?`<button class="action-btn action-btn-deposit" data-action="admin-confirm-deposit" data-code="${a.code}" title="Quản trị duyệt cọc">${icon('check')}<span>Duyệt cọc</span></button>`:`<button class="action-btn action-btn-reset" data-action="admin-reset-deposit" data-code="${a.code}" title="Trả về chờ đối soát"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg><span>Hoàn cọc</span></button>`}</div></td></tr>`;
+    }).join(''):'<tr><td colspan="7"><div class="empty-table">Chưa có lịch hẹn. Lịch khách đặt sẽ xuất hiện tại đây.</div></td></tr>'}</tbody></table></div>`;
   }
 
   function lineChart() {
@@ -898,23 +1514,505 @@
     return adminShell('appointments',body,'Lịch hẹn','Quản lý toàn bộ lịch hẹn và trạng thái phục vụ.',`<button class="btn" data-action="export-appointments">${icon('download')} Xuất danh sách</button><button class="btn btn-dark" data-action="new-appointment">${icon('plus')} Tạo lịch hẹn</button>`);
   }
 
-  function adminSchedule() {
-    const times = ['08:00','09:30','11:00','13:00','15:00','16:30','19:00'];
-    const monday=mondayForOffset(state.adminWeekOffset);
-    const dayDates=Array.from({length:7},(_,i)=>{const d=new Date(monday);d.setDate(monday.getDate()+i);return d});
-    const dayNames=['T2','T3','T4','T5','T6','T7','CN'];
-    const defaultOpen=[[0,1,3,5,6],[0,2,4,5],[1,3,4],[0,2,3,6],[1,2,5],[0,1,4],[0,3,6]];
-    const range=`${String(dayDates[0].getDate()).padStart(2,'0')}—${String(dayDates[6].getDate()).padStart(2,'0')} tháng ${dayDates[6].getMonth()+1}, ${dayDates[6].getFullYear()}`;
-    const cell=(time,ri,date,di)=>{
-      const iso=localIso(date);
-      const appointment=state.appointments.find(a=>a.date===iso&&a.time===time&&a.status!=='cancelled');
-      const record=slotRecord(iso,time);
-      const available=record?record.status==='available':defaultOpen[ri].includes(di);
-      if(appointment)return `<button class="schedule-cell occupied" disabled><span class="schedule-slot busy">Đã có lịch</span></button>`;
-      return `<button class="schedule-cell ${available?'is-available':''}" data-action="schedule-cell" data-time="${time}" data-date="${iso}" data-status="${available?'available':'blocked'}">${available?'<span class="schedule-slot">Còn trống</span>':''}</button>`;
+  // Clean seed appointments & slots (No mock data)
+  const SEED_SCHEDULE_APPOINTMENTS = [];
+  const SEED_SCHEDULE_SLOTS = [];
+
+  function ensureScheduleSeedData() {
+    if (!state.appointments) state.appointments = [];
+    if (!state.scheduleSlots) state.scheduleSlots = [];
+    if (!state.customers) state.customers = [];
+
+    const mockNames = [
+      'Nguyễn Minh Anh', 'Trần Ngọc Hà', 'Lê Thu Trang', 'Phạm Mai Linh', 'Hà Vy',
+      'Đỗ Quỳnh Chi', 'Bùi Thảo Nguyên', 'Nguyễn Thùy Dung', 'Vũ Hoàng Yến',
+      'Cầu Giấy', 'Tây Hồ', 'Nam Từ Liêm', 'Đặng Thu Trang', 'Đinh Mai Anh',
+      'Hoàng Phương Linh', 'Thanh Xuân', 'Mai Anh', 'Lưu Gia Hân', 'Phương Thảo',
+      'Hải Yến', 'Kim Ngân', 'Thu Phương', 'Ngọc Anh', 'Khánh Linh', 'Ngọc Diệp',
+      'Hương Giang', 'Bảo Trâm', 'Quỳnh Anh'
+    ];
+
+    // Purge only legacy mock/seed appointments
+    const staleCodes = ['HMA-090926-BQ0', 'HMA-090926-MQ3', 'HMA-100926-MS7', 'HMA-090926-BIQ', 'HMA-180926-6W2'];
+    state.appointments = (state.appointments || []).filter(a =>
+      !mockNames.includes(a.customer) &&
+      !staleCodes.includes(a.code)
+    );
+    // Purge mock schedule slots
+    state.scheduleSlots = (state.scheduleSlots || []).filter(s =>
+      s.note !== 'Di chuyển' && s.note !== 'Nghỉ giữa lịch' && s.note !== 'Không khả dụng' && s.note
+    );
+    // Purge mock customers
+    state.customers = (state.customers || []).filter(c => !mockNames.includes(c.name));
+  }
+
+  function modalEditAppointment(code) {
+    const a = getAppointment(code);
+    if (!a) return toast('Không tìm thấy lịch hẹn');
+    const svcs = state.services || [];
+    modal(`Chỉnh sửa lịch hẹn — ${a.code}`, `
+      <div class="form-grid">
+        <div class="field full">
+          <label>Khách hàng *</label>
+          <input id="modal-edit-customer" value="${esc(a.customer || '')}" placeholder="Họ và tên khách hàng">
+        </div>
+        <div class="field">
+          <label>Số điện thoại *</label>
+          <input id="modal-edit-phone" value="${esc(a.phone || '')}" placeholder="Số điện thoại">
+        </div>
+        <div class="field">
+          <label>Dịch vụ</label>
+          <select id="modal-edit-service">
+            ${svcs.map(s => `<option value="${s.id}" ${s.id === a.serviceId ? 'selected' : ''}>${s.name} (${money(s.price)})</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Ngày hẹn *</label>
+          <input id="modal-edit-date" type="date" value="${a.date || ''}">
+        </div>
+        <div class="field">
+          <label>Giờ hẹn *</label>
+          <input id="modal-edit-time" type="time" value="${a.time || '09:00'}">
+        </div>
+        <div class="field">
+          <label>Trạng thái lịch</label>
+          <select id="modal-edit-status">
+            <option value="confirmed" ${a.status === 'confirmed' ? 'selected' : ''}>Đã xác nhận</option>
+            <option value="pending" ${a.status === 'pending' ? 'selected' : ''}>Chờ xác nhận</option>
+            <option value="completed" ${a.status === 'completed' ? 'selected' : ''}>Đã hoàn thành</option>
+            <option value="cancelled" ${a.status === 'cancelled' ? 'selected' : ''}>Đã hủy</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Trạng thái thanh toán</label>
+          <select id="modal-edit-payment">
+            <option value="received" ${a.paymentStatus === 'received' ? 'selected' : ''}>Đã nhận cọc</option>
+            <option value="pending_verification" ${a.paymentStatus === 'pending_verification' ? 'selected' : ''}>Chờ đối soát</option>
+            <option value="unverified" ${a.paymentStatus === 'unverified' ? 'selected' : ''}>Chưa thanh toán</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Tiền cọc (VNĐ)</label>
+          <input id="modal-edit-deposit" type="number" step="10000" value="${a.deposit || 0}">
+        </div>
+        <div class="field">
+          <label>Tổng chi phí (VNĐ)</label>
+          <input id="modal-edit-total" type="number" step="10000" value="${a.total || 0}">
+        </div>
+        <div class="field full">
+          <label>Địa điểm / Địa chỉ phục vụ</label>
+          <input id="modal-edit-address" value="${esc(a.address || '')}" placeholder="Ví dụ: Tại studio HOÀN hoặc địa chỉ khách">
+        </div>
+        <div class="field full">
+          <label>Ghi chú</label>
+          <textarea id="modal-edit-note" rows="2" placeholder="Ghi chú yêu cầu của khách...">${esc(a.note || '')}</textarea>
+        </div>
+      </div>
+    `, 'Lưu thay đổi', `edit-appointment:${a.code}`);
+  }
+
+  function modalDeleteAppointment(code) {
+    const a = getAppointment(code);
+    if (!a) return toast('Không tìm thấy lịch hẹn');
+    const sName = service(a.serviceId)?.name || a.serviceId;
+    modal('Xác nhận xóa lịch hẹn', `
+      <div style="font-size:14px;line-height:1.6;color:#1f2937;">
+        <p style="font-size:15px;color:#1f2937;margin-bottom:14px;line-height:1.5;">
+          Bạn có chắc chắn muốn xóa lịch hẹn của khách hàng <b>${esc(a.customer)}</b>?
+        </p>
+        <div style="margin-bottom:16px;">
+          <div class="summary-row"><span>Mã lịch</span><b class="numeric">${a.code}</b></div>
+          <div class="summary-row"><span>Thời gian</span><b class="numeric">${a.time}, ${a.date}</b></div>
+          <div class="summary-row"><span>Dịch vụ</span><b>${esc(sName)}</b></div>
+          <div class="summary-row"><span>Số điện thoại</span><b class="numeric">${a.phone || '—'}</b></div>
+        </div>
+        <p style="font-size:13px;color:#6b7280;margin:0;line-height:1.5;">
+          Dữ liệu lịch hẹn sau khi xóa sẽ được gỡ hoàn toàn khỏi hệ thống và không thể khôi phục.
+        </p>
+      </div>
+    `, 'Xác nhận xóa', `delete-appointment:${a.code}`, 'btn-danger');
+  }
+
+  function modalAddSlot(defaultDate = '', defaultTime = '09:00', defaultEndTime = '10:15') {
+    const d = defaultDate || localIso();
+    const svcs = state.services || [];
+    modal('Thêm khung giờ', `
+      <div class="form-grid">
+        <div class="field">
+          <label>Ngày áp dụng</label>
+          <input id="modal-slot-date" type="date" value="${d}">
+        </div>
+        <div class="field">
+          <label>Loại khung giờ</label>
+          <select id="modal-slot-type" onchange="window.onSlotTypeChange?.(this.value)">
+            <option value="appointment">Lịch hẹn khách hàng</option>
+            <option value="available">Mở nhận lịch (Còn trống)</option>
+            <option value="travel">Thời gian di chuyển</option>
+            <option value="break">Nghỉ giữa lịch</option>
+            <option value="blocked">Không khả dụng (Chặn giờ)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Giờ bắt đầu</label>
+          <input id="modal-slot-start" type="time" value="${defaultTime}">
+        </div>
+        <div class="field">
+          <label>Giờ kết thúc</label>
+          <input id="modal-slot-end" type="time" value="${defaultEndTime}">
+        </div>
+      </div>
+      <div class="field" id="modal-slot-title-wrap">
+        <label id="modal-slot-title-label">Khách hàng / Tiêu đề</label>
+        <input id="modal-slot-title" placeholder="Nhập họ tên khách hàng...">
+      </div>
+      <div class="form-grid" id="modal-slot-apt-wrap">
+        <div class="field">
+          <label>Dịch vụ</label>
+          <select id="modal-slot-service">
+            ${svcs.map(s => `<option value="${s.id}">${s.name} (${s.duration}p)</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Số điện thoại</label>
+          <input id="modal-slot-phone" placeholder="Số điện thoại khách...">
+        </div>
+      </div>
+      <div class="field">
+        <label>Ghi chú / Địa điểm</label>
+        <input id="modal-slot-note" placeholder="Địa chỉ hoặc ghi chú riêng...">
+      </div>
+    `, 'Thêm khung giờ', 'create-slot');
+
+    window.onSlotTypeChange = (type) => {
+      const aptWrap = document.getElementById('modal-slot-apt-wrap');
+      const titleLabel = document.getElementById('modal-slot-title-label');
+      const titleInput = document.getElementById('modal-slot-title');
+      if (type === 'appointment') {
+        if (aptWrap) aptWrap.style.display = 'grid';
+        if (titleLabel) titleLabel.textContent = 'Khách hàng';
+        if (titleInput) { titleInput.value = ''; titleInput.placeholder = 'Họ và tên khách hàng...'; }
+      } else if (type === 'travel') {
+        if (aptWrap) aptWrap.style.display = 'none';
+        if (titleLabel) titleLabel.textContent = 'Tiêu đề';
+        if (titleInput) { titleInput.value = 'Di chuyển'; titleInput.placeholder = 'Di chuyển...'; }
+      } else if (type === 'break') {
+        if (aptWrap) aptWrap.style.display = 'none';
+        if (titleLabel) titleLabel.textContent = 'Tiêu đề';
+        if (titleInput) { titleInput.value = 'Nghỉ giữa lịch'; titleInput.placeholder = 'Nghỉ giữa lịch...'; }
+      } else if (type === 'blocked') {
+        if (aptWrap) aptWrap.style.display = 'none';
+        if (titleLabel) titleLabel.textContent = 'Lý do / Khu vực';
+        if (titleInput) { titleInput.value = 'Không khả dụng'; titleInput.placeholder = 'Không khả dụng / Lý do...'; }
+      } else {
+        if (aptWrap) aptWrap.style.display = 'none';
+        if (titleLabel) titleLabel.textContent = 'Ghi chú khung giờ';
+        if (titleInput) { titleInput.value = ''; titleInput.placeholder = 'Còn trống (Nhận khách)...'; }
+      }
     };
-    const body = `<div class="schedule-toolbar"><div class="week-controls"><button class="btn btn-sm" data-action="week-prev">${icon('back')} Tuần trước</button><b class="numeric">${range}</b><button class="btn btn-sm" data-action="week-next">Tuần sau ${icon('arrow')}</button></div><div class="schedule-state"><span><i class="status-dot"></i> ${state.settings.scheduleOpen?'Đang mở nhận lịch':'Đang tạm dừng nhận lịch'}</span><button class="toggle ${state.settings.scheduleOpen?'on':''}" data-action="toggle-schedule" aria-label="Bật tắt nhận lịch"></button></div></div><div class="schedule-wrap"><div class="schedule-grid"><div class="schedule-cell head">Giờ</div>${dayDates.map((d,i)=>`<div class="schedule-cell head">${dayNames[i]} · ${String(d.getDate()).padStart(2,'0')}</div>`).join('')}${times.map((t,ri)=>`<div class="schedule-cell head numeric">${t}</div>${dayDates.map((d,di)=>cell(t,ri,d,di)).join('')}`).join('')}</div></div><p class="schedule-note">Nhấp vào ô để mở hoặc chặn khung giờ. Thay đổi được lưu trực tiếp vào dữ liệu lịch làm việc.</p>`;
-    return adminShell('schedule',body,'Lịch làm việc','Thiết lập khung giờ nhận lịch, ngày nghỉ và thời gian di chuyển.',`<button class="btn" data-action="block-time">${icon('plus')} Chặn khung giờ</button><button class="btn btn-dark" data-action="save-schedule">${icon('check')} Lưu lịch làm việc</button>`);
+  }
+
+  function adminSchedule() {
+    const ALL_HOURS = ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00','21:00'];
+    const monday = mondayForOffset(state.adminWeekOffset);
+    const dayDates = Array.from({length:7}, (_,i) => { const d = new Date(monday); d.setDate(monday.getDate()+i); return d; });
+    const dayNames = ['T2','T3','T4','T5','T6','T7','CN'];
+    const todayIso = localIso(new Date());
+
+    // Stale codes to exclude
+    const staleCodes = ['HMA-090926-BQ0', 'HMA-090926-MQ3', 'HMA-100926-MS7', 'HMA-090926-BIQ', 'HMA-180926-6W2'];
+
+    // Determine which days are "open" (on)
+    const dayOpen = state.settings.weekDayOpen || [true,true,true,true,true,true,false];
+
+    // Build range label
+    const rangeLabel = `${String(dayDates[0].getDate()).padStart(2,'0')}–${String(dayDates[6].getDate()).padStart(2,'0')} tháng ${dayDates[6].getMonth()+1}, ${dayDates[6].getFullYear()}`;
+
+    // Service name shortener
+    const shortSvc = (sid) => {
+      const s = service(sid);
+      return s ? s.name : 'Dịch vụ';
+    };
+
+    const timeToMin = (t) => {
+      if (!t) return 0;
+      const [h, m] = t.split(':').map(Number);
+      return h * 60 + (m || 0);
+    };
+
+    const HOUR_HEIGHT = 68; // px per hour
+    const START_MIN = 420;  // 07:00 in minutes
+
+    // Render day column with continuous timeline events
+    const renderDayColumn = (dateObj, dayIdx) => {
+      const iso = localIso(dateObj);
+      const isOpen = Boolean(dayOpen[dayIdx]);
+
+      // 1. Clickable background slots for each hour
+      const bgSlots = ALL_HOURS.map(h => {
+        const isOff = !isOpen || h >= '20:00';
+        if (isOff) {
+          return `<div class="schv2-day-bg-slot schv2-slot-off" data-action="add-slot-at" data-date="${iso}" data-hour="${h}" title="Ngoài giờ làm việc"></div>`;
+        }
+        return `<div class="schv2-day-bg-slot" data-action="add-slot-at" data-date="${iso}" data-hour="${h}" title="Bấm để thêm khung giờ tại ${h}"></div>`;
+      });
+
+      // 2. Events on this day
+      const eventCards = [];
+
+      if (isOpen) {
+        // Appointments
+        const dayApts = state.appointments.filter(a => a.date === iso && a.status !== 'cancelled' && !staleCodes.includes(a.code));
+        for (const a of dayApts) {
+          const startMin = timeToMin(a.time);
+          const endLabel = a.endTime || addMinutes(a.time, 75);
+          const hourKey = (a.time || '').slice(0, 2) + ':00';
+          const hourIdx = ALL_HOURS.indexOf(hourKey);
+          const top = (hourIdx >= 0 ? hourIdx : Math.round((startMin - START_MIN) / 60)) * HOUR_HEIGHT + 5;
+          const height = HOUR_HEIGHT - 10;
+
+          eventCards.push(`
+            <div class="schv2-card schv2-card-apt" style="top: ${top}px; height: ${height}px;" data-action="admin-view-appointment" data-code="${a.code}" title="${esc(a.customer)} — ${shortSvc(a.serviceId)} (${a.time} - ${endLabel})">
+              <div class="schv2-card-time">${a.time} - ${endLabel}</div>
+              <div class="schv2-card-title">${esc(a.customer)}</div>
+              <div class="schv2-card-desc">${shortSvc(a.serviceId)}</div>
+            </div>
+          `);
+        }
+
+        // Schedule Slots (travel, break, blocked)
+        const daySlots = (state.scheduleSlots || []).filter(s => s.slotDate === iso && s.status !== 'available');
+        for (const s of daySlots) {
+          const startMin = timeToMin(s.slotTime);
+          const defaultDur = (s.status === 'blocked') ? 120 : 45;
+          const endMin = s.endTime ? timeToMin(s.endTime) : (startMin + defaultDur);
+          const endLabel = s.endTime || addMinutes(s.slotTime, defaultDur);
+
+          const hourKey = (s.slotTime || '').slice(0, 2) + ':00';
+          const hourIdx = ALL_HOURS.indexOf(hourKey);
+          const top = (hourIdx >= 0 ? hourIdx : Math.round((startMin - START_MIN) / 60)) * HOUR_HEIGHT + 5;
+          const durHours = Math.max(1, Math.round((endMin - startMin) / 60));
+          const height = (durHours > 1 && s.status === 'blocked') ? (durHours * HOUR_HEIGHT - 10) : (HOUR_HEIGHT - 10);
+
+          if (s.status === 'travel') {
+            eventCards.push(`
+              <div class="schv2-card schv2-card-travel" style="top: ${top}px; height: ${height}px;" title="Thời gian di chuyển: ${esc(s.note || '')}">
+                <div class="schv2-card-time">${s.slotTime} - ${endLabel}</div>
+                <div class="schv2-card-title schv2-muted">${esc(s.note || 'Di chuyển')}</div>
+              </div>
+            `);
+          } else if (s.status === 'break') {
+            eventCards.push(`
+              <div class="schv2-card schv2-card-break" style="top: ${top}px; height: ${height}px;" title="Nghỉ giữa lịch: ${esc(s.note || '')}">
+                <div class="schv2-card-time">${s.slotTime} - ${endLabel}</div>
+                <div class="schv2-card-title schv2-muted">${esc(s.note || 'Nghỉ giữa lịch')}</div>
+              </div>
+            `);
+          } else if (s.status === 'blocked') {
+            eventCards.push(`
+              <div class="schv2-card schv2-card-blocked" style="top: ${top}px; height: ${height}px;" title="Không khả dụng: ${esc(s.note || '')}">
+                <div class="schv2-card-time">${s.slotTime} - ${endLabel}</div>
+                <div class="schv2-card-title">${esc(s.note || 'Không khả dụng')}</div>
+                <div class="schv2-card-desc">Không khả dụng</div>
+              </div>
+            `);
+          }
+        }
+      }
+
+      return `
+        <div class="schv2-day-col ${!isOpen ? 'schv2-off-col' : ''}" data-date="${iso}">
+          ${bgSlots.join('')}
+          ${eventCards.join('')}
+        </div>
+      `;
+    };
+
+    // Left hour labels column
+    const hourCells = ALL_HOURS.map(h => `<div class="schv2-hour-cell">${h}</div>`).join('');
+    const hourCol = `<div class="schv2-hour-col">${hourCells}</div>`;
+
+    // 7 Day columns
+    const dayCols = dayDates.map((d, i) => renderDayColumn(d, i)).join('');
+
+    // Day headers
+    const dayHeaders = dayDates.map((d, i) => {
+      const iso = localIso(d);
+      const open = dayOpen[i];
+      return `<div class="schv2-day-header">
+        <span class="schv2-day-name">${dayNames[i]}</span>
+        <span class="schv2-day-date">${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}</span>
+        ${!open ? '<span class="schv2-day-off-badge">Nghỉ</span>' : ''}
+      </div>`;
+    }).join('');
+
+    // Right sidebar settings
+    const workStart = state.settings.workStart || '09:00';
+    const workEnd   = state.settings.workEnd   || '20:00';
+    const breakMin  = state.settings.breakMin  || '30';
+    const travelMin = state.settings.travelMin || '45';
+
+    const dayFullNames = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
+    const dayToggles = dayFullNames.map((n, i) => {
+      const d = dayDates[i];
+      const on = dayOpen[i];
+      return `<div class="schv2-day-toggle-row">
+        <span class="schv2-day-toggle-name">${n}</span>
+        <span class="schv2-day-toggle-date">${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}</span>
+        <span class="schv2-day-toggle-status ${on ? 'on' : 'off'}">${on ? 'Bật' : 'Tắt'}</span>
+        <button class="toggle ${on ? 'on' : ''}" data-action="toggle-weekday" data-index="${i}" aria-label="Bật tắt ${n}"></button>
+      </div>`;
+    }).join('');
+
+    // Compute real conflicts between appointments
+    const activeAppts = (state.appointments || []).filter(a => a.status !== 'cancelled');
+    const conflicts = [];
+    for (let i = 0; i < activeAppts.length; i++) {
+      for (let j = i + 1; j < activeAppts.length; j++) {
+        const a1 = activeAppts[i], a2 = activeAppts[j];
+        if (a1.date === a2.date) {
+          const s1 = timeToMin(a1.time), e1 = a1.endTime ? timeToMin(a1.endTime) : (s1 + (service(a1.serviceId)?.duration || 75));
+          const s2 = timeToMin(a2.time), e2 = a2.endTime ? timeToMin(a2.endTime) : (s2 + (service(a2.serviceId)?.duration || 75));
+          if (s1 < e2 && s2 < e1) {
+            conflicts.push({ a1, a2 });
+          }
+        }
+      }
+    }
+
+    const conflictAlertHtml = conflicts.length > 0 ? `
+      <div class="schv2-conflict-alert" data-action="view-conflicts">
+        <div class="schv2-alert-left">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <span>${conflicts.length} xung đột cần xử lý</span>
+        </div>
+        <svg class="schv2-alert-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+      </div>
+    ` : `
+      <div class="schv2-conflict-alert schv2-no-conflict" style="background:#f0fdf4;border:1.5px solid #bbf7d0;color:#166534;cursor:default;">
+        <div class="schv2-alert-left" style="color:#166534;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="m5 12 4 4L19 6"/>
+          </svg>
+          <span style="color:#166534;font-weight:600;">Lịch trình thông suốt</span>
+        </div>
+      </div>
+    `;
+
+    const body = `
+      <div class="schv2-page">
+        <!-- Page Title & Main Heading -->
+        <h1 class="schv2-page-title">Lịch làm việc</h1>
+
+        <!-- Toolbar matching reference UI -->
+        <div class="schv2-toolbar">
+          <div class="schv2-toolbar-left">
+            <button class="schv2-btn-today" data-action="week-today">Hôm nay</button>
+            <div class="schv2-nav-group">
+              <button class="schv2-btn-nav" data-action="week-prev" aria-label="Tuần trước">&#8249;</button>
+              <button class="schv2-btn-nav" data-action="week-next" aria-label="Tuần sau">&#8250;</button>
+            </div>
+            <span class="schv2-range-label">${rangeLabel}</span>
+          </div>
+          <div class="schv2-toolbar-right">
+            <button class="schv2-btn-block" data-action="block-time">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+              </svg>
+              Chặn thời gian
+            </button>
+            <button class="schv2-btn-add" data-action="add-slot">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              Thêm khung giờ
+            </button>
+          </div>
+        </div>
+
+        <!-- Main 2-column layout -->
+        <div class="schv2-main">
+          <!-- Calendar Panel -->
+          <div class="schv2-calendar">
+            <!-- Header row -->
+            <div class="schv2-header-row">
+              <div class="schv2-hour-col-head">Giờ</div>
+              ${dayHeaders}
+            </div>
+
+            <!-- Scrollable Grid Body -->
+            <div class="schv2-grid-body">
+              ${hourCol}
+              ${dayCols}
+            </div>
+          </div>
+
+          <!-- Right Sidebar -->
+          <aside class="schv2-sidebar">
+            ${conflictAlertHtml}
+
+            <!-- Settings Panel -->
+            <div class="schv2-settings-panel">
+              <div class="schv2-settings-title">Thiết lập tuần</div>
+              
+              <div class="schv2-settings-row">
+                <span>Giờ làm việc</span>
+                <span class="schv2-settings-val">${workStart} – ${workEnd}</span>
+              </div>
+              <div class="schv2-settings-row">
+                <span>Nghỉ giữa lịch</span>
+                <span class="schv2-settings-val">${breakMin} phút</span>
+              </div>
+              <div class="schv2-settings-row">
+                <span>Thời gian di chuyển</span>
+                <span class="schv2-settings-val">${travelMin} phút</span>
+              </div>
+
+              <div class="schv2-day-toggles">
+                ${dayToggles}
+              </div>
+
+              <div class="schv2-holidays">
+                <div class="schv2-settings-title" style="margin-top:16px; margin-bottom: 8px;">Ngày nghỉ sắp tới</div>
+                ${(state.settings.holidays || [{date:'15/09', note:'Nghỉ cá nhân'}]).map(h =>
+                  `<div class="schv2-holiday-row"><span class="schv2-holiday-date">${h.date}</span><span class="schv2-holiday-note">${h.note}</span></div>`
+                ).join('')}
+              </div>
+            </div>
+
+            <!-- Sidebar Actions -->
+            <div class="schv2-sidebar-actions">
+              <button class="schv2-save-btn" data-action="save-schedule">Lưu thiết lập</button>
+              <button class="schv2-copy-btn" data-action="copy-week">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                Sao chép sang tuần sau
+              </button>
+            </div>
+          </aside>
+        </div>
+      </div>
+    `;
+
+    return adminShell('schedule', body, 'Lịch làm việc', '', '');
+  }
+
+  function addMinutes(timeStr, mins) {
+    if (!timeStr) return '10:00';
+    const [h,m] = timeStr.split(':').map(Number);
+    const total = (h || 0) * 60 + (m || 0) + mins;
+    return String(Math.floor(total/60)).padStart(2,'0') + ':' + String(total%60).padStart(2,'0');
   }
 
   function adminServices() {
@@ -923,7 +2021,7 @@
   }
 
   function adminCustomers() {
-    const body = `<div class="toolbar"><input id="customer-search" placeholder="Tìm tên, số điện thoại, email..."><select><option>Tất cả khách hàng</option><option>Khách quay lại</option><option>Khách mới</option></select></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Khách hàng</th><th>Liên hệ</th><th>Số lần đặt</th><th>Tổng chi tiêu</th><th>Ghi chú</th><th></th></tr></thead><tbody id="customer-body">${state.customers.map((c,i)=>`<tr><td><b>${c.name}</b></td><td>${c.phone}<br><small>${c.email}</small></td><td>${c.visits}</td><td>${money(c.spent)}</td><td>${c.note}</td><td><button class="mini-action" data-action="edit-customer" data-index="${i}">Chỉnh sửa</button></td></tr>`).join('')}</tbody></table></div>`;
+    const body = `<div class="toolbar"><input id="customer-search" placeholder="Tìm tên, số điện thoại, email..."><select><option>Tất cả khách hàng</option><option>Khách quay lại</option><option>Khách mới</option></select></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Khách hàng</th><th>Liên hệ</th><th>Số lần đặt</th><th>Tổng chi tiêu</th><th>Ghi chú</th><th style="min-width:120px;">Thao tác</th></tr></thead><tbody id="customer-body">${state.customers.map((c,i)=>`<tr><td><b>${c.name}</b></td><td>${c.phone}<br><small>${c.email}</small></td><td>${c.visits}</td><td>${money(c.spent)}</td><td>${c.note}</td><td><button class="action-btn action-btn-edit" data-action="edit-customer" data-index="${i}">${icon('edit')}<span>Chỉnh sửa</span></button></td></tr>`).join('')}</tbody></table></div>`;
     return adminShell('customers',body,'Khách hàng','Lịch sử đặt lịch, thông tin liên hệ và ghi chú phục vụ.',`<button class="btn" data-action="export-customers">${icon('download')} Xuất danh sách</button><button class="btn btn-dark" data-action="add-customer">${icon('plus')} Thêm khách hàng</button>`);
   }
 
@@ -933,7 +2031,7 @@
     const pending=rows.filter(r=>r.paymentStatus==='pending_verification').length;
     const refund=rows.filter(r=>r.status==='cancelled'&&r.deposit>0).reduce((n,r)=>n+Number(r.deposit),0);
     const due=rows.filter(r=>r.status!=='cancelled').reduce((n,r)=>n+Math.max(0,Number(r.total)-Number(r.deposit||0)),0);
-    const body = `<section class="stat-grid"><div class="stat-card"><small>Đã nhận tháng này</small><strong class="numeric">${money(received)}</strong></div><div class="stat-card"><small>Chờ đối soát</small><strong class="numeric">${String(pending).padStart(2,'0')}</strong></div><div class="stat-card"><small>Cần hoàn</small><strong class="numeric">${money(refund)}</strong></div><div class="stat-card"><small>Còn phải thu</small><strong class="numeric">${money(due)}</strong></div></section><div class="toolbar"><input id="payment-search" placeholder="Tìm mã lịch hoặc khách hàng..."><select><option>Tất cả giao dịch</option><option>Đã nhận</option><option>Chờ đối soát</option><option>Hoàn cọc</option></select></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Mã lịch</th><th>Khách hàng</th><th>Số tiền</th><th>Thời gian tạo</th><th>Trạng thái</th><th></th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td class="numeric">${r.code}</td><td>${r.customer}</td><td><b class="numeric">${money(r.deposit||0)}</b></td><td class="numeric">${r.createdAt||'—'}</td><td><span class="badge ${r.paymentStatus==='received'?'success':'warning'}">${r.paymentStatus==='received'?'Đã nhận':r.paymentStatus==='pending_verification'?'Chờ đối soát':'Chưa thanh toán'}</span></td><td>${r.deposit>0?`<button class="mini-action" data-action="payment-receipt" data-code="${r.code}">Biên nhận</button>`:`<button class="mini-action" data-action="manual-payment" data-code="${r.code}">Ghi nhận cọc</button>`}</td></tr>`).join(''):'<tr><td colspan="6"><div class="empty-table">Chưa có giao dịch đặt cọc.</div></td></tr>'}</tbody></table></div>`;
+    const body = `<section class="stat-grid"><div class="stat-card"><small>Đã nhận tháng này</small><strong class="numeric">${money(received)}</strong></div><div class="stat-card"><small>Chờ đối soát</small><strong class="numeric">${String(pending).padStart(2,'0')}</strong></div><div class="stat-card"><small>Cần hoàn</small><strong class="numeric">${money(refund)}</strong></div><div class="stat-card"><small>Còn phải thu</small><strong class="numeric">${money(due)}</strong></div></section><div class="toolbar"><input id="payment-search" placeholder="Tìm mã lịch hoặc khách hàng..."><select><option>Tất cả giao dịch</option><option>Đã nhận</option><option>Chờ đối soát</option><option>Hoàn cọc</option></select></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Mã lịch</th><th>Khách hàng</th><th>Số tiền</th><th>Thời gian tạo</th><th>Trạng thái</th><th style="min-width:140px;">Thao tác</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td class="numeric">${r.code}</td><td>${r.customer}</td><td><b class="numeric">${money(r.deposit||0)}</b></td><td class="numeric">${r.createdAt||'—'}</td><td><span class="badge ${r.paymentStatus==='received'?'success':'warning'}">${r.paymentStatus==='received'?'Đã nhận':r.paymentStatus==='pending_verification'?'Chờ đối soát':'Chưa thanh toán'}</span></td><td>${r.paymentStatus==='received'?`<button class="action-btn action-btn-view" data-action="payment-receipt" data-code="${r.code}">${icon('card')}<span>Biên nhận</span></button>`:`<button class="action-btn action-btn-deposit" data-action="admin-confirm-deposit" data-code="${r.code}">${icon('check')}<span>Duyệt cọc</span></button>`}</td></tr>`).join(''):'<tr><td colspan="6"><div class="empty-table">Chưa có giao dịch đặt cọc.</div></td></tr>'}</tbody></table></div>`;
     return adminShell('payments',body,'Tiền cọc & thanh toán','Đối soát giao dịch, theo dõi công nợ và xử lý hoàn cọc.',`<button class="btn" data-action="export-payments">${icon('download')} Xuất giao dịch</button><button class="btn btn-dark" data-action="manual-payment">${icon('plus')} Ghi nhận thanh toán</button>`);
   }
 
@@ -948,9 +2046,713 @@
   }
 
   function adminContent() {
-    const b = state.brand;
-    const body = `<section class="content-editor"><nav class="content-tabs">${['Trang đặt lịch','Hình ảnh đại diện','Thông điệp','Dịch vụ hiển thị','Màu giao diện','Liên kết hỗ trợ','Chính sách đặt lịch'].map((t,i)=>`<button class="${i===0?'active':''}">${t}</button>`).join('')}</nav><form class="content-form" data-form="content"><h2>Trang đặt lịch</h2><div class="form-grid"><div class="field"><label>Tên thương hiệu</label><input name="name" value="${b.name}"></div><div class="field"><label>Vai trò</label><input name="role" value="${b.role}"></div><div class="field full"><label>Tiêu đề chính</label><input name="headline" value="${b.headline}"></div><div class="field full"><label>Mô tả</label><textarea name="description">${b.description}</textarea></div><div class="field full"><label>Thông điệp trên ảnh</label><input name="imageMessage" value="${b.imageMessage}"></div></div><h3>Dịch vụ hiển thị</h3>${state.services.map((s,i)=>`<div class="summary-row"><span>⋮⋮ 0${i+1} · ${s.name}</span><span>${s.duration} phút · ${s.contact?'Liên hệ':money(s.price)}</span><button type="button" class="mini-action icon-only" data-action="edit-service" data-id="${s.id}" aria-label="Chỉnh sửa ${s.name}">${icon('edit')}</button></div>`).join('')}<div class="form-grid" style="margin-top:18px"><div class="field"><label>Màu nhấn</label><input name="accent" value="${b.accent}"></div><div class="field"><label>Nền</label><input value="Trắng tinh" disabled></div></div><button class="btn btn-dark btn-wide" style="margin-top:18px">${icon('check')} Lưu nội dung</button></form><div class="content-preview"><div class="section-head"><h2>Xem trước trang đặt lịch</h2><a class="link" href="#/booking/service">Mở đầy đủ</a></div><div class="preview-browser"><div class="preview-bar"><i class="preview-dot"></i><i class="preview-dot"></i><i class="preview-dot"></i><span style="margin:auto">hoanmakeup.com</span></div><div class="preview-site"><div class="preview-art">${img('hero.png','Ảnh đại diện')}<span>HOÀN</span></div><div class="preview-ui"><div class="preview-progress">${[1,2,3,4,5,6].map(()=>'<i></i>').join('')}</div><h3>Chọn trải nghiệm trang điểm</h3><p>${b.description}</p><div class="preview-services">${state.services.map(s=>`<div class="preview-service ${s.id==='party'?'selected':''}"><b>${s.name}</b><br>${s.duration} phút · ${s.contact?'Liên hệ':money(s.price)}</div>`).join('')}</div></div></div></div></div></section>`;
-    return adminShell('content',body,'Nội dung website','Chỉnh sửa thông tin hiển thị cho khách hàng.',`<a class="btn" href="#/">${icon('eye')} Xem trước website</a><button class="btn btn-dark" data-action="publish-content">${icon('check')} Đăng thay đổi</button>`);
+    const b = state.brand || {};
+    const s = state.settings || {};
+    const viewMode = state.contentViewMode || (state.contentActiveTab === 'pages' ? 'pages' : 'pages');
+    const curTab = state.contentActiveTab || (viewMode === 'pages' ? 'pages' : 'home');
+
+    const tabs = [
+      { id: 'pages', icon: '📄', num: '01', name: 'Từng trang (CMS)', desc: 'Chỉnh sửa toàn bộ 42 trang' },
+      { id: 'home', icon: '🏠', num: '02', name: 'Trang chủ' },
+      { id: 'about', icon: '👤', num: '03', name: 'Về Hoàn' },
+      { id: 'services', icon: '💄', num: '04', name: 'Dịch vụ' },
+      { id: 'booking', icon: '📅', num: '05', name: 'Đặt lịch' },
+      { id: 'policies', icon: '📜', num: '06', name: 'Chính sách' },
+      { id: 'contact', icon: '📞', num: '07', name: 'Liên hệ & MXH' },
+      { id: 'images', icon: '🖼️', num: '08', name: 'Hình ảnh' },
+      { id: 'theme', icon: '🎨', num: '09', name: 'Màu & Giao diện' }
+    ];
+
+    let tabHtml = '';
+    if (curTab === 'home') {
+      tabHtml = `
+        <div class="content-tab-head">
+          <h2>1. Nội dung Trang chủ (Home Page)</h2>
+          <p class="muted" style="margin:0;font-size:13px;">Tùy chỉnh biểu ngữ mở đầu (Hero), khẩu hiệu nghệ thuật, các khối câu chuyện cô dâu, dự tiệc và lời mời đặt lịch.</p>
+        </div>
+
+        <div class="content-section-title"><span>Biểu ngữ mở đầu (Hero Banner)</span></div>
+        <div class="form-grid">
+          <div class="field full">
+            <label>Tiêu đề chính trên banner (Hero Title)</label>
+            <input name="homeTitle" id="field-home-title" value="${esc(b.homeTitle || 'Một ngày của bạn. Một dấu ấn của Hoàn.')}">
+          </div>
+          <div class="field">
+            <label>Phụ đề biểu ngữ (Hero Subtitle)</label>
+            <input name="homeSubtitle" id="field-home-subtitle" value="${esc(b.homeSubtitle || 'TRANG ĐIỂM CÁ NHÂN & CÔ DÂU')}">
+          </div>
+          <div class="field">
+            <label>Ảnh bìa chiến dịch (Campaign Image)</label>
+            <input name="campaignImage" id="field-campaign-img" value="${esc(b.campaignImage || '/assets/campaign.png')}">
+          </div>
+        </div>
+
+        <div class="content-section-title"><span>Khẩu hiệu nghệ thuật & Triết lý</span></div>
+        <div class="form-grid">
+          <div class="field">
+            <label>Khẩu hiệu nghệ thuật (Overline)</label>
+            <input name="editorialOverline" id="field-editorial-overline" value="${esc(b.editorialOverline || 'NGHỆ THUẬT CỦA SỰ TINH TẾ')}">
+          </div>
+          <div class="field">
+            <label>Tiêu đề phần câu chuyện (Editorial Title)</label>
+            <input name="editorialTitle" id="field-editorial-title" value="${esc(b.editorialTitle || 'Đẹp từ những điều rất riêng')}">
+          </div>
+          <div class="field full">
+            <label>Mô tả ngắn triết lý</label>
+            <textarea name="description" id="field-brand-desc" rows="2">${esc(b.description || 'Mỗi diện mạo được thiết kế theo đường nét, phong cách và khoảnh khắc của riêng bạn.')}</textarea>
+          </div>
+        </div>
+
+        <div class="content-section-title"><span>Khối nổi bật Cô dâu & Dự tiệc</span></div>
+        <div class="form-grid">
+          <div class="field">
+            <label>Tiêu đề khối Cô dâu</label>
+            <input name="bridalStoryTitle" value="${esc(b.bridalStoryTitle || 'Khoảnh khắc cô dâu')}">
+          </div>
+          <div class="field">
+            <label>Mô tả khối Cô dâu</label>
+            <input name="bridalStoryDesc" value="${esc(b.bridalStoryDesc || 'Tôn lên đường nét. Giữ trọn nét riêng.')}">
+          </div>
+          <div class="field">
+            <label>Ảnh phong cách Cô dâu</label>
+            <input name="bridalImage" value="${esc(b.bridalImage || 'bridal-new.png')}">
+          </div>
+          <div class="field">
+            <label>Tiêu đề khối Dự tiệc</label>
+            <input name="eveningTitle" value="${esc(b.eveningTitle || 'Sắc thái của buổi tối')}">
+          </div>
+          <div class="field">
+            <label>Ảnh phong cách Dự tiệc</label>
+            <input name="partyImage" value="${esc(b.partyImage || 'evening.png')}">
+          </div>
+        </div>
+
+        <div class="content-section-title"><span>Khối Kêu gọi Đặt lịch (Booking Invite)</span></div>
+        <div class="form-grid">
+          <div class="field">
+            <label>Tiêu đề khối mời đặt lịch</label>
+            <input name="inviteTitle" value="${esc(b.inviteTitle || 'Cuộc hẹn dành riêng cho bạn')}">
+          </div>
+          <div class="field">
+            <label>Nhãn nút kêu gọi đặt lịch</label>
+            <input name="inviteBtnLabel" value="${esc(b.inviteBtnLabel || 'ĐẶT LỊCH')}">
+          </div>
+        </div>
+      `;
+    } else if (curTab === 'about') {
+      tabHtml = `
+        <div class="content-tab-head">
+          <h2>2. Nội dung Trang Về Hoàn (About Page)</h2>
+          <p class="muted" style="margin:0;font-size:13px;">Tùy chỉnh câu chuyện làm nghề, hình ảnh minh họa, triết lý 2 phần và các bước trong một buổi hẹn.</p>
+        </div>
+
+        <div class="form-grid">
+          <div class="field full">
+            <label>Tiêu đề trang Về Hoàn</label>
+            <input name="aboutTitle" id="field-about-title" value="${esc(b.aboutTitle || 'Vẻ đẹp bắt đầu từ sự thấu hiểu')}">
+          </div>
+          <div class="field">
+            <label>Đường dẫn ảnh minh họa quá trình</label>
+            <input name="aboutImage" value="${esc(b.aboutImage || '/assets/about-process.png')}">
+          </div>
+          <div class="field">
+            <label>Chú thích ảnh minh họa</label>
+            <input name="aboutCaption" value="${esc(b.aboutCaption || 'Ảnh minh họa quá trình trang điểm')}">
+          </div>
+          <div class="field full">
+            <label>Triết lý làm nghề — Phần 1 (Lắng nghe)</label>
+            <textarea name="aboutBio1" rows="3">${esc(b.aboutBio1 || b.aboutBio || 'Mỗi người có đường nét, phong cách và mong muốn riêng. Buổi trang điểm bắt đầu từ việc lắng nghe những điều đó.')}</textarea>
+          </div>
+          <div class="field full">
+            <label>Triết lý làm nghề — Phần 2 (Hài hòa & Tinh tế)</label>
+            <textarea name="aboutBio2" rows="3">${esc(b.aboutBio2 || 'Từ lớp nền đến điểm nhấn cuối cùng, hướng thiết kế của Hoàn là sự hài hòa với gương mặt, trang phục và dịp tham dự.')}</textarea>
+          </div>
+        </div>
+
+        <div class="content-section-title"><span>Quy trình 4 bước buổi hẹn cùng Hoàn</span></div>
+        <div class="form-grid">
+          <div class="field">
+            <label>Bước 1: Tiêu đề</label>
+            <input name="processStep1Title" value="${esc(b.processStep1Title || 'Lắng nghe mong muốn')}">
+          </div>
+          <div class="field">
+            <label>Bước 1: Mô tả ngắn</label>
+            <input name="processStep1Desc" value="${esc(b.processStep1Desc || 'Hiểu nhu cầu, phong cách và dịp tham dự.')}">
+          </div>
+          <div class="field">
+            <label>Bước 2: Tiêu đề</label>
+            <input name="processStep2Title" value="${esc(b.processStep2Title || 'Thống nhất phong cách')}">
+          </div>
+          <div class="field">
+            <label>Bước 2: Mô tả ngắn</label>
+            <input name="processStep2Desc" value="${esc(b.processStep2Desc || 'Tư vấn và lựa chọn hướng trang điểm phù hợp.')}">
+          </div>
+          <div class="field">
+            <label>Bước 3: Tiêu đề</label>
+            <input name="processStep3Title" value="${esc(b.processStep3Title || 'Trang điểm & hoàn thiện')}">
+          </div>
+          <div class="field">
+            <label>Bước 3: Mô tả ngắn</label>
+            <input name="processStep3Desc" value="${esc(b.processStep3Desc || 'Thực hiện theo phong cách đã thống nhất.')}">
+          </div>
+          <div class="field">
+            <label>Bước 4: Tiêu đề</label>
+            <input name="processStep4Title" value="${esc(b.processStep4Title || 'Kiểm tra diện mạo')}">
+          </div>
+          <div class="field">
+            <label>Bước 4: Mô tả ngắn</label>
+            <input name="processStep4Desc" value="${esc(b.processStep4Desc || 'Cùng xem lại và điều chỉnh để bạn tự tin.')}">
+          </div>
+          <div class="field full">
+            <label>Tiêu đề khối kêu gọi cuối trang Về Hoàn</label>
+            <input name="aboutCtaTitle" value="${esc(b.aboutCtaTitle || 'Cùng tìm nét đẹp của bạn')}">
+          </div>
+        </div>
+      `;
+    } else if (curTab === 'services') {
+      tabHtml = `
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <div>
+            <h2 style="margin:0 0 4px;font-size:1.15rem;">3. Trang Dịch vụ & Danh sách Gói</h2>
+            <p class="muted" style="margin:0;font-size:13px;">Tùy chỉnh tiêu đề trang, banner tư vấn và trực tiếp bật/tắt/chỉnh sửa tất cả dịch vụ trang điểm.</p>
+          </div>
+          <button type="button" class="btn btn-dark btn-sm" data-action="add-service">+ Thêm dịch vụ mới</button>
+        </div>
+
+        <div class="form-grid" style="margin-bottom:18px;">
+          <div class="field">
+            <label>Tiêu đề trang Dịch vụ</label>
+            <input name="servicesPageTitle" id="field-services-title" value="${esc(b.servicesPageTitle || 'Dịch vụ trang điểm')}">
+          </div>
+          <div class="field">
+            <label>Phụ đề trang Dịch vụ</label>
+            <input name="servicesPageSubtitle" value="${esc(b.servicesPageSubtitle || 'Lựa chọn dành cho khoảnh khắc của bạn.')}">
+          </div>
+          <div class="field">
+            <label>Tiêu đề khối tư vấn riêng (Consult Banner)</label>
+            <input name="consultTitle" value="${esc(b.consultTitle || 'Tìm phong cách phù hợp')}">
+          </div>
+          <div class="field">
+            <label>Mô tả khối tư vấn riêng</label>
+            <input name="consultDesc" value="${esc(b.consultDesc || 'Chia sẻ dịp tham dự, trang phục và mong muốn của bạn cùng Hoàn.')}">
+          </div>
+        </div>
+
+        <div class="content-section-title"><span>Danh sách dịch vụ đang cung cấp (${state.services.length})</span></div>
+        <div class="content-service-list" style="display:flex;flex-direction:column;gap:8px;">
+          ${state.services.map((svc, i) => `
+            <div class="summary-row" style="background:#fafafa;padding:12px 14px;border:1px solid var(--line);border-radius:4px;display:flex;align-items:center;justify-content:space-between;">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <span class="numeric" style="color:var(--wine);font-weight:700;font-size:13px;">0${i+1}</span>
+                <div>
+                  <b style="font-size:14px;color:#111827;">${esc(svc.name)}</b>
+                  <small style="display:block;color:#6b7280;margin-top:2px;">${svc.duration} phút · ${svc.contact ? 'Liên hệ báo giá' : money(svc.price)}</small>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:12px;">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;">
+                  <button type="button" class="toggle ${svc.enabled ? 'on' : ''}" data-action="toggle-service-status" data-id="${svc.id}" title="${svc.enabled ? 'Đang hiển thị' : 'Đang ẩn'}"></button>
+                  <span>${svc.enabled ? 'Hiển thị' : 'Đã ẩn'}</span>
+                </label>
+                <button type="button" class="action-btn action-btn-edit" data-action="edit-service" data-id="${svc.id}" title="Chỉnh sửa dịch vụ">
+                  ${icon('edit')}<span>Sửa</span>
+                </button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    } else if (curTab === 'booking') {
+      tabHtml = `
+        <div class="content-tab-head">
+          <h2>4. Quy trình Đặt lịch Khách hàng</h2>
+          <p class="muted" style="margin:0;font-size:13px;">Thiết lập thông tin thương hiệu, vai trò, tiêu đề quy trình đặt hẹn và chi phí đặt cọc mặc định.</p>
+        </div>
+        <div class="form-grid">
+          <div class="field">
+            <label>Tên thương hiệu chính</label>
+            <input name="name" id="field-brand-name" value="${esc(b.name || 'HOÀN')}" required>
+          </div>
+          <div class="field">
+            <label>Vai trò / Danh xưng nghệ sĩ</label>
+            <input name="role" id="field-brand-role" value="${esc(b.role || 'MAKEUP ARTIST')}">
+          </div>
+          <div class="field full">
+            <label>Tiêu đề bước chọn dịch vụ (Headline)</label>
+            <input name="headline" id="field-brand-headline" value="${esc(b.headline || 'Chọn trải nghiệm trang điểm')}">
+          </div>
+          <div class="field full">
+            <label>Mô tả quy trình đặt lịch</label>
+            <textarea name="description" id="field-brand-desc" rows="2">${esc(b.description || 'Mỗi diện mạo được thiết kế theo đường nét, phong cách và khoảnh khắc của riêng bạn.')}</textarea>
+          </div>
+          <div class="field full">
+            <label>Thông điệp trên ảnh đại diện bước đặt lịch</label>
+            <input name="imageMessage" id="field-brand-imgmsg" value="${esc(b.imageMessage || 'Mỗi diện mạo là một thiết kế dành riêng cho bạn.')}">
+          </div>
+          <div class="field">
+            <label>Khu vực phục vụ chính</label>
+            <input name="area" value="${esc(b.area || 'Hà Nội & phục vụ tận nơi')}">
+          </div>
+          <div class="field">
+            <label>Mức tiền cọc tiêu chuẩn (VNĐ)</label>
+            <input name="deposit" type="number" step="10000" value="${esc(s.deposit || 200000)}">
+          </div>
+          <div class="field">
+            <label>Phí di chuyển mặc định (VNĐ)</label>
+            <input name="travelFee" type="number" step="10000" value="${esc(s.travelFee || 50000)}">
+          </div>
+        </div>
+      `;
+    } else if (curTab === 'policies') {
+      tabHtml = `
+        <div class="content-tab-head">
+          <h2>5. Trang Chính sách & Điều khoản Dịch vụ</h2>
+          <p class="muted" style="margin:0;font-size:13px;">Tùy chỉnh nội dung công khai về đặt cọc, đổi ngày giờ, hủy lịch, đến muộn, phục vụ tận nơi và cam kết bảo mật.</p>
+        </div>
+        <div class="form-grid">
+          <div class="field">
+            <label>Tiêu đề trang Chính sách</label>
+            <input name="policiesPageTitle" id="field-policies-title" value="${esc(b.policiesPageTitle || 'Chính sách dịch vụ')}">
+          </div>
+          <div class="field">
+            <label>Phụ đề trang Chính sách</label>
+            <input name="policiesPageSubtitle" value="${esc(b.policiesPageSubtitle || 'Chọn mục để xem đầy đủ điều kiện áp dụng.')}">
+          </div>
+          <div class="field full">
+            <label>Chính sách đặt cọc (Deposit Policy)</label>
+            <textarea name="policyDeposit" rows="3">${esc(b.policyDeposit || `Mức cọc tiêu chuẩn hiện tại: ${money(Number(s.deposit || 200000))}. Khoản cọc được trừ vào tổng chi phí.`)}</textarea>
+          </div>
+          <div class="field full">
+            <label>Chính sách đổi ngày giờ (Reschedule Policy)</label>
+            <textarea name="policyChange" rows="3">${esc(b.policyChange || 'Yêu cầu trước giờ hẹn ít nhất 24 giờ được xem xét đổi miễn phí một lần, tùy lịch còn trống. Khoản cọc được chuyển sang lịch mới khi yêu cầu được duyệt.')}</textarea>
+          </div>
+          <div class="field full">
+            <label>Chính sách hủy lịch & hoàn cọc (Cancellation & Refund)</label>
+            <textarea name="policyCancel" rows="3">${esc(b.policyCancel || 'Yêu cầu hủy trước 48 giờ được xem xét hoàn cọc. Trong vòng 48 giờ, khoản cọc có thể không được hoàn.')}</textarea>
+          </div>
+          <div class="field full">
+            <label>Quy định đến muộn / quá giờ hẹn (Late Arrival)</label>
+            <textarea name="policyLate" rows="3">${esc(b.policyLate || 'Nếu muộn quá 15 phút, thời lượng dịch vụ có thể cần điều chỉnh theo lịch hẹn tiếp theo.')}</textarea>
+          </div>
+          <div class="field full">
+            <label>Quy định di chuyển tận nơi (On-location Service)</label>
+            <textarea name="policyTravel" rows="3">${esc(b.policyTravel || 'Hoàn phục vụ tại địa chỉ khách cung cấp trong khu vực đã thống nhất. Phí di chuyển được thông báo trước khi đặt cọc.')}</textarea>
+          </div>
+          <div class="field full">
+            <label>Cam kết bảo mật thông tin & hình ảnh (Privacy Policy)</label>
+            <textarea name="policyPrivacy" rows="3">${esc(b.policyPrivacy || 'Thông tin liên hệ, địa điểm, lịch hẹn và mong muốn trang điểm được dùng để tổ chức buổi hẹn và bảo mật tuyệt đối.')}</textarea>
+          </div>
+        </div>
+      `;
+    } else if (curTab === 'contact') {
+      tabHtml = `
+        <div class="content-tab-head">
+          <h2>6. Thông tin Liên hệ & Kênh Mạng Xã Hội</h2>
+          <p class="muted" style="margin:0;font-size:13px;">Đồng bộ số điện thoại Hotline, Zalo tư vấn, Email tiếp nhận, fanpage Facebook, Instagram, TikTok và địa chỉ Studio.</p>
+        </div>
+        <div class="form-grid">
+          <div class="field">
+            <label>Tiêu đề trang Liên hệ</label>
+            <input name="contactPageTitle" id="field-contact-title" value="${esc(b.contactPageTitle || 'Trao đổi cùng Hoàn')}">
+          </div>
+          <div class="field">
+            <label>Phụ đề trang Liên hệ</label>
+            <input name="contactPageSubtitle" value="${esc(b.contactPageSubtitle || 'Chia sẻ mong muốn hoặc vấn đề bạn cần hỗ trợ.')}">
+          </div>
+          <div class="field">
+            <label>Số điện thoại Hotline</label>
+            <input name="phone" id="field-contact-phone" value="${esc(b.phone || '0912 345 678')}">
+          </div>
+          <div class="field">
+            <label>Số Zalo tư vấn</label>
+            <input name="zaloPhone" value="${esc(b.zaloPhone || b.phone || '0912 345 678')}">
+          </div>
+          <div class="field full">
+            <label>Email liên hệ tiếp nhận</label>
+            <input name="email" id="field-contact-email" type="email" value="${esc(b.email || 'contact@hoanmakeup.vn')}">
+          </div>
+          <div class="field full">
+            <label>Địa chỉ Studio / Phục vụ</label>
+            <input name="address" value="${esc(b.address || 'Hà Nội & phục vụ tận nơi')}">
+          </div>
+          <div class="field full">
+            <label>Link trang Facebook Fanpage</label>
+            <input name="facebookUrl" value="${esc(b.facebookUrl || 'https://facebook.com/hoanmakeup')}">
+          </div>
+          <div class="field full">
+            <label>Link tài khoản Instagram</label>
+            <input name="instagramUrl" value="${esc(b.instagramUrl || 'https://instagram.com/hoanmakeup')}">
+          </div>
+          <div class="field full">
+            <label>Link tài khoản TikTok</label>
+            <input name="tiktokUrl" value="${esc(b.tiktokUrl || 'https://tiktok.com/@hoanmakeup')}">
+          </div>
+        </div>
+      `;
+    } else if (curTab === 'images') {
+      tabHtml = `
+        <div class="content-tab-head">
+          <h2>7. Thư viện Hình ảnh Đại diện & Phong cách</h2>
+          <p class="muted" style="margin:0;font-size:13px;">Quản lý toàn bộ ảnh sử dụng trên website: ảnh chiến dịch, ảnh chân dung Hoàn, cô dâu, dự tiệc và ảnh giới thiệu.</p>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+          <div style="border:1px solid var(--line);padding:12px;background:#fafafa;border-radius:4px;">
+            <div style="height:120px;overflow:hidden;background:#050505;display:flex;align-items:center;justify-content:center;margin-bottom:8px;border-radius:2px;">
+              <img id="preview-img-campaign" src="${esc(b.campaignImage || '/assets/campaign.png')}" style="max-height:100%;max-width:100%;object-fit:cover;" onerror="this.src='/assets/campaign.png'">
+            </div>
+            <label style="font-weight:600;font-size:12px;display:block;margin-bottom:4px;">Ảnh chiến dịch trang chủ (Hero)</label>
+            <input name="campaignImage" value="${esc(b.campaignImage || '/assets/campaign.png')}" style="font-size:12px;">
+            <div style="display:flex;gap:6px;margin-top:6px;">
+              <button type="button" class="btn btn-sm" data-action="set-sample-image" data-target="campaignImage" data-val="/assets/campaign.png">Mặc định</button>
+            </div>
+          </div>
+          <div style="border:1px solid var(--line);padding:12px;background:#fafafa;border-radius:4px;">
+            <div style="height:120px;overflow:hidden;background:#050505;display:flex;align-items:center;justify-content:center;margin-bottom:8px;border-radius:2px;">
+              <img id="preview-img-hero" src="${esc(b.heroImage || '/assets/hero.png')}" style="max-height:100%;max-width:100%;object-fit:cover;" onerror="this.src='/assets/hero.png'">
+            </div>
+            <label style="font-weight:600;font-size:12px;display:block;margin-bottom:4px;">Ảnh đại diện Hoàn Makeup (Booking)</label>
+            <input name="heroImage" value="${esc(b.heroImage || '/assets/hero.png')}" style="font-size:12px;">
+            <div style="display:flex;gap:6px;margin-top:6px;">
+              <button type="button" class="btn btn-sm" data-action="set-sample-image" data-target="heroImage" data-val="/assets/hero.png">Mặc định</button>
+            </div>
+          </div>
+          <div style="border:1px solid var(--line);padding:12px;background:#fafafa;border-radius:4px;">
+            <div style="height:120px;overflow:hidden;background:#050505;display:flex;align-items:center;justify-content:center;margin-bottom:8px;border-radius:2px;">
+              <img id="preview-img-bridal" src="/assets/${esc(b.bridalImage || 'bridal-new.png')}" style="max-height:100%;max-width:100%;object-fit:cover;" onerror="this.src='/assets/bridal-new.png'">
+            </div>
+            <label style="font-weight:600;font-size:12px;display:block;margin-bottom:4px;">Ảnh phong cách Cô dâu</label>
+            <input name="bridalImage" value="${esc(b.bridalImage || 'bridal-new.png')}" style="font-size:12px;">
+            <div style="display:flex;gap:6px;margin-top:6px;">
+              <button type="button" class="btn btn-sm" data-action="set-sample-image" data-target="bridalImage" data-val="bridal-new.png">Mặc định</button>
+            </div>
+          </div>
+          <div style="border:1px solid var(--line);padding:12px;background:#fafafa;border-radius:4px;">
+            <div style="height:120px;overflow:hidden;background:#050505;display:flex;align-items:center;justify-content:center;margin-bottom:8px;border-radius:2px;">
+              <img id="preview-img-party" src="/assets/${esc(b.partyImage || 'evening.png')}" style="max-height:100%;max-width:100%;object-fit:cover;" onerror="this.src='/assets/evening.png'">
+            </div>
+            <label style="font-weight:600;font-size:12px;display:block;margin-bottom:4px;">Ảnh phong cách Dự tiệc</label>
+            <input name="partyImage" value="${esc(b.partyImage || 'evening.png')}" style="font-size:12px;">
+            <div style="display:flex;gap:6px;margin-top:6px;">
+              <button type="button" class="btn btn-sm" data-action="set-sample-image" data-target="partyImage" data-val="evening.png">Mặc định</button>
+            </div>
+          </div>
+          <div style="border:1px solid var(--line);padding:12px;background:#fafafa;border-radius:4px;">
+            <div style="height:120px;overflow:hidden;background:#050505;display:flex;align-items:center;justify-content:center;margin-bottom:8px;border-radius:2px;">
+              <img id="preview-img-about" src="${esc(b.aboutImage || '/assets/about-process.png')}" style="max-height:100%;max-width:100%;object-fit:cover;" onerror="this.src='/assets/about-process.png'">
+            </div>
+            <label style="font-weight:600;font-size:12px;display:block;margin-bottom:4px;">Ảnh trang Về Hoàn (Quy trình)</label>
+            <input name="aboutImage" value="${esc(b.aboutImage || '/assets/about-process.png')}" style="font-size:12px;">
+            <div style="display:flex;gap:6px;margin-top:6px;">
+              <button type="button" class="btn btn-sm" data-action="set-sample-image" data-target="aboutImage" data-val="/assets/about-process.png">Mặc định</button>
+            </div>
+          </div>
+          <div style="border:1px solid var(--line);padding:12px;background:#fafafa;border-radius:4px;">
+            <div style="height:120px;overflow:hidden;background:#050505;display:flex;align-items:center;justify-content:center;margin-bottom:8px;border-radius:2px;">
+              <img id="preview-img-logo" src="/assets/hoan-logo.png" style="max-height:60px;max-width:100%;object-fit:contain;">
+            </div>
+            <label style="font-weight:600;font-size:12px;display:block;margin-bottom:4px;">Logo Thương hiệu HOÀN</label>
+            <input value="/assets/hoan-logo.png" disabled style="font-size:12px;background:#eee;">
+            <small class="muted" style="display:block;margin-top:6px;font-size:11px;">Được cố định chuẩn bộ nhận diện thương hiệu</small>
+          </div>
+        </div>
+      `;
+    } else if (curTab === 'theme') {
+      tabHtml = `
+        <div class="content-tab-head">
+          <h2>8. Màu sắc Thương hiệu & Chân trang</h2>
+          <p class="muted" style="margin:0;font-size:13px;">Tùy chỉnh tông màu nhấn chủ đạo xuyên suốt toàn bộ website, các nút hành động và câu thông điệp chân trang.</p>
+        </div>
+        <div class="form-grid">
+          <div class="field">
+            <label>Mã màu nhấn (Hex code)</label>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <input type="color" id="picker-accent-color" value="${esc(b.accent || '#7A1832')}" style="width:42px;height:40px;padding:2px;border:1px solid var(--line);border-radius:4px;cursor:pointer;" onchange="document.getElementById('input-accent-color').value=this.value;document.documentElement.style.setProperty('--wine',this.value);">
+              <input name="accent" id="input-accent-color" value="${esc(b.accent || '#7A1832')}" style="flex:1;" oninput="document.getElementById('picker-accent-color').value=this.value;document.documentElement.style.setProperty('--wine',this.value);">
+            </div>
+          </div>
+          <div class="field">
+            <label>Nền chủ đạo website</label>
+            <input value="Trắng tinh khôi (#FFFFFF)" disabled>
+          </div>
+          <div class="field full">
+            <label>Lời kết chân trang (Footer Tagline)</label>
+            <input name="tagline" value="${esc(b.tagline || 'Vẻ đẹp bắt đầu từ sự thấu hiểu')}">
+          </div>
+        </div>
+        <div style="margin-top:20px;">
+          <label style="font-size:13px;font-weight:600;display:block;margin-bottom:8px;">Bảng màu Haute Couture đề xuất:</label>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;">
+            <button type="button" class="btn btn-sm" data-action="set-preset-color" data-color="#7A1832" style="border-left:4px solid #7A1832;text-align:left;">Rượu vang đỏ</button>
+            <button type="button" class="btn btn-sm" data-action="set-preset-color" data-color="#111827" style="border-left:4px solid #111827;text-align:left;">Đen Onyx</button>
+            <button type="button" class="btn btn-sm" data-action="set-preset-color" data-color="#9E7D47" style="border-left:4px solid #9E7D47;text-align:left;">Vàng Champagne</button>
+            <button type="button" class="btn btn-sm" data-action="set-preset-color" data-color="#9D4456" style="border-left:4px solid #9D4456;text-align:left;">Hồng Nude</button>
+            <button type="button" class="btn btn-sm" data-action="set-preset-color" data-color="#2C4C3E" style="border-left:4px solid #2C4C3E;text-align:left;">Xanh Ngọc Lục</button>
+            <button type="button" class="btn btn-sm" data-action="set-preset-color" data-color="#1E293B" style="border-left:4px solid #1E293B;text-align:left;">Xanh Navy</button>
+          </div>
+        </div>
+      `;
+    }
+
+    const previewMode = state.contentPreviewMode || (['home','about','services','booking','policies','contact'].includes(curTab) ? curTab : 'home');
+    const previewRouteMap = {
+      home: '#/',
+      about: '#/about',
+      services: '#/services',
+      booking: '#/booking/service',
+      policies: '#/policies',
+      contact: '#/contact'
+    };
+
+    let previewHtml = '';
+    if (previewMode === 'home') {
+      previewHtml = `
+        <div class="preview-home-box" style="padding:16px;background:#fff;min-height:460px;font-size:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:12px;">
+            <b style="font-family:var(--serif);font-size:16px;">${esc(b.name || 'HOÀN')}</b>
+            <span style="font-size:11px;color:var(--wine);font-weight:600;">${esc(b.role || 'MAKEUP ARTIST')}</span>
+          </div>
+          <div style="position:relative;height:160px;background:#111;overflow:hidden;border-radius:4px;margin-bottom:14px;">
+            <img src="${esc(b.campaignImage || '/assets/campaign.png')}" style="width:100%;height:100%;object-fit:cover;opacity:0.85;" onerror="this.src='/assets/campaign.png'">
+            <div style="position:absolute;bottom:12px;left:14px;right:14px;color:#fff;">
+              <h4 id="preview-home-title" style="font-size:13px;margin:0 0 2px;line-height:1.3;">${esc(b.homeTitle || 'Một ngày của bạn. Một dấu ấn của Hoàn.')}</h4>
+              <p id="preview-home-subtitle" style="font-size:10px;margin:0;opacity:0.8;">${esc(b.homeSubtitle || 'TRANG ĐIỂM CÁ NHÂN & CÔ DÂU')}</p>
+            </div>
+          </div>
+          <div style="text-align:center;padding:10px 14px;background:#fafafa;border-radius:4px;margin-bottom:12px;">
+            <p id="preview-home-overline" style="font-size:10px;letter-spacing:0.1em;color:var(--wine);margin:0 0 4px;font-weight:600;">${esc(b.editorialOverline || 'NGHỆ THUẬT CỦA SỰ TINH TẾ')}</p>
+            <h4 id="preview-home-edtitle" style="font-size:14px;margin:0 0 6px;font-family:var(--serif);">${esc(b.editorialTitle || 'Đẹp từ những điều rất riêng')}</h4>
+            <p style="font-size:11px;color:#6b7280;margin:0;line-height:1.5;">${esc(b.description || 'Mỗi diện mạo được thiết kế riêng.')}</p>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div style="border:1px solid #eee;border-radius:4px;padding:8px;text-align:center;">
+              <b style="font-size:11px;display:block;margin-bottom:2px;">${esc(b.bridalStoryTitle || 'Khoảnh khắc cô dâu')}</b>
+              <small style="color:#6b7280;font-size:10px;">${esc(b.bridalStoryDesc || 'Tôn lên đường nét.')}</small>
+            </div>
+            <div style="border:1px solid #eee;border-radius:4px;padding:8px;text-align:center;">
+              <b style="font-size:11px;display:block;margin-bottom:2px;">${esc(b.eveningTitle || 'Sắc thái buổi tối')}</b>
+              <small style="color:#6b7280;font-size:10px;">Phong cách dự tiệc</small>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (previewMode === 'about') {
+      previewHtml = `
+        <div class="preview-about-box" style="padding:16px;background:#fff;min-height:460px;font-size:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:12px;">
+            <b style="font-family:var(--serif);font-size:15px;">Về Hoàn</b>
+            <span style="font-size:11px;color:var(--wine);font-weight:600;">MAKEUP ARTIST</span>
+          </div>
+          <h3 id="preview-about-title" style="font-size:15px;margin:0 0 10px;font-family:var(--serif);">${esc(b.aboutTitle || 'Vẻ đẹp bắt đầu từ sự thấu hiểu')}</h3>
+          <div style="height:120px;overflow:hidden;background:#222;border-radius:4px;margin-bottom:6px;">
+            <img src="${esc(b.aboutImage || '/assets/about-process.png')}" style="width:100%;height:100%;object-fit:cover;" onerror="this.src='/assets/about-process.png'">
+          </div>
+          <p style="font-size:10px;color:#9ca3af;margin:0 0 12px;font-style:italic;">${esc(b.aboutCaption || 'Ảnh minh họa quá trình trang điểm')}</p>
+          <div style="padding:10px;background:#fafafa;border-left:3px solid var(--wine);margin-bottom:10px;line-height:1.5;">
+            <p style="margin:0 0 6px;color:#374151;">${esc(b.aboutBio1 || b.aboutBio || 'Mỗi người có đường nét, phong cách và mong muốn riêng.')}</p>
+            <p style="margin:0;color:#6b7280;font-size:11px;">${esc(b.aboutBio2 || 'Từ lớp nền đến điểm nhấn cuối cùng...')}</p>
+          </div>
+          <b style="font-size:11px;display:block;margin-bottom:6px;color:#111827;">Quy trình 4 bước:</b>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:10.5px;">
+            <div style="background:#f3f4f6;padding:6px;border-radius:3px;">01. ${esc(b.processStep1Title || 'Lắng nghe')}</div>
+            <div style="background:#f3f4f6;padding:6px;border-radius:3px;">02. ${esc(b.processStep2Title || 'Thống nhất')}</div>
+            <div style="background:#f3f4f6;padding:6px;border-radius:3px;">03. ${esc(b.processStep3Title || 'Trang điểm')}</div>
+            <div style="background:#f3f4f6;padding:6px;border-radius:3px;">04. ${esc(b.processStep4Title || 'Kiểm tra')}</div>
+          </div>
+        </div>
+      `;
+    } else if (previewMode === 'services') {
+      previewHtml = `
+        <div class="preview-services-box" style="padding:16px;background:#fff;min-height:460px;font-size:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:12px;">
+            <b id="preview-services-title" style="font-family:var(--serif);font-size:15px;">${esc(b.servicesPageTitle || 'Dịch vụ trang điểm')}</b>
+            <span style="font-size:10px;color:var(--wine);font-weight:600;">HOÀN</span>
+          </div>
+          <p style="color:#6b7280;font-size:11px;margin:0 0 12px;">${esc(b.servicesPageSubtitle || 'Lựa chọn dành cho khoảnh khắc của bạn.')}</p>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
+            ${state.services.filter(s=>s.enabled).slice(0,3).map((sv,idx)=>`
+              <div style="border:1px solid #e5e7eb;border-radius:4px;padding:10px;display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                  <b style="font-size:12.5px;display:block;">${esc(sv.name)}</b>
+                  <small style="color:#6b7280;font-size:10.5px;">${sv.duration} phút</small>
+                </div>
+                <span class="numeric" style="font-weight:700;color:var(--wine);font-size:12px;">${sv.contact ? 'Tư vấn riêng' : money(sv.price)}</span>
+              </div>
+            `).join('')}
+          </div>
+          <div style="background:#f9fafb;border:1px dashed #d1d5db;border-radius:4px;padding:10px;text-align:center;">
+            <b style="font-size:11px;display:block;margin-bottom:2px;">${esc(b.consultTitle || 'Tìm phong cách phù hợp')}</b>
+            <p style="font-size:10px;color:#6b7280;margin:0;">${esc(b.consultDesc || 'Chia sẻ dịp tham dự cùng Hoàn.')}</p>
+          </div>
+        </div>
+      `;
+    } else if (previewMode === 'booking') {
+      previewHtml = `
+        <div class="preview-site" id="live-preview-box">
+          <div class="preview-art">
+            <img src="${esc(b.heroImage || '/assets/hero.png')}" alt="Ảnh đại diện" onerror="this.src='/assets/hero.png'">
+            <span id="preview-brand-name">${esc(b.name || 'HOÀN')}</span>
+          </div>
+          <div class="preview-ui">
+            <div class="preview-progress">
+              <i></i><i></i><i></i><i></i><i></i><i></i>
+            </div>
+            <h3 id="preview-headline" style="font-size:1.15rem;margin-top:16px;line-height:1.3;">${esc(b.headline || 'Chọn trải nghiệm trang điểm')}</h3>
+            <p id="preview-desc" style="color:#6b7280;font-size:11px;margin:6px 0 14px;">${esc(b.description || 'Mỗi diện mạo được thiết kế theo đường nét riêng bạn.')}</p>
+            <div class="preview-services">
+              ${state.services.filter(x => x.enabled).map((sv, idx) => `
+                <div class="preview-service ${idx===0?'selected':''}" style="${idx===0?`background:#111827;color:#fff;border-left:3px solid ${b.accent || '#7A1832'}`:''}">
+                  <b>${esc(sv.name)}</b><br>
+                  <small style="opacity:0.8;">${sv.duration} phút · ${sv.contact ? 'Liên hệ' : money(sv.price)}</small>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (previewMode === 'policies') {
+      previewHtml = `
+        <div class="preview-policies-box" style="padding:16px;background:#fff;min-height:460px;font-size:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:12px;">
+            <b id="preview-policies-title" style="font-family:var(--serif);font-size:15px;">${esc(b.policiesPageTitle || 'Chính sách dịch vụ')}</b>
+            <span style="font-size:10px;color:var(--wine);font-weight:600;">HOÀN</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div style="border-left:3px solid var(--wine);padding-left:10px;">
+              <b style="font-size:12px;display:block;margin-bottom:2px;">01. Đặt cọc tiêu chuẩn</b>
+              <p style="font-size:11px;color:#4b5563;margin:0;line-height:1.4;">${esc(b.policyDeposit || `Mức cọc: ${money(Number(s.deposit || 200000))}. Trừ vào tổng chi phí.`)}</p>
+            </div>
+            <div style="border-left:3px solid #9ca3af;padding-left:10px;">
+              <b style="font-size:12px;display:block;margin-bottom:2px;">02. Đổi ngày giờ</b>
+              <p style="font-size:11px;color:#4b5563;margin:0;line-height:1.4;">${esc(b.policyChange || 'Hỗ trợ đổi miễn phí trước 24 giờ tùy lịch trống.')}</p>
+            </div>
+            <div style="border-left:3px solid #9ca3af;padding-left:10px;">
+              <b style="font-size:12px;display:block;margin-bottom:2px;">03. Hủy lịch & hoàn cọc</b>
+              <p style="font-size:11px;color:#4b5563;margin:0;line-height:1.4;">${esc(b.policyCancel || 'Yêu cầu hủy trước 48 giờ được xem xét hoàn cọc.')}</p>
+            </div>
+            <div style="border-left:3px solid #9ca3af;padding-left:10px;">
+              <b style="font-size:12px;display:block;margin-bottom:2px;">04. Phục vụ tận nơi</b>
+              <p style="font-size:11px;color:#4b5563;margin:0;line-height:1.4;">${esc(b.policyTravel || 'Phí di chuyển báo trước khi đặt cọc.')}</p>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (previewMode === 'contact') {
+      previewHtml = `
+        <div class="preview-contact-box" style="padding:16px;background:#fff;min-height:460px;font-size:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:12px;">
+            <b id="preview-contact-title" style="font-family:var(--serif);font-size:15px;">${esc(b.contactPageTitle || 'Trao đổi cùng Hoàn')}</b>
+            <span style="font-size:10px;color:var(--wine);font-weight:600;">HOÀN</span>
+          </div>
+          <p style="font-size:11px;color:#6b7280;margin:0 0 14px;">${esc(b.contactPageSubtitle || 'Chia sẻ mong muốn hoặc vấn đề bạn cần hỗ trợ.')}</p>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
+            <div style="background:#fafafa;padding:8px 10px;border-radius:4px;display:flex;justify-content:space-between;">
+              <span style="color:#6b7280;">Hotline / Điện thoại</span>
+              <b id="preview-contact-phone">${esc(b.phone || '0912 345 678')}</b>
+            </div>
+            <div style="background:#fafafa;padding:8px 10px;border-radius:4px;display:flex;justify-content:space-between;">
+              <span style="color:#6b7280;">Zalo tư vấn</span>
+              <b>${esc(b.zaloPhone || b.phone || '0912 345 678')}</b>
+            </div>
+            <div style="background:#fafafa;padding:8px 10px;border-radius:4px;display:flex;justify-content:space-between;">
+              <span style="color:#6b7280;">Email</span>
+              <b id="preview-contact-email">${esc(b.email || 'contact@hoanmakeup.vn')}</b>
+            </div>
+            <div style="background:#fafafa;padding:8px 10px;border-radius:4px;display:flex;justify-content:space-between;">
+              <span style="color:#6b7280;">Địa chỉ</span>
+              <b>${esc(b.address || 'Hà Nội & phục vụ tận nơi')}</b>
+            </div>
+          </div>
+          <div style="background:#f3f4f6;padding:10px;border-radius:4px;text-align:center;font-size:11px;color:#4b5563;">
+            Form gửi lời nhắn trực tuyến kết nối đến mục Quản trị & Yêu cầu
+          </div>
+        </div>
+      `;
+    }
+
+    const previewTabs = [
+      { id: 'home', label: 'Trang chủ' },
+      { id: 'about', label: 'Về Hoàn' },
+      { id: 'services', label: 'Dịch vụ' },
+      { id: 'booking', label: 'Đặt lịch' },
+      { id: 'policies', label: 'Chính sách' },
+      { id: 'contact', label: 'Liên hệ' }
+    ];
+
+    const isPagesMode = viewMode === 'pages' || curTab === 'pages';
+
+    const modeSwitcher = `
+      <div class="content-header-modes">
+        <div class="mode-switch-pills">
+          <button type="button" class="mode-pill ${isPagesMode ? 'active' : ''}" data-action="switch-content-view" data-view="pages">
+            <svg class="ui-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            <span>Nội dung từng trang (CMS 42 trang)</span>
+          </button>
+          <button type="button" class="mode-pill ${!isPagesMode ? 'active' : ''}" data-action="switch-content-view" data-view="general">
+            <svg class="ui-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            <span>Cấu hình chung & Thương hiệu</span>
+          </button>
+        </div>
+      </div>
+    `;
+
+    const body = `
+      ${modeSwitcher}
+      ${isPagesMode
+        ? (siteTools ? siteTools.cmsWorkspaceHtml() : '<div class="cms-workspace"><p>Đang tải CMS…</p></div>')
+        : `
+      <section class="content-editor">
+        <nav class="content-tabs">
+          ${tabs.filter(t => t.id !== 'pages').map((t) => `
+            <button type="button" class="content-tab-btn ${curTab === t.id ? 'active' : ''}" data-action="content-tab" data-tab="${t.id}">
+              <span style="font-size:16px;">${t.icon}</span>
+              <div style="text-align:left;line-height:1.2;">
+                <small style="font-size:10px;color:#9ca3af;display:block;letter-spacing:0.05em;font-weight:700;">TAB ${t.num}</small>
+                <span style="font-size:13px;font-weight:600;">${t.name}</span>
+              </div>
+            </button>
+          `).join('')}
+        </nav>
+        <form class="content-form" data-form="content">
+          ${tabHtml}
+          <div style="margin-top:24px;display:flex;gap:10px;position:sticky;bottom:0;background:#ffffff;padding-top:12px;border-top:1px solid #eee;">
+            <button type="submit" class="btn btn-dark btn-wide" style="flex:1;">
+              ${icon('check')} Lưu nội dung tab này
+            </button>
+          </div>
+        </form>
+        <div class="content-preview">
+          <div class="section-head" style="margin-bottom:12px;">
+            <div>
+              <h2 style="font-size:15px;margin:0;">Xem trước trực tiếp</h2>
+              <small class="muted">Hiển thị mô phỏng phản hồi tức thì</small>
+            </div>
+            <a class="link" href="${previewRouteMap[previewMode] || '#/'}" target="_blank" style="font-size:12px;white-space:nowrap;">Mở trang thật ↗</a>
+          </div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px;">
+            ${previewTabs.map(pt => `
+              <button type="button" class="preview-nav-btn ${previewMode === pt.id ? 'active' : ''}" data-action="set-preview-mode" data-mode="${pt.id}">${pt.label}</button>
+            `).join('')}
+          </div>
+          <div class="preview-browser">
+            <div class="preview-bar">
+              <i class="preview-dot"></i><i class="preview-dot"></i><i class="preview-dot"></i>
+              <span style="margin:auto;font-weight:500;">hoanmakeup.com / ${previewRouteMap[previewMode] || ''}</span>
+            </div>
+            ${previewHtml}
+          </div>
+        </div>
+      </section>
+      `}
+    `;
+
+    return adminShell(
+      'content',
+      body,
+      'Nội dung website',
+      'Chỉnh sửa thông tin, hình ảnh và chính sách hiển thị cho khách hàng.',
+      `<a class="btn" href="#/" target="_blank">${icon('eye')} Xem trước website</a>
+       <button class="btn btn-dark" data-action="publish-content">${icon('check')} Đăng thay đổi</button>`
+    );
   }
 
   function adminNotifications() {
@@ -987,8 +2789,8 @@
     return adminShell('settings',`<form class="manage-card" data-form="settings"><h2>Thiết lập đặt lịch</h2><div class="form-grid">${input('bookingWindow','Số ngày mở lịch','number')}${input('deposit','Mức cọc tiêu chuẩn','number')}${input('travelFee','Phí di chuyển mặc định','number')}</div><h2 style="margin-top:30px">Tài khoản nhận cọc</h2><p>Chỉ nhập tài khoản thật do bạn quản lý. Khách sẽ nhận nội dung chuyển khoản theo mã lịch.</p><div class="form-grid">${input('bankName','Ngân hàng')}${input('bankAccount','Số tài khoản')}${input('bankOwner','Chủ tài khoản')}</div><h3>Mã QR nhận tiền của bạn</h3><p>Tải ảnh QR gốc từ ứng dụng ngân hàng. Ảnh sẽ hiển thị ở bước đặt cọc và chi tiết lịch hẹn.</p>${paymentQR()}<label class="btn">Tải / thay ảnh QR<input type="file" accept="image/png,image/jpeg,image/webp" data-payment-qr hidden></label><p>Đối soát thủ công tại mục Tiền cọc. Chưa kết nối thanh toán tự động hoặc MoMo.</p><button class="btn btn-dark">Lưu thiết lập</button></form><form class="manage-card" data-form="contact-settings" style="margin-top:25px"><h2>Thông tin liên hệ</h2><div class="form-grid"><div class="field"><label>Số điện thoại / Zalo</label><input name="phone" value="${esc(state.brand.phone==='0901 234 567'?'':state.brand.phone)}"></div><div class="field"><label>Email</label><input name="email" type="email" value="${esc(state.brand.email||'')}"></div></div><button class="btn btn-dark">Lưu thông tin liên hệ</button></form>`,'Cài đặt','Thiết lập lịch, tài khoản nhận tiền và thông tin liên hệ.');
   }
 
-  function modal(title, content, confirmLabel = 'Lưu', onConfirm = '') {
-    $('#modal-root').innerHTML = `<div class="modal-backdrop" role="presentation" data-action="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><h2 id="modal-title">${title}</h2><div>${content}</div><div class="modal-actions"><button class="btn" data-action="close-modal">Hủy</button><button class="btn btn-dark" data-action="modal-confirm" data-confirm="${onConfirm}">${confirmLabel}</button></div></section></div>`;
+  function modal(title, content, confirmLabel = 'Lưu', onConfirm = '', confirmClass = 'btn-dark') {
+    $('#modal-root').innerHTML = `<div class="modal-backdrop" role="presentation" data-action="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><h2 id="modal-title">${title}</h2><div>${content}</div><div class="modal-actions"><button class="btn" data-action="close-modal">Hủy</button><button class="btn ${confirmClass}" data-action="modal-confirm" data-confirm="${onConfirm}">${confirmLabel}</button></div></section></div>`;
     setTimeout(() => $('.modal input, .modal select, .modal textarea')?.focus(), 0);
   }
   const closeModal = () => { $('#modal-root').innerHTML = ''; };
@@ -1088,68 +2890,442 @@
     }
   }
 
+  function renderPathHtml(rawPath) {
+    const raw = (rawPath || '/').replace(/^#/, '');
+    const [path, queryString=''] = raw.split('?');
+    const query = new URLSearchParams(queryString);
+    const parts = path.split('/').filter(Boolean);
+    if (path === '/') return pageHome();
+    if (path === '/services') return pageServices();
+    if (parts[0] === 'services' && parts[1]) return pageServiceDetail(parts[1]);
+    if (path === '/gallery') return pageGallery(query.get('filter') || 'all');
+    if (parts[0] === 'look') return pageLook();
+    if (path === '/about') return pageAbout();
+    if (path === '/support') return pageSupport();
+    if (path === '/policies') return pagePolicies(query.get('tab'));
+    if (parts[0] === 'policies' && parts[1]) return pagePolicies(parts[1]);
+    if (parts[0] === 'support' && parts[1]) return pageHelpArticle(parts[1]);
+    if (path === '/contact') return pageContact();
+    if (path === '/search') return pageSearch();
+    if (path === '/booking/service') return pageBookingService();
+    if (path === '/booking/time') return pageBookingTime();
+    if (path === '/booking/location') return pageBookingLocation();
+    if (path === '/booking/info') return pageBookingInfo();
+    if (path === '/booking/deposit') return pageBookingDeposit();
+    if (path === '/booking/confirm') return pageBookingConfirm();
+    if (path === '/booking/success') return pageBookingSuccess();
+    if (path === '/lookup') return pageLookup();
+    if (parts[0] === 'booking' && parts[1] && parts[2] === 'reschedule') return pageReschedule(parts[1]);
+    if (parts[0] === 'booking' && parts[1] && parts[2] === 'cancel') return pageCancel(parts[1]);
+    if (parts[0] === 'booking' && parts[1] && parts[2] === 'receipt') return pageReceipt(parts[1]);
+    if (parts[0] === 'booking' && parts[1]) return pageBookingDetail(parts[1]);
+    return '';
+  }
+
   function render() {
+    siteTools?.beforeRender();
     const raw = location.hash.slice(1) || '/';
     const [path, queryString=''] = raw.split('?');
     const query = new URLSearchParams(queryString);
     const parts = path.split('/').filter(Boolean);
-    let html = '';
-    if (path === '/') html = pageHome();
-    else if (path === '/services') html = pageServices();
-    else if (parts[0] === 'services' && parts[1]) html = pageServiceDetail(parts[1]);
-    else if (path === '/gallery') html = pageGallery(query.get('filter') || 'all');
-    else if (parts[0] === 'look') html = pageLook();
-    else if (path === '/about') html = pageAbout();
-    else if (path === '/support') html = pageSupport();
-    else if (path === '/policies') html = pagePolicies(query.get('tab'));
-    else if (parts[0] === 'policies' && parts[1]) html = pagePolicies(parts[1]);
-    else if (parts[0] === 'support' && parts[1]) html = pageHelpArticle(parts[1]);
-    else if (path === '/contact') html = pageContact();
-    else if (path === '/search') html = pageSearch();
-    else if (path === '/admin/requests') html = adminRequests();
-    else if (path === '/booking/service') html = pageBookingService();
-    else if (path === '/booking/time') html = pageBookingTime();
-    else if (path === '/booking/location') html = pageBookingLocation();
-    else if (path === '/booking/info') html = pageBookingInfo();
-    else if (path === '/booking/deposit') html = pageBookingDeposit();
-    else if (path === '/booking/confirm') html = pageBookingConfirm();
-    else if (path === '/booking/success') html = pageBookingSuccess();
-    else if (path === '/lookup') html = pageLookup();
-    else if (parts[0] === 'booking' && parts[1] && parts[2] === 'reschedule') html = pageReschedule(parts[1]);
-    else if (parts[0] === 'booking' && parts[1] && parts[2] === 'cancel') html = pageCancel(parts[1]);
-    else if (parts[0] === 'booking' && parts[1] && parts[2] === 'receipt') html = pageReceipt(parts[1]);
-    else if (parts[0] === 'booking' && parts[1]) html = pageBookingDetail(parts[1]);
-    else if (path === '/admin' || path === '/admin/') html = adminOverview();
-    else if (path === '/admin/appointments') html = adminAppointments();
-    else if (path === '/admin/schedule') html = adminSchedule();
-    else if (path === '/admin/services') html = adminServices();
-    else if (path === '/admin/customers') html = adminCustomers();
-    else if (path === '/admin/payments') html = adminPayments();
-    else if (path === '/admin/promotions') html = adminPromotions();
-    else if (path === '/admin/gallery') html = adminGallery();
-    else if (path === '/admin/content') html = adminContent();
-    else if (path === '/admin/notifications') html = adminNotifications();
-    else if (path === '/admin/reports') html = adminReports();
-    else if (path === '/admin/permissions') html = adminPermissions();
-    else if (path === '/admin/audit') html = adminAudit();
-    else if (path === '/admin/settings') html = adminSettings();
-    else html = `<div class="page">${publicHeader()}<main class="help-wrap"><h1>Không tìm thấy trang</h1><a class="btn btn-dark" href="#/">Về trang chủ</a></main></div>`;
+    let html = renderPathHtml(raw);
+    if (!html) {
+      if (path === '/admin/requests') html = adminRequests();
+      else if (path === '/admin' || path === '/admin/') html = adminOverview();
+      else if (path === '/admin/appointments') html = adminAppointments();
+      else if (path === '/admin/schedule') html = adminSchedule();
+      else if (path === '/admin/services') html = adminServices();
+      else if (path === '/admin/customers') html = adminCustomers();
+      else if (path === '/admin/payments') html = adminPayments();
+      else if (path === '/admin/promotions') html = adminPromotions();
+      else if (path === '/admin/gallery') html = adminGallery();
+      else if (path === '/admin/content' || path === '/admin/content-pages') {
+        if (!state.contentViewMode) state.contentViewMode = 'pages';
+        if (!state.contentActiveTab) state.contentActiveTab = 'pages';
+        if (path === '/admin/content-pages') {
+          state.contentViewMode = 'pages';
+          state.contentActiveTab = 'pages';
+        }
+        html = adminContent();
+      }
+      else if (path === '/admin/visitors') html = siteTools?.visitorsPage() || adminShell('visitors','<p>Đang tải thống kê…</p>','Khách truy cập','');
+      else if (path === '/admin/notifications') html = adminNotifications();
+      else if (path === '/admin/reports') html = adminReports();
+      else if (path === '/admin/permissions') html = adminPermissions();
+      else if (path === '/admin/audit') html = adminAudit();
+      else if (path === '/admin/settings') html = adminSettings();
+      else html = `<div class="page">${publicHeader()}<main class="help-wrap"><h1>Không tìm thấy trang</h1><a class="btn btn-dark" href="#/">Về trang chủ</a></main></div>`;
+    }
     $('#app').innerHTML = html;
+    siteTools?.mount(path);
     window.scrollTo(0,0);
     mountCoutureMotion(path);
+    if (path === '/booking/deposit') {
+      initDepositTimer();
+      initDepositSync();
+    }
     document.title = path.startsWith('/admin') ? 'Quản trị — HOÀN' : 'HOÀN — Makeup Artist';
   }
 
+  function initDepositTimer() {
+    if (typeof setInterval === 'undefined') return;
+    if (window._depositTimerInterval) clearInterval(window._depositTimerInterval);
+    let seconds = 15 * 60;
+    const el = document.querySelector ? document.querySelector('#deposit-timer') : null;
+    if (!el) return;
+    window._depositTimerInterval = setInterval(() => {
+      const target = document.querySelector ? document.querySelector('#deposit-timer') : null;
+      if (!target) { clearInterval(window._depositTimerInterval); return; }
+      if (seconds <= 0) {
+        clearInterval(window._depositTimerInterval);
+        target.textContent = '00:00';
+        return;
+      }
+      seconds--;
+      const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+      const s = String(seconds % 60).padStart(2, '0');
+      target.textContent = `${m}:${s}`;
+    }, 1000);
+  }
+
+  function initDepositSync() {
+    if (typeof setInterval === 'undefined') return;
+    if (window._depositSyncInterval) clearInterval(window._depositSyncInterval);
+    window._depositSyncInterval = setInterval(async () => {
+      if (location.hash !== '#/booking/deposit') {
+        clearInterval(window._depositSyncInterval);
+        return;
+      }
+      try {
+        const raw = localStorage.getItem('hoanMakeupDraft');
+        if (raw) {
+          const draft = JSON.parse(raw);
+          if (draft.booking && !!draft.booking.depositPaid !== !!state.booking.depositPaid) {
+            state.booking.depositPaid = draft.booking.depositPaid;
+            state.booking.depositStatus = draft.booking.depositStatus;
+            render();
+            return;
+          }
+        }
+        const data = await api();
+        if (data && data.appointments) {
+          state.appointments = data.appointments;
+          const code = state.booking.code || (state.appointments[0]?.code);
+          const apt = state.appointments.find(a => a.code === code);
+          const isPaidNow = !!state.booking.depositPaid || state.booking.depositStatus === 'received' || (apt && (apt.paymentStatus === 'received' || apt.status === 'confirmed'));
+          if (isPaidNow !== !!state.booking.depositPaid) {
+            state.booking.depositPaid = isPaidNow;
+            if (isPaidNow) state.booking.depositStatus = 'received';
+            saveState();
+            render();
+          }
+        }
+      } catch(e){}
+    }, 1200);
+  }
+
+  let requestFilterState = { status: 'all', search: '' };
+
+  function getInitials(name) {
+    if (!name) return 'KH';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
+  function formatReqTime(iso) {
+    if (!iso) return '—';
+    try {
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      const day = String(d.getDate()).padStart(2, '0');
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const y = d.getFullYear();
+      const hr = String(d.getHours()).padStart(2, '0');
+      const min = String(d.getMinutes()).padStart(2, '0');
+      return `${hr}:${min} · ${day}/${m}/${y}`;
+    } catch(e) { return iso; }
+  }
+
+  function modalViewRequest(id) {
+    const r = (state.requests || []).find(x => x.id === id);
+    if (!r) return toast('Không tìm thấy yêu cầu');
+    const curStatus = r.status || 'pending';
+    const badgeCls = curStatus === 'resolved' ? 'success' : (curStatus === 'pending' ? 'warning' : (curStatus === 'in_progress' ? 'info' : ''));
+    const statusLabel = curStatus === 'resolved' ? 'Đã hoàn thành' : (curStatus === 'in_progress' ? 'Đang xử lý' : (curStatus === 'cancelled' ? 'Đã hủy' : 'Chờ xử lý'));
+    const cleanPhone = (r.phone || '').replace(/\D/g, '');
+
+    modal(`Chi tiết yêu cầu ${r.id}`, `
+      <div style="display:flex;flex-direction:column;gap:12px;font-size:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:1px solid #e5e7eb;">
+          <div>
+            <div style="font-size:17px;font-weight:700;color:#111827;">${esc(r.name || 'Khách hàng')}</div>
+            <div style="font-size:13px;color:#6b7280;margin-top:2px;">Mã yêu cầu: <span class="numeric">${esc(r.id)}</span></div>
+          </div>
+          <span class="badge ${badgeCls}" style="font-size:12px;padding:4px 10px;">${statusLabel}</span>
+        </div>
+        <div class="summary-row"><span>Số điện thoại</span><b class="numeric">${esc(r.phone || '—')}</b></div>
+        <div class="summary-row"><span>Email</span><b class="numeric">${esc(r.email || '—')}</b></div>
+        <div class="summary-row"><span>Chủ đề</span><b>${esc(r.subject || 'Yêu cầu tư vấn')}</b></div>
+        <div class="summary-row"><span>Thời gian</span><b class="numeric">${formatReqTime(r.createdAt)}</b></div>
+        ${r.code ? `<div class="summary-row"><span>Mã lịch liên quan</span><b class="numeric">${esc(r.code)}</b></div>` : ''}
+        ${r.date ? `<div class="summary-row"><span>Đề xuất đổi lịch</span><b class="numeric">${esc(r.date)}${r.time ? ' lúc ' + esc(r.time) : ''}</b></div>` : ''}
+        <div class="summary-row"><span>Lời nhắn</span><b style="max-width:65%;font-weight:500;">${esc(r.message || '—')}</b></div>
+        <div class="summary-row"><span>Ghi chú</span><b style="max-width:65%;font-weight:500;">${esc(r.reply || 'Chưa có ghi chú')}</b></div>
+        <div style="display:flex;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6;flex-wrap:wrap;">
+          <button class="btn btn-sm btn-dark" data-action="req-status" data-id="${esc(r.id)}">Đổi trạng thái</button>
+          <button class="btn btn-sm btn-edit" data-action="req-edit-full" data-id="${esc(r.id)}">Chỉnh sửa</button>
+          <button class="btn btn-sm btn-danger" data-action="req-delete-confirm" data-id="${esc(r.id)}">Xóa yêu cầu</button>
+          ${cleanPhone ? `<a class="btn btn-sm" href="https://zalo.me/${cleanPhone}" target="_blank" style="text-decoration:none;display:inline-flex;align-items:center;">Nhắn Zalo →</a>` : ''}
+          ${r.code ? `<a class="btn btn-sm" href="#/booking/${esc(r.code)}" target="_blank" style="text-decoration:none;display:inline-flex;align-items:center;">Xem trang khách →</a>` : ''}
+        </div>
+      </div>
+    `, 'Đóng');
+  }
+
+  function modalReqStatus(id) {
+    const r = (state.requests || []).find(x => x.id === id);
+    if (!r) return toast('Không tìm thấy yêu cầu');
+    const curStatus = r.status || 'pending';
+    modal(`Cập nhật trạng thái`, `
+      <div style="display:flex;flex-direction:column;gap:14px;font-size:14px;">
+        <div class="field">
+          <label>Trạng thái mới</label>
+          <select id="modal-req-status">
+            <option value="pending" ${curStatus==='pending'?'selected':''}>Chờ xử lý</option>
+            <option value="in_progress" ${curStatus==='in_progress'?'selected':''}>Đang xử lý</option>
+            <option value="resolved" ${curStatus==='resolved'?'selected':''}>Đã hoàn thành</option>
+            <option value="cancelled" ${curStatus==='cancelled'?'selected':''}>Đã hủy</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Ghi chú vận hành</label>
+          <textarea id="modal-req-status-reply" rows="3" placeholder="Nhập ghi chú hoặc kết quả xử lý...">${esc(r.reply || '')}</textarea>
+        </div>
+      </div>
+    `, 'Cập nhật', `update-req-status:${r.id}`);
+  }
+
+  function modalEditRequest(id) {
+    const r = (state.requests || []).find(x => x.id === id);
+    if (!r) return toast('Không tìm thấy yêu cầu');
+    const curStatus = r.status || 'pending';
+    modal(`Chỉnh sửa yêu cầu — ${r.id}`, `
+      <div class="form-grid">
+        <div class="field full">
+          <label>Khách hàng *</label>
+          <input id="modal-edit-req-name" value="${esc(r.name || '')}" placeholder="Họ và tên khách hàng">
+        </div>
+        <div class="field">
+          <label>Số điện thoại *</label>
+          <input id="modal-edit-req-phone" value="${esc(r.phone || '')}" placeholder="Số điện thoại">
+        </div>
+        <div class="field">
+          <label>Email liên hệ</label>
+          <input id="modal-edit-req-email" type="email" value="${esc(r.email || '')}" placeholder="Email khách hàng">
+        </div>
+        <div class="field full">
+          <label>Chủ đề</label>
+          <input id="modal-edit-req-subject" value="${esc(r.subject || 'Yêu cầu tư vấn')}" placeholder="Chủ đề tư vấn">
+        </div>
+        <div class="field full">
+          <label>Trạng thái xử lý</label>
+          <select id="modal-edit-req-status">
+            <option value="pending" ${curStatus==='pending'?'selected':''}>Chờ xử lý</option>
+            <option value="in_progress" ${curStatus==='in_progress'?'selected':''}>Đang xử lý</option>
+            <option value="resolved" ${curStatus==='resolved'?'selected':''}>Đã hoàn thành</option>
+            <option value="cancelled" ${curStatus==='cancelled'?'selected':''}>Đã hủy</option>
+          </select>
+        </div>
+        <div class="field full">
+          <label>Lời nhắn của khách</label>
+          <textarea id="modal-edit-req-message" rows="2" placeholder="Nội dung lời nhắn...">${esc(r.message || '')}</textarea>
+        </div>
+        <div class="field full">
+          <label>Ghi chú vận hành</label>
+          <textarea id="modal-edit-req-reply" rows="2" placeholder="Ghi chú nội bộ...">${esc(r.reply || '')}</textarea>
+        </div>
+      </div>
+    `, 'Lưu thay đổi', `edit-req-save:${r.id}`);
+  }
+
+  function modalDeleteRequest(id) {
+    const r = (state.requests || []).find(x => x.id === id);
+    if (!r) return toast('Không tìm thấy yêu cầu');
+    modal('Xác nhận xóa yêu cầu', `
+      <div style="font-size:14px;line-height:1.6;color:#1f2937;">
+        <p style="font-size:15px;color:#1f2937;margin-bottom:14px;line-height:1.5;">
+          Bạn có chắc chắn muốn xóa yêu cầu hỗ trợ của khách hàng <b>${esc(r.name || 'Khách')}</b>?
+        </p>
+        <div style="margin-bottom:16px;">
+          <div class="summary-row"><span>Mã yêu cầu</span><b class="numeric">${esc(r.id)}</b></div>
+          <div class="summary-row"><span>Khách hàng</span><b>${esc(r.name || '—')}</b></div>
+          <div class="summary-row"><span>Số điện thoại</span><b class="numeric">${esc(r.phone || '—')}</b></div>
+          <div class="summary-row"><span>Chủ đề</span><b>${esc(r.subject || 'Yêu cầu tư vấn')}</b></div>
+          <div class="summary-row"><span>Thời gian gửi</span><b class="numeric">${formatReqTime(r.createdAt)}</b></div>
+        </div>
+        <p style="font-size:13px;color:#6b7280;margin:0;line-height:1.5;">
+          Dữ liệu yêu cầu sau khi xóa sẽ được gỡ hoàn toàn khỏi danh sách quản trị và không thể khôi phục.
+        </p>
+      </div>
+    `, 'Xác nhận xóa', `delete-request:${r.id}`, 'btn-danger');
+  }
+
   function adminRequests() {
-    const rows=(state.requests||[]).slice().sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
-    return adminShell('requests',`<div class="table-wrap"><table class="data-table"><thead><tr><th>Mã</th><th>Khách hàng</th><th>Nội dung</th><th>Trạng thái</th><th></th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.id)}<br>${esc(r.code)}</td><td>${esc(r.name)}<br>${esc(r.phone)}</td><td><b>${esc(r.subject)}</b><p>${esc(r.message)}</p>${r.date?`<p>Ngày giờ đề nghị: ${esc(r.date)} ${esc(r.time)}</p>`:''}${r.reply?`<p>Phản hồi: ${esc(r.reply)}</p>`:''}</td><td>${r.status==='resolved'?'Đã xử lý':'Chờ xử lý'}</td><td>${r.code?`<a class="btn btn-sm" href="#/booking/${r.code}">Xem lịch</a>`:''}<button class="btn btn-sm" data-action="ct-resolve" data-id="${esc(r.id)}">Ghi nhận xử lý</button></td></tr>`).join('')||'<tr><td colspan="5">Chưa có yêu cầu hỗ trợ.</td></tr>'}</tbody></table></div>`,'Yêu cầu hỗ trợ','Lời nhắn, yêu cầu đổi lịch và hủy / hoàn cọc từ website.');
+    const all = (state.requests || []).slice().sort((a,b) => String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+    const filter = requestFilterState;
+    
+    const countPending = all.filter(r => !r.status || r.status === 'pending').length;
+    const countInProgress = all.filter(r => r.status === 'in_progress').length;
+    const countResolved = all.filter(r => r.status === 'resolved').length;
+    const countCancelled = all.filter(r => r.status === 'cancelled').length;
+
+    const filtered = all.filter(r => {
+      const st = r.status || 'pending';
+      if (filter.status !== 'all' && st !== filter.status) return false;
+      if (filter.search) {
+        const q = filter.search.toLowerCase();
+        const str = `${r.name || ''} ${r.phone || ''} ${r.email || ''} ${r.id || ''} ${r.code || ''} ${r.subject || ''} ${r.message || ''}`.toLowerCase();
+        if (!str.includes(q)) return false;
+      }
+      return true;
+    });
+
+    const body = `
+      <section class="stat-grid">
+        <div class="stat-card">
+          <small>Tổng yêu cầu tiếp nhận</small>
+          <strong class="numeric">${String(all.length).padStart(2, '0')}</strong>
+          <span>Tất cả liên hệ từ website</span>
+        </div>
+        <div class="stat-card">
+          <small>Chờ tiếp nhận & xử lý</small>
+          <strong class="numeric" style="color:var(--wine);">${String(countPending).padStart(2, '0')}</strong>
+          <span>${countPending ? 'Cần phản hồi khách hàng' : 'Không có yêu cầu chờ'}</span>
+        </div>
+        <div class="stat-card">
+          <small>Đang liên hệ tư vấn</small>
+          <strong class="numeric">${String(countInProgress).padStart(2, '0')}</strong>
+          <span>Đang trao đổi & xếp lịch</span>
+        </div>
+        <div class="stat-card">
+          <small>Đã hoàn thành / Chốt lịch</small>
+          <strong class="numeric" style="color:var(--green);">${String(countResolved).padStart(2, '0')}</strong>
+          <span>Đã hoàn tất hỗ trợ</span>
+        </div>
+      </section>
+
+      <div class="toolbar">
+        <input id="req-search" placeholder="Tìm theo tên khách hàng, số điện thoại, email, mã yêu cầu..." value="${esc(filter.search || '')}">
+        <select id="req-status-filter">
+          <option value="all" ${filter.status === 'all' ? 'selected' : ''}>Tất cả trạng thái (${all.length})</option>
+          <option value="pending" ${filter.status === 'pending' ? 'selected' : ''}>Chờ xử lý (${countPending})</option>
+          <option value="in_progress" ${filter.status === 'in_progress' ? 'selected' : ''}>Đang xử lý (${countInProgress})</option>
+          <option value="resolved" ${filter.status === 'resolved' ? 'selected' : ''}>Đã hoàn thành (${countResolved})</option>
+          <option value="cancelled" ${filter.status === 'cancelled' ? 'selected' : ''}>Đã hủy (${countCancelled})</option>
+        </select>
+        <button class="btn btn-sm" data-action="reset-req-filter">Đặt lại bộ lọc</button>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="min-width:130px;">Mã yêu cầu</th>
+              <th style="min-width:200px;">Khách hàng</th>
+              <th style="min-width:180px;">Email liên hệ</th>
+              <th style="min-width:260px;">Chủ đề & Lời nhắn</th>
+              <th style="min-width:130px;">Trạng thái</th>
+              <th style="min-width:160px;">Ghi chú vận hành</th>
+              <th style="min-width:190px;text-align:right;">Thao tác</th>
+            </tr>
+          </thead>
+          <tbody id="requests-table-body">
+            ${filtered.length ? filtered.map(r => {
+              const curStatus = r.status || 'pending';
+              const badgeCls = curStatus === 'resolved' ? 'success' : (curStatus === 'pending' ? 'warning' : (curStatus === 'in_progress' ? 'info' : ''));
+              const statusLabel = curStatus === 'resolved' ? 'Đã hoàn thành' : (curStatus === 'in_progress' ? 'Đang xử lý' : (curStatus === 'cancelled' ? 'Đã hủy' : 'Chờ xử lý'));
+              const cleanPhone = (r.phone || '').replace(/\D/g, '');
+              return `
+                <tr class="clickable-row" data-action="req-open-modal" data-id="${esc(r.id)}" data-status="${curStatus}" title="Nhấp vào dòng để xem chi tiết yêu cầu">
+                  <td class="numeric">
+                    <b>${esc(r.id)}</b>
+                    <small class="numeric" style="color:#6b7280;display:block;margin-top:2px;">${formatReqTime(r.createdAt)}</small>
+                    ${r.code ? `<small class="numeric" style="display:block;margin-top:2px;"><a href="#/booking/${r.code}" class="link" style="font-size:11px;" onclick="event.stopPropagation()">Lịch: ${esc(r.code)}</a></small>` : ''}
+                  </td>
+                  <td>
+                    <b class="row-hover-link">${esc(r.name || 'Khách hàng')}</b>
+                    <br><small class="numeric" style="color:#6b7280;">${esc(r.phone || '—')}</small>
+                  </td>
+                  <td class="numeric">
+                    ${r.email ? `<a href="mailto:${esc(r.email)}" style="color:inherit;text-decoration:none;" onclick="event.stopPropagation()">${esc(r.email)}</a>` : '<span style="color:#9ca3af;">—</span>'}
+                  </td>
+                  <td>
+                    <b>${esc(r.subject || 'Yêu cầu tư vấn')}</b>
+                    ${r.message ? `<div style="color:#6b7280;font-size:12px;margin-top:2px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.message)}</div>` : ''}
+                    ${r.date ? `<small style="color:var(--wine);display:block;margin-top:2px;">Đề xuất: ${esc(r.date)} ${esc(r.time || '')}</small>` : ''}
+                  </td>
+                  <td>
+                    <span class="badge ${badgeCls}">${statusLabel}</span>
+                  </td>
+                  <td>
+                    ${r.reply ? `<span style="font-size:13px;color:#374151;">${esc(r.reply)}</span>` : '<span style="color:#9ca3af;">—</span>'}
+                  </td>
+                  <td style="text-align:right;">
+                    <div class="table-actions" style="justify-content:flex-end;">
+                      <button class="action-btn action-btn-edit" data-action="req-edit-full" data-id="${esc(r.id)}" title="Chỉnh sửa thông tin">
+                        ${icon('edit')}<span>Sửa</span>
+                      </button>
+                      <button class="action-btn action-btn-status" data-action="req-status" data-id="${esc(r.id)}" title="Đổi trạng thái">
+                        ${icon('clock')}<span>Trạng thái</span>
+                      </button>
+                      <button class="action-btn action-btn-delete" data-action="req-delete-confirm" data-id="${esc(r.id)}" title="Xóa yêu cầu">
+                        ${icon('trash')}<span>Xóa</span>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              `;
+            }).join('') : `
+              <tr>
+                <td colspan="7">
+                  <div class="empty-table" style="padding:48px 16px;">Không tìm thấy yêu cầu hỗ trợ nào phù hợp với bộ lọc hiện tại.</div>
+                </td>
+              </tr>
+            `}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    return adminShell(
+      'requests',
+      body,
+      'Yêu cầu hỗ trợ & Tư vấn',
+      'Tiếp nhận lời nhắn, tư vấn dịch vụ và giải quyết yêu cầu đổi/hủy lịch từ khách hàng.'
+    );
   }
   document.addEventListener('submit',async event=>{
     const form=event.target,kind=form.dataset.form;
-    if(!['contact','booking-request','site-search','support-search','resolve-request','contact-settings'].includes(kind))return;
+    if(!['contact','booking-request','site-search','support-search','resolve-request','contact-settings','content'].includes(kind))return;
     event.preventDefault();event.stopImmediatePropagation();const data=Object.fromEntries(new FormData(form));
     if(kind==='site-search'||kind==='support-search')return route('/'+(kind==='site-search'?'search':'support')+'?q='+encodeURIComponent(data.q||''));
     if(kind==='contact-settings'){try{await api({action:'saveContent',key:'brand',value:{...state.brand,...data}});Object.assign(state.brand,data);toast('Đã lưu thông tin liên hệ');}catch(error){toast(error.message);}return;}
+    if(kind==='content'){
+      try {
+        Object.assign(state.brand, data);
+        if (data.deposit !== undefined) state.settings.deposit = String(data.deposit);
+        if (data.travelFee !== undefined) state.settings.travelFee = String(data.travelFee);
+        if (data.accent) document.documentElement.style.setProperty('--wine', data.accent);
+        await api({ action: 'saveContent', key: 'brand', value: state.brand });
+        await api({ action: 'saveContent', key: 'settings', value: state.settings });
+        toast('Đã lưu nội dung website thành công');
+        render();
+      } catch(error) {
+        toast(error.message || 'Lỗi lưu nội dung');
+      }
+      return;
+    }
     const button=form.querySelector('button[type=submit],button:not([type])');if(button)button.disabled=true;
     try{
       const r=await api(kind==='resolve-request'?{action:'resolveRequest',...data}:{action:'createRequest',...data});
@@ -1194,27 +3370,219 @@
       try{const response=await fetch('/api/uploads',{method:'POST',body:data});const r=await response.json();if(!response.ok)throw Error(r.error);state.booking.references=r.paths;saveState();render();toast('Đã lưu ảnh tham khảo');}
       catch(error){toast(error.message);input.disabled=false;}
     }
+    if(input.id==='contact-file-input'){
+      const files=[...input.files];
+      const statusEl=document.querySelector('.contact-file-status');
+      if(statusEl){
+        if(files.length>0){
+          statusEl.textContent=`Đã chọn: ${files.map(f=>f.name).join(', ')}`;
+          statusEl.hidden=false;
+        }else{
+          statusEl.textContent='';
+          statusEl.hidden=true;
+        }
+      }
+    }
+    if(input.id==='deposit-receipt-file'){
+      const file=input.files?.[0];
+      if(file){
+        if(file.size > 5 * 1024 * 1024) return toast('Kích thước ảnh vượt quá 5MB');
+        const reader = new FileReader();
+        reader.onload = e => {
+          state.booking.receiptData = e.target.result;
+          state.booking.receiptName = file.name;
+          saveState();
+          render();
+          toast('✓ Đã đính kèm ảnh bill chuyển khoản: ' + file.name);
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+    if(input.id==='deposit-policy-consent'){
+      state.booking.depositConsent=input.checked;
+      saveState();
+    }
   });
   document.addEventListener('click',async event=>{
-    const el=event.target.closest('[data-action]');if(!el||!el.dataset.action.startsWith('ct-')&&el.dataset.action!=='look-book')return;
+    const el=event.target.closest('[data-action]');if(!el)return;
+    const _a=el.dataset.action;
+    const _handledInThisListener = _a.startsWith('ct-') || _a.startsWith('req-') || _a==='reset-req-filter' || _a==='admin-confirm-deposit' || _a==='admin-reset-deposit' || _a==='look-book';
+    if(!_handledInThisListener) return;
     const action=el.dataset.action;event.preventDefault();event.stopImmediatePropagation();
     try{
-      if(action==='ct-next'){
+      if(action==='admin-confirm-deposit'||action==='ct-admin-confirm-deposit'){
+        const c=el.dataset.code||bookingCode||'HOAN-MAU-001';
+        el.disabled=true;
+        try{
+          let a=getAppointment(c);
+          const dep=(a&&Number(a.deposit)>0)?Number(a.deposit):Number(state.settings.deposit||200000);
+          const res=await api({action:'updateAppointment',code:c,status:'confirmed',deposit:dep,paymentStatus:'received'});
+          if(a){
+            Object.assign(a,res.appointment||{status:'confirmed',paymentStatus:'received',deposit:dep});
+          }else{
+            a=res.appointment||{code:c,customer:state.booking.name||'Khách hàng',phone:state.booking.phone||'0901234567',serviceId:state.booking.serviceId||'party',date:state.booking.date||localIso(),time:state.booking.time||'10:00',address:'Đường Châu Văn Liêm, Phường Phú Đô, Nam Từ Liêm',total:700000,deposit:dep,status:'confirmed',paymentStatus:'received'};
+            state.appointments.unshift(a);
+          }
+          if(state.booking.code===c || bookingCode===c || !state.booking.code || (state.appointments[0] && state.appointments[0].code === c)){
+            state.booking.depositPaid=true;
+            state.booking.depositStatus='received';
+            state.booking.code=c;
+          }
+          saveState();
+          toast(`✓ Quản trị viên đã xác nhận cọc & duyệt lịch hẹn ${c}!`);
+          render();
+        }catch(err){
+          toast(err.message||'Lỗi khi xác nhận cọc');
+          el.disabled=false;
+        }
+      }else if(action==='admin-reset-deposit'||action==='ct-admin-reset-deposit'){
+        const c=el.dataset.code||bookingCode||'HOAN-MAU-001';
+        el.disabled=true;
+        try{
+          let a=getAppointment(c);
+          const res=await api({action:'updateAppointment',code:c,status:'pending',deposit:0,paymentStatus:'pending_verification'});
+          if(a){
+            Object.assign(a,res.appointment||{status:'pending',paymentStatus:'pending_verification',deposit:0});
+          }
+          if(state.booking.code===c || bookingCode===c || !state.booking.code || (state.appointments[0] && state.appointments[0].code === c)){
+            state.booking.depositPaid=false;
+            state.booking.depositStatus='pending_verification';
+          }
+          saveState();
+          toast(`↺ Đã chuyển lịch ${c} về trạng thái Chờ đối soát!`);
+          render();
+        }catch(err){
+          toast(err.message||'Lỗi khi chuyển trạng thái');
+          el.disabled=false;
+        }
+      }else if(action==='ct-copy-transfer'){
+        const val=document.getElementById('transfer-code-val')?.value||'';
+        if(val){
+          await navigator.clipboard.writeText(val);
+          toast('Đã sao chép nội dung: '+val);
+          const orig=el.innerHTML;
+          el.innerHTML='<span style="font-size:12px;font-weight:600;color:#2e7d32;">✓ Đã chép</span>';
+          setTimeout(()=>{el.innerHTML=orig;},1800);
+        }
+      }else if(action==='ct-copy-account'){
+        const val=el.dataset.value||'0901234567';
+        await navigator.clipboard.writeText(val);
+        toast('Đã sao chép số tài khoản: '+val);
+        const orig=el.innerHTML;
+        el.innerHTML='<span style="font-size:11px;font-weight:600;color:#2e7d32;">✓ Đã chép</span>';
+        setTimeout(()=>{el.innerHTML=orig;},1800);
+      }else if(action==='ct-tab-momo'){
+        toast('Cổng thanh toán MoMo đang kết nối đối soát. Vui lòng chuyển khoản qua VietQR.');
+      }else if(action==='ct-open-deposit-policy'){
+        modal('Chính sách đặt cọc giữ lịch', `
+          <div style="font-size:14px;line-height:1.6;color:#333;text-align:left;">
+            <p style="margin-bottom:12px;"><strong>1. Mức cọc tiêu chuẩn:</strong> Mức cọc là <strong>200.000đ</strong> cho mỗi lịch hẹn. Khoản cọc này đảm bảo chuyên viên dành trọn khung giờ phục vụ riêng cho bạn và sẽ được trừ 100% vào tổng chi phí dịch vụ.</p>
+            <p style="margin-bottom:12px;"><strong>2. Đối soát & Giữ chỗ:</strong> Khi bạn bấm <em>"Tôi đã chuyển khoản"</em>, hệ thống ghi nhận lịch ở trạng thái <em>"Chờ đối soát"</em>. Chuyên viên sẽ đối soát giao dịch và gửi xác nhận chính thức qua SMS/Zalo.</p>
+            <p style="margin-bottom:0;"><strong>3. Thời gian hoàn tất:</strong> Vui lòng chuyển khoản trong thời gian giữ chỗ 15 phút để đảm bảo khung giờ không bị giải phóng cho khách hàng khác.</p>
+          </div>
+        `, 'Đã hiểu', 'close-modal');
+      }else if(action==='ct-open-reschedule-policy'){
+        modal('Chính sách đổi lịch & hoàn cọc', `
+          <div style="font-size:14px;line-height:1.6;color:#333;text-align:left;">
+            <p style="margin-bottom:12px;"><strong>1. Đổi lịch hẹn:</strong> Khách hàng được đổi lịch hẹn miễn phí trước ít nhất <strong>24 giờ</strong> so với thời gian bắt đầu đã hẹn.</p>
+            <p style="margin-bottom:12px;"><strong>2. Hủy lịch & Hoàn cọc:</strong> Yêu cầu hủy lịch được gửi trước ít nhất <strong>48 giờ</strong> sẽ được hoàn 100% tiền cọc về tài khoản của bạn.</p>
+            <p style="margin-bottom:0;"><strong>3. Trường hợp khẩn cấp:</strong> Nếu có việc đột xuất phát sinh, vui lòng liên hệ trực tiếp số hotline hoặc Zalo của Hoàn để được hỗ trợ linh hoạt nhất.</p>
+          </div>
+        `, 'Đã hiểu', 'close-modal');
+      }else if(action==='ct-trigger-receipt'){
+        document.getElementById('deposit-receipt-file')?.click();
+      }else if(action==='ct-remove-receipt'){
+        delete state.booking.receiptData;
+        delete state.booking.receiptName;
+        saveState();
+        render();
+        toast('Đã gỡ ảnh đính kèm');
+      }else if(action==='ct-report-transfer'){
+        const b = state.booking;
+        const consent = document.querySelector ? document.querySelector('#deposit-policy-consent') : null;
+        if(consent&&!consent.checked){
+          toast('Vui lòng đọc và đồng ý chính sách đặt cọc.');
+          if (consent.scrollIntoView) consent.scrollIntoView({behavior:'smooth',block:'center'});
+          if (consent.focus) consent.focus();
+          return;
+        }
+        b.depositConsent=true;
+        b.depositReported=true;
+        b.depositStatus='pending_verification';
+
+        let a = getAppointment(b.code);
+        if(a){
+          a.paymentStatus = 'pending_verification';
+          try { api({action:'reportPayment', code: a.code}).catch(()=>{}); } catch(e){}
+        }
+        saveState();
+        toast('✓ Đã ghi nhận! Vui lòng chờ Hoàn kiểm tra và xác nhận cọc.');
+        render();
+      }else if(action==='ct-deposit-confirmed-proceed'){
+        const consent = document.querySelector ? document.querySelector('#deposit-policy-consent') : null;
+        if(consent && !consent.checked){
+          toast('Vui lòng đọc và đồng ý chính sách đặt cọc.');
+          if (consent.scrollIntoView) consent.scrollIntoView({behavior:'smooth',block:'center'});
+          if (consent.focus) consent.focus();
+          return;
+        }
+        state.booking.depositConsent = true;
+        saveState();
+        route('/booking/confirm');
+      }else if(action==='ct-deposit-view'){
+        route('/booking/deposit');
+      }else if(action==='ct-contact-attach'){
+        document.getElementById('contact-file-input')?.click();
+      }else if(action==='ct-next'){
         const step=Number(el.dataset.step),form=document.querySelector('.ct-booking form');
         if(form){if(!form.reportValidity())return;Object.assign(state.booking,Object.fromEntries(new FormData(form)));for(const box of form.querySelectorAll('input[type=checkbox][name]'))state.booking[box.name]=box.checked;}
         if(step===1&&service().contact)return route('/contact');
         if(step===2){if(!state.booking.time||slotUnavailable(state.booking.date,state.booking.time)||!state.settings.scheduleOpen)return toast('Vui lòng chọn một khung giờ còn trống.');}
         if(step===3){state.booking.locationType='client';state.booking.travelFee=Number(state.settings.travelFee||50000);}
         saveState();route(el.dataset.next);
-      }else if(action==='ct-date'){state.booking.date=el.dataset.date;state.booking.time='';saveState();render();}
+      }else if(action==='ct-date'){state.booking.date=el.dataset.date;state.booking.time=defaultBookingTime(el.dataset.date);saveState();render();}
       else if(action==='ct-month'){const d=new Date((state.calendarMonth||state.booking.date).slice(0,7)+'-01T12:00:00');d.setMonth(d.getMonth()+Number(el.dataset.delta));state.calendarMonth=localIso(d);render();}
       else if(action==='look-book'){state.booking.serviceId=el.dataset.id;state.booking.style=el.dataset.style;saveState();route(service().contact?'/contact':'/booking/time');}
       else if(action==='ct-copy'){await navigator.clipboard.writeText(el.dataset.value);toast('Đã sao chép');}
       else if(action==='ct-refresh'){await hydrateBackend();toast('Đã cập nhật trạng thái');}
       else if(action==='ct-payment-report'){el.disabled=true;const r=await api({action:'reportPayment',code:el.dataset.code});Object.assign(getAppointment(el.dataset.code),r.appointment);render();toast('Đã thông báo, đang chờ đối soát');}
-      else if(action==='ct-calendar-download'){const a=getAppointment(el.dataset.code);const d=new Date(a.date+'T'+a.time+':00+07:00'),end=new Date(d.getTime()+service(a.serviceId).duration*60000),fmt=d=>d.toISOString().replace(/[-:]/g,'').replace('.000','');downloadText('lich-'+a.code+'.ics',['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//HOAN//Booking//VI','BEGIN:VEVENT','UID:'+a.code+'@hoan','DTSTAMP:'+fmt(new Date()),'DTSTART:'+fmt(d),'DTEND:'+fmt(end),'SUMMARY:'+service(a.serviceId).name+' - HOÀN','STATUS:'+(a.status==='confirmed'?'CONFIRMED':'TENTATIVE'),'END:VEVENT','END:VCALENDAR'].join('\r\n'));}
-      else if(action==='ct-resolve'){const r=state.requests.find(x=>x.id===el.dataset.id);modal('Ghi nhận xử lý yêu cầu',`<p>${esc(r.subject)} · ${esc(r.code)}</p><p>Để đổi thời gian hoặc hủy lịch, cập nhật lịch hẹn trong quản trị trước khi ghi nhận kết quả.</p><form data-form="resolve-request" class="ct-form"><input type="hidden" name="id" value="${esc(r.id)}"><label>Kết quả xử lý<textarea name="reply" required>${esc(r.reply||'')}</textarea></label><button class="btn btn-dark">LƯU KẾT QUẢ</button></form>`,'Đóng','ct-dismiss');document.querySelector('[data-confirm="ct-dismiss"]')?.remove();}
+      else if(action==='ct-calendar-download'){const c=el.dataset.code||'HOAN-MAU-001';const a=getAppointment(c)||{code:c,date:localIso(),time:'10:00',serviceId:'party',status:'confirmed'};const sObj=service(a.serviceId)||{name:'Trang điểm dự tiệc',duration:90};const d=new Date((a.date||localIso())+'T'+(a.time||'10:00')+':00+07:00'),end=new Date(d.getTime()+(sObj.duration||90)*60000),fmt=d=>d.toISOString().replace(/[-:]/g,'').replace('.000','');downloadText('lich-'+a.code+'.ics',['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//HOAN//Booking//VI','BEGIN:VEVENT','UID:'+a.code+'@hoan','DTSTAMP:'+fmt(new Date()),'DTSTART:'+fmt(d),'DTEND:'+fmt(end),'SUMMARY:'+sObj.name+' - HOÀN','STATUS:'+(a.status==='confirmed'?'CONFIRMED':'TENTATIVE'),'END:VEVENT','END:VCALENDAR'].join('\r\n'));toast('Đã tải lịch hẹn vào máy');}
+      else if(action==='ct-resolve' || action==='req-open-modal'){
+        modalViewRequest(el.dataset.id);
+      }
+      else if(action==='req-status'){
+        modalReqStatus(el.dataset.id);
+      }
+      else if(action==='req-edit-reply' || action==='req-edit-full'){
+        modalEditRequest(el.dataset.id);
+      }
+      else if(action==='req-delete' || action==='req-delete-confirm'){
+        modalDeleteRequest(el.dataset.id);
+      }
+      else if(action==='reset-req-filter'){
+        requestFilterState = { status: 'all', search: '' };
+        render();
+      }
     }catch(error){toast(error.message);el.disabled=false;}
+  });
+
+  document.addEventListener('input', (event) => {
+    if (event.target && event.target.id === 'req-search') {
+      requestFilterState.search = event.target.value;
+      render();
+      const inp = document.getElementById('req-search');
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+    }
+  });
+
+  document.addEventListener('change', (event) => {
+    if (event.target && event.target.id === 'req-status-filter') {
+      requestFilterState.status = event.target.value;
+      render();
+    }
   });
 
   document.addEventListener('submit', async (event) => {
@@ -1237,8 +3605,22 @@
       $$('.accordion-item').forEach((item,i)=>item.style.display = faqItems[i].join(' ').toLowerCase().includes(q) ? '' : 'none');
       toast(q ? 'Đã lọc câu hỏi phù hợp' : 'Đang hiển thị tất cả câu hỏi');
     } else if (form.dataset.form === 'content') {
-      Object.assign(state.brand, data);
-      try { await api({action:'saveContent',key:'brand',value:state.brand}); toast('Đã lưu nội dung website vào dữ liệu thật'); render(); }
+      const dataObj = Object.fromEntries(new FormData(form));
+      if (dataObj.deposit !== undefined) {
+        state.settings.deposit = Number(dataObj.deposit);
+        delete dataObj.deposit;
+      }
+      if (dataObj.travelFee !== undefined) {
+        state.settings.travelFee = Number(dataObj.travelFee);
+        delete dataObj.travelFee;
+      }
+      Object.assign(state.brand, dataObj);
+      try {
+        await api({action:'saveContent',key:'brand',value:state.brand});
+        await api({action:'saveContent',key:'settings',value:state.settings});
+        toast('Đã lưu nội dung website vào dữ liệu thật');
+        render();
+      }
       catch(error){ toast(error.message); }
     } else if (form.dataset.form === 'settings') {
       Object.assign(state.settings, data);
@@ -1253,6 +3635,58 @@
     if(bookingForm && event.target.name) {
       state.booking[event.target.name]=event.target.type==='checkbox'?event.target.checked:event.target.value;
       saveState();
+    }
+    const contentForm = event.target.closest('form[data-form="content"]');
+    if (contentForm && event.target.name) {
+      const name = event.target.name;
+      const val = event.target.value;
+      if (name === 'deposit' || name === 'travelFee') {
+        state.settings[name] = Number(val);
+      } else {
+        state.brand[name] = val;
+      }
+      if (name === 'name') {
+        const el = document.getElementById('preview-brand-name');
+        if (el) el.textContent = val;
+      } else if (name === 'headline') {
+        const el = document.getElementById('preview-headline');
+        if (el) el.textContent = val;
+      } else if (name === 'description') {
+        const el = document.getElementById('preview-desc');
+        if (el) el.textContent = val;
+      } else if (name === 'homeTitle') {
+        const el = document.getElementById('preview-home-title');
+        if (el) el.textContent = val;
+      } else if (name === 'homeSubtitle') {
+        const el = document.getElementById('preview-home-subtitle');
+        if (el) el.textContent = val;
+      } else if (name === 'editorialOverline') {
+        const el = document.getElementById('preview-home-overline');
+        if (el) el.textContent = val;
+      } else if (name === 'editorialTitle') {
+        const el = document.getElementById('preview-home-edtitle');
+        if (el) el.textContent = val;
+      } else if (name === 'aboutTitle') {
+        const el = document.getElementById('preview-about-title');
+        if (el) el.textContent = val;
+      } else if (name === 'servicesPageTitle') {
+        const el = document.getElementById('preview-services-title');
+        if (el) el.textContent = val;
+      } else if (name === 'policiesPageTitle') {
+        const el = document.getElementById('preview-policies-title');
+        if (el) el.textContent = val;
+      } else if (name === 'contactPageTitle') {
+        const el = document.getElementById('preview-contact-title');
+        if (el) el.textContent = val;
+      } else if (name === 'phone') {
+        const el = document.getElementById('preview-contact-phone');
+        if (el) el.textContent = val;
+      } else if (name === 'email') {
+        const el = document.getElementById('preview-contact-email');
+        if (el) el.textContent = val;
+      } else if (name === 'accent') {
+        document.documentElement.style.setProperty('--wine', val);
+      }
     }
     if (event.target.id === 'appointment-search' || event.target.id === 'appointment-status') {
       const q = ($('#appointment-search')?.value || '').toLowerCase();
@@ -1358,7 +3792,7 @@
         toast('Đã gỡ ảnh tham khảo');
       }
     }
-    else if (action === 'date-select') { state.booking.date = '2026-09-'+String(el.dataset.day).padStart(2,'0'); saveState(); render(); }
+    else if (action === 'date-select') { const m = (state.calendarMonth || state.booking.date || localIso()).slice(0,7); state.booking.date = `${m}-${String(el.dataset.day).padStart(2,'0')}`; saveState(); render(); }
     else if (action === 'time-select') { state.booking.time = el.dataset.time; saveState(); render(); }
     else if (action === 'location-type') { state.booking.locationType = el.dataset.type; state.booking.travelFee = el.dataset.type==='artist'?0:50000; saveState(); render(); }
     else if (action === 'detect-location') {
@@ -1471,18 +3905,25 @@
     else if (action === 'payment-method') { state.booking.payment = el.dataset.method; saveState(); render(); }
     else if (action === 'complete-booking') {
       const b=state.booking;
-      if(!b.consent||!b.depositConsent){toast('Vui lòng kiểm tra và đồng ý các chính sách trước khi gửi.');return route('/booking/info');}
-      if(!b.name.trim()||!b.phone.trim()) { toast('Vui lòng nhập họ tên và số điện thoại trước khi hoàn tất'); return route('/booking/info'); }
-      if(b.locationType==='client'&&!b.address.trim()) { toast('Vui lòng nhập địa chỉ phục vụ'); return route('/booking/location'); }
-      el.disabled=true; el.textContent='Đang lưu lịch hẹn...';
+      // Tự động set consent nếu user đã đồng ý chính sách đặt cọc
+      if (b.depositConsent && !b.consent) { b.consent = true; saveState(); }
+      if(!b.consent){toast('Vui lòng đồng ý chính sách đặt lịch.');return route('/booking/info');}
+      if(!b.name||!b.name.trim()||!b.phone||!b.phone.trim()) { toast('Vui lòng nhập họ tên và số điện thoại.'); return route('/booking/info'); }
+      if(b.locationType==='client'&&(!b.address||!b.address.trim())) { toast('Vui lòng nhập địa chỉ phục vụ.'); return route('/booking/location'); }
+      el.disabled=true;
+      const origText = el.textContent;
+      el.textContent='Đang gửi yêu cầu...';
       try {
-        const result=await api({action:'createAppointment',...b,customer:b.name});
+        const result=await api({action:'createAppointment',...b,customer:b.name,paymentStatus:b.depositReported?'pending_verification':'not_paid'});
         bookingCode=result.appointment.code;
-        localStorage.setItem('hoanLastBookingCode',bookingCode);
+        try { localStorage.setItem('hoanLastBookingCode',bookingCode); } catch {}
         state.appointments.unshift(result.appointment);
+        // Xóa draft cũ
+        state.booking.depositReported=false;
+        state.booking.depositStatus=null;
         await hydrateBackend(true);
         route('/booking/success'); render();
-      } catch(error) { toast(error.message); el.disabled=false; render(); }
+      } catch(error) { toast(error.message); el.disabled=false; el.textContent=origText; }
     }
     else if (action === 'save-look') { el.textContent = '♥ Đã lưu phong cách'; toast('Đã lưu phong cách vào lịch đặt'); }
     else if (action === 'gallery-filter') route('/gallery?filter='+el.dataset.filter);
@@ -1496,9 +3937,48 @@
     else if (action === 'print') window.print();
     else if (action === 'confirm-reschedule') { try{const a=getAppointment(el.dataset.code);const result=await api({action:'updateAppointment',code:a.code,date:'2026-09-19',time:'10:00'});Object.assign(a,result.appointment);toast('Đổi lịch thành công');route('/booking/'+a.code);}catch(error){toast(error.message)} }
     else if (action === 'confirm-cancel') { if (!$('#cancel-confirm')?.checked) return toast('Vui lòng xác nhận điều kiện hủy lịch'); try{const a=getAppointment(el.dataset.code);const result=await api({action:'updateAppointment',code:a.code,status:'cancelled'});Object.assign(a,result.appointment);toast('Đã hủy lịch hẹn');route('/booking/'+a.code);}catch(error){toast(error.message)} }
-    else if (action === 'new-appointment') { const d=new Date();d.setDate(d.getDate()+1);modal('Tạo lịch hẹn mới',`<div class="form-grid"><div class="field full"><label>Khách hàng</label><input id="modal-customer" placeholder="Họ và tên"></div><div class="field"><label>Dịch vụ</label><select id="modal-service">${state.services.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select></div><div class="field"><label>Ngày</label><input id="modal-date" type="date" value="${localIso(d)}"></div><div class="field"><label>Giờ</label><input id="modal-time" type="time" value="09:30"></div><div class="field"><label>Số điện thoại</label><input id="modal-phone" placeholder="Số điện thoại"></div></div>`,'Tạo lịch','create-appointment'); }
+    else if (action === 'new-appointment') { modal('Tạo lịch hẹn mới',`<div class="form-grid"><div class="field full"><label>Khách hàng</label><input id="modal-customer" placeholder="Họ và tên"></div><div class="field"><label>Dịch vụ</label><select id="modal-service">${state.services.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select></div><div class="field"><label>Ngày</label><input id="modal-date" type="date" value="${localIso()}"></div><div class="field"><label>Giờ</label><input id="modal-time" type="time" value="09:30"></div><div class="field"><label>Số điện thoại</label><input id="modal-phone" placeholder="Số điện thoại"></div></div>`,'Tạo lịch','create-appointment'); }
     else if (action === 'admin-status') { const a=getAppointment(el.dataset.code); modal('Cập nhật trạng thái',`<div class="field"><label>Trạng thái mới</label><select id="modal-status"><option value="confirmed">Đã xác nhận</option><option value="pending">Chờ xác nhận</option><option value="completed">Đã hoàn thành</option><option value="cancelled">Đã hủy</option></select></div><div class="form-grid"><div class="field"><label>Ngày hẹn</label><input id="modal-appointment-date" type="date" value="${a.date}"></div><div class="field"><label>Giờ bắt đầu</label><input id="modal-appointment-time" type="time" value="${a.time}"></div></div>`,'Cập nhật','update-status:'+a.code); }
-    else if (action === 'admin-view-appointment') route('/booking/'+el.dataset.code);
+    else if (action === 'admin-edit-appointment') {
+      modalEditAppointment(el.dataset.code);
+    }
+    else if (action === 'admin-delete-appointment') {
+      modalDeleteAppointment(el.dataset.code);
+    }
+    else if (action === 'admin-view-appointment') {
+      const code = el.dataset.code;
+      const a = getAppointment(code);
+      if (!a) { route('/booking/' + code); }
+      else {
+        const s = service(a.serviceId) || { name: 'Dịch vụ', duration: 60, price: a.total };
+        const dur = s.duration || 60;
+        const endTime = a.endTime || addMinutes(a.time, dur);
+        modal('Chi tiết lịch hẹn ' + a.code, `
+          <div style="display:flex;flex-direction:column;gap:12px;font-size:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:1px solid #e5e7eb;">
+              <div>
+                <div style="font-size:17px;font-weight:700;color:#111827;">${esc(a.customer)}</div>
+                <div style="font-size:13px;color:#6b7280;margin-top:2px;">Mã lịch: <span class="numeric">${a.code}</span></div>
+              </div>
+              <span class="badge ${a.status==='confirmed'?'success':a.status==='pending'?'warning':''}" style="font-size:12px;padding:4px 10px;">${statusLabel(a.status)}</span>
+            </div>
+            <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Số điện thoại</span><b class="numeric">${a.phone || '—'}</b></div>
+            <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Dịch vụ</span><b>${s.name} (${dur} phút)</b></div>
+            <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Thời gian</span><b class="numeric">${a.time} – ${endTime}, ${a.date}</b></div>
+            <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Địa điểm</span><b>${a.address || a.district || 'Tại Studio HOÀN'}</b></div>
+            <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Tổng chi phí</span><b class="numeric">${money(a.total)}</b></div>
+            <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Tiền cọc</span><b class="numeric">${a.deposit > 0 ? 'Đã nhận ' + money(a.deposit) : 'Chờ đối soát'}</b></div>
+            ${a.note ? `<div style="background:#f9fafb;padding:8px 12px;border-radius:6px;font-size:13px;color:#4b5563;"><b>Ghi chú:</b> ${esc(a.note)}</div>` : ''}
+            <div style="display:flex;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6;flex-wrap:wrap;">
+              <button class="btn btn-sm btn-dark" data-action="admin-status" data-code="${a.code}">Đổi trạng thái</button>
+              <button class="btn btn-sm btn-edit" data-action="admin-edit-appointment" data-code="${a.code}">Chỉnh sửa</button>
+              <button class="btn btn-sm btn-danger" data-action="admin-delete-appointment" data-code="${a.code}">Xóa lịch</button>
+              <a class="btn btn-sm" href="#/booking/${a.code}" target="_blank" style="text-decoration:none;display:inline-flex;align-items:center;">Xem trang khách →</a>
+            </div>
+          </div>
+        `, 'Đóng');
+      }
+    }
     else if (action === 'toggle-service') { const s=service(el.dataset.id); try{const result=await api({action:'saveService',...s,enabled:!s.enabled});Object.assign(s,result.service);toast('Đã cập nhật trạng thái dịch vụ');render();}catch(error){toast(error.message)} }
     else if (action === 'edit-service') { const s=service(el.dataset.id); modal('Chỉnh sửa dịch vụ',`<div class="field"><label>Tên dịch vụ</label><input id="modal-service-name" value="${s.name}"></div><div class="form-grid"><div class="field"><label>Thời lượng</label><input id="modal-service-duration" type="number" value="${s.duration}"></div><div class="field"><label>Giá</label><input id="modal-service-price" type="number" value="${s.price}"></div></div><div class="field"><label>Mô tả</label><textarea id="modal-service-desc">${s.description}</textarea></div>`,'Lưu thay đổi','edit-service:'+s.id); }
     else if (action === 'add-service') modal('Thêm dịch vụ',`<div class="field"><label>Tên dịch vụ</label><input id="modal-service-name"></div><div class="form-grid"><div class="field"><label>Thời lượng</label><input id="modal-service-duration" type="number" value="60"></div><div class="field"><label>Giá</label><input id="modal-service-price" type="number" value="500000"></div></div><div class="field"><label>Mô tả</label><textarea id="modal-service-desc"></textarea></div>`,'Thêm dịch vụ','add-service');
@@ -1510,18 +3990,156 @@
     else if (action === 'delete-promo') { state.promotions.splice(Number(el.dataset.index),1); saveState('Đã xóa mã ưu đãi'); render(); }
     else if (action === 'edit-promo') toast('Đã mở chỉnh sửa mã '+state.promotions[Number(el.dataset.index)].code);
     else if (action === 'hide-gallery') { el.closest('.admin-card').style.opacity='.35'; toast('Đã ẩn ảnh khỏi website'); }
-    else if (action === 'edit-gallery') toast('Đã chọn ảnh để chỉnh sửa nội dung');
-    else if (action === 'publish-content') { try{await api({action:'saveContent',key:'brand',value:state.brand});toast('Đã đăng thay đổi lên website');}catch(error){toast(error.message)} }
-    else if (action === 'new-notification') modal('Soạn thông báo',`<div class="field"><label>Tiêu đề</label><input id="modal-notification-title" value="Nhắc lịch hẹn"></div><div class="field"><label>Kênh</label><select id="modal-notification-channel"><option>Zalo</option><option>Email</option><option>Zalo + Email</option></select></div><div class="field"><label>Nội dung</label><textarea id="modal-notification-body">Lịch hẹn của bạn sẽ diễn ra vào ngày mai.</textarea></div>`,'Gửi thông báo','send-notification');
+    else if (action === 'publish-content') {
+      try {
+        const form = document.querySelector('form[data-form="content"]');
+        if (form) {
+          const dataObj = Object.fromEntries(new FormData(form));
+          if (dataObj.deposit !== undefined) {
+            state.settings.deposit = Number(dataObj.deposit);
+            delete dataObj.deposit;
+          }
+          if (dataObj.travelFee !== undefined) {
+            state.settings.travelFee = Number(dataObj.travelFee);
+            delete dataObj.travelFee;
+          }
+          Object.assign(state.brand, dataObj);
+        }
+        await api({action:'saveContent',key:'brand',value:state.brand});
+        await api({action:'saveContent',key:'settings',value:state.settings});
+        await hydrateBackend(true);
+        toast('Đã đăng thay đổi lên website công khai');
+        render();
+      } catch(error) { toast(error.message); }
+    }
+    else if (action === 'switch-content-view') {
+      state.contentViewMode = el.dataset.view;
+      if (el.dataset.view === 'pages') {
+        state.contentActiveTab = 'pages';
+      } else {
+        if (state.contentActiveTab === 'pages') state.contentActiveTab = 'home';
+      }
+      render();
+    }
+    else if (action === 'content-tab') {
+      state.contentActiveTab = el.dataset.tab;
+      if (el.dataset.tab === 'pages') {
+        state.contentViewMode = 'pages';
+      } else {
+        state.contentViewMode = 'general';
+        if (['home','about','services','booking','policies','contact'].includes(el.dataset.tab)) {
+          state.contentPreviewMode = el.dataset.tab;
+        }
+      }
+      render();
+    }
+    else if (action === 'set-preview-mode') {
+      state.contentPreviewMode = el.dataset.mode;
+      render();
+    }
+    else if (action === 'toggle-service-status') {
+      const svc = state.services.find(s => s.id === el.dataset.id);
+      if (svc) {
+        svc.enabled = !svc.enabled;
+        try {
+          await api({ action: 'saveService', ...svc });
+          toast(svc.enabled ? `Đã bật hiển thị ${svc.name}` : `Đã ẩn ${svc.name}`);
+          render();
+        } catch(e) { toast(e.message); }
+      }
+    }
+    else if (action === 'set-preset-color') {
+      const color = el.dataset.color;
+      state.brand.accent = color;
+      document.documentElement.style.setProperty('--wine', color);
+      const inputColor = document.getElementById('input-accent-color');
+      const pickerColor = document.getElementById('picker-accent-color');
+      if (inputColor) inputColor.value = color;
+      if (pickerColor) pickerColor.value = color;
+      toast(`Đã chọn mã màu ${color}`);
+      render();
+    }
+    else if (action === 'set-sample-image') {
+      const target = el.dataset.target;
+      const val = el.dataset.val;
+      state.brand[target] = val;
+      toast('Đã áp dụng ảnh mẫu');
+      render();
+    }
+    else if (action === 'goto-notifications') {
+      route('/admin/notifications');
+    }
+    else if (action === 'goto-profile') {
+      route('/admin/permissions');
+    }
     else if (action === 'resend-notification') toast('Đã gửi lại thông báo');
     else if (action === 'permission-toggle') { el.classList.toggle('on'); toast('Đã cập nhật quyền hiển thị'); }
     else if (action === 'setting-toggle' || action === 'toggle-schedule') { el.classList.toggle('on'); if(action==='setting-toggle') state.settings[el.dataset.key]=el.classList.contains('on'); else state.settings.scheduleOpen=el.classList.contains('on'); try{await api({action:'saveContent',key:'settings',value:state.settings});toast('Đã cập nhật thiết lập');render();}catch(error){toast(error.message)} }
     else if (action === 'reset-settings') { state.settings=structuredClone(defaultState.settings); saveState('Đã khôi phục cài đặt mặc định'); render(); }
     else if (action === 'week-prev') { state.adminWeekOffset--; saveState(); render(); }
     else if (action === 'week-next') { state.adminWeekOffset++; saveState(); render(); }
+    else if (action === 'week-today') { state.adminWeekOffset = 0; saveState(); render(); }
+    else if (action === 'toggle-weekday') {
+      const idx = Number(el.dataset.index);
+      if (!state.settings.weekDayOpen) state.settings.weekDayOpen = [true,true,true,true,true,true,false];
+      state.settings.weekDayOpen[idx] = !state.settings.weekDayOpen[idx];
+      try { await api({action:'saveContent',key:'settings',value:state.settings}); } catch(e){}
+      saveState(); render();
+      toast(state.settings.weekDayOpen[idx] ? 'Đã bật nhận lịch ngày này' : 'Đã tắt nhận lịch ngày này');
+    }
+    else if (action === 'copy-week') { toast('Đã sao chép thiết lập sang tuần sau'); }
+    else if (action === 'schedule-cell-v2') {
+      const { date, hour, status } = el.dataset;
+      const newStatus = status === 'available' ? 'blocked' : 'available';
+      try {
+        await api({action:'setScheduleSlot', date, time: hour, status: newStatus});
+        const existing = slotRecord(date, hour);
+        if (existing) existing.status = newStatus;
+        else state.scheduleSlots.push({slotDate: date, slotTime: hour, status: newStatus});
+        toast(newStatus === 'available' ? 'Đã mở khung giờ' : 'Đã chặn khung giờ');
+        render();
+      } catch(error) { toast(error.message); }
+    }
     else if (action === 'schedule-cell') { const status=el.dataset.status==='available'?'blocked':'available';try{await api({action:'setScheduleSlot',date:el.dataset.date,time:el.dataset.time,status});const existing=slotRecord(el.dataset.date,el.dataset.time);if(existing)existing.status=status;else state.scheduleSlots.push({slotDate:el.dataset.date,slotTime:el.dataset.time,status});toast(status==='available'?'Đã mở khung giờ':'Đã chặn khung giờ');render();}catch(error){toast(error.message)} }
     else if (action === 'save-schedule') toast('Lịch làm việc đã được lưu trực tiếp');
-    else if (action === 'block-time') modal('Chặn khung giờ',`<div class="form-grid"><div class="field"><label>Ngày</label><input id="modal-block-date" type="date"></div><div class="field"><label>Giờ bắt đầu</label><input id="modal-block-time" type="time"></div></div><div class="field"><label>Lý do</label><input id="modal-block-reason" value="Việc cá nhân"></div>`,'Chặn giờ','block-time');
+    else if (action === 'add-slot') modalAddSlot(localIso(), '09:00', '10:15');
+    else if (action === 'add-slot-at') modalAddSlot(el.dataset.date, el.dataset.hour, addMinutes(el.dataset.hour, 75));
+    else if (action === 'view-conflicts') {
+      const activeAppts = (state.appointments || []).filter(a => a.status !== 'cancelled');
+      const conflicts = [];
+      for (let i = 0; i < activeAppts.length; i++) {
+        for (let j = i + 1; j < activeAppts.length; j++) {
+          const a1 = activeAppts[i], a2 = activeAppts[j];
+          if (a1.date === a2.date) {
+            const timeToMin = (t) => { if (!t) return 0; const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
+            const s1 = timeToMin(a1.time), e1 = a1.endTime ? timeToMin(a1.endTime) : (s1 + (service(a1.serviceId)?.duration || 75));
+            const s2 = timeToMin(a2.time), e2 = a2.endTime ? timeToMin(a2.endTime) : (s2 + (service(a2.serviceId)?.duration || 75));
+            if (s1 < e2 && s2 < e1) {
+              conflicts.push({ a1, a2 });
+            }
+          }
+        }
+      }
+      if (conflicts.length === 0) {
+        modal('Trạng thái lịch làm việc', `
+          <div style="font-size:14px;line-height:1.6;color:#374151;">
+            <p style="margin-bottom:8px;color:#166534;font-weight:600;">✓ Toàn bộ lịch làm việc đang thông suốt!</p>
+            <p style="margin-bottom:0;">Không có bất kỳ khung giờ hoặc lịch hẹn nào bị xung đột hay trùng lặp.</p>
+          </div>
+        `, 'Đã hiểu', 'close-modal');
+      } else {
+        const conflictList = conflicts.map((c, i) => `
+          <p style="margin-bottom:8px;"><strong style="color:#b91c1c;">Xung đột ${i+1}:</strong> ${esc(c.a1.customer)} (${c.a1.time}) và ${esc(c.a2.customer)} (${c.a2.time}) ngày ${dateLabel(c.a1.date)}.</p>
+        `).join('');
+        modal('Chi tiết xung đột cần xử lý', `
+          <div style="font-size:14px;line-height:1.6;color:#374151;">
+            ${conflictList}
+            <p style="margin-top:12px;margin-bottom:0;font-size:13px;color:#6b7280;">Bạn có thể bấm vào từng lịch hẹn trên bảng để chỉnh sửa hoặc sắp xếp lại thời gian.</p>
+          </div>
+        `, 'Đã hiểu', 'close-modal');
+      }
+    }
+    else if (action === 'block-time') modal('Chặn khung giờ',`<div class="form-grid"><div class="field"><label>Ngày</label><input id="modal-block-date" type="date" value="${localIso()}"></div><div class="field"><label>Giờ bắt đầu</label><input id="modal-block-time" type="time" value="07:00"></div></div><div class="field"><label>Lý do</label><input id="modal-block-reason" value="Việc cá nhân"></div>`,'Chặn giờ','block-time');
     else if (action === 'manual-payment') { const paymentCode=el.dataset.code || (bookingCode==='CHƯA TẠO'?'':bookingCode);modal('Ghi nhận thanh toán',`<div class="field"><label>Mã lịch</label><input id="modal-payment-code" value="${paymentCode}"></div><div class="field"><label>Số tiền</label><input id="modal-payment-amount" type="number" value="${state.settings.deposit||200000}"></div>`,'Ghi nhận','manual-payment'); }
     else if (action === 'payment-receipt') route('/booking/'+el.dataset.code+'/receipt');
     else if (action?.startsWith('export')) downloadText(action+'.csv','HOÀN Makeup Artist\\nDữ liệu xuất ngày 04/09/2026');
@@ -1533,13 +4151,207 @@
   });
 
   async function handleModalConfirm(action) {
-    if (action === 'create-appointment') {
+    if (action.startsWith('update-req-status:')) {
+      const id = action.split(':')[1];
+      const newStatus = $('#modal-req-status')?.value || 'pending';
+      const reply = $('#modal-req-status-reply')?.value?.trim();
+      try {
+        await api({ action: 'resolveRequest', id, status: newStatus, ...(reply ? { reply } : {}) });
+        const r = (state.requests || []).find(x => x.id === id);
+        if (r) {
+          r.status = newStatus;
+          if (reply) r.reply = reply;
+        }
+        saveState();
+        toast('Đã cập nhật trạng thái yêu cầu');
+      } catch (err) {
+        toast(err.message || 'Lỗi khi cập nhật trạng thái');
+        return;
+      }
+    } else if (action.startsWith('edit-req-save:')) {
+      const id = action.split(':')[1];
+      const name = $('#modal-edit-req-name')?.value?.trim();
+      const phone = $('#modal-edit-req-phone')?.value?.trim();
+      const email = $('#modal-edit-req-email')?.value?.trim();
+      const subject = $('#modal-edit-req-subject')?.value?.trim();
+      const status = $('#modal-edit-req-status')?.value;
+      const message = $('#modal-edit-req-message')?.value?.trim();
+      const reply = $('#modal-edit-req-reply')?.value?.trim();
+
+      if (!name || !phone) { toast('Vui lòng nhập họ tên và số điện thoại'); return; }
+
+      try {
+        await api({ action: 'resolveRequest', id, name, phone, email, subject, status, message, reply });
+        const r = (state.requests || []).find(x => x.id === id);
+        if (r) {
+          Object.assign(r, { name, phone, email, subject, status, message, reply });
+        }
+        saveState();
+        toast('Đã cập nhật thông tin yêu cầu');
+      } catch (err) {
+        toast(err.message || 'Lỗi khi cập nhật yêu cầu');
+        return;
+      }
+    } else if (action.startsWith('delete-request:')) {
+      const id = action.split(':')[1];
+      try {
+        await api({ action: 'deleteRequest', id });
+        state.requests = (state.requests || []).filter(x => x.id !== id);
+        saveState();
+        toast('Đã xóa yêu cầu thành công');
+      } catch (err) {
+        toast(err.message || 'Lỗi khi xóa yêu cầu');
+        return;
+      }
+    } else if (action.startsWith('edit-appointment:')) {
+      const code = action.split(':')[1];
+      const customer = $('#modal-edit-customer')?.value?.trim();
+      const phone = $('#modal-edit-phone')?.value?.trim();
+      const serviceId = $('#modal-edit-service')?.value;
+      const date = $('#modal-edit-date')?.value;
+      const time = $('#modal-edit-time')?.value;
+      const status = $('#modal-edit-status')?.value;
+      const paymentStatus = $('#modal-edit-payment')?.value;
+      const deposit = Number($('#modal-edit-deposit')?.value || 0);
+      const total = Number($('#modal-edit-total')?.value || 0);
+      const address = $('#modal-edit-address')?.value?.trim();
+      const note = $('#modal-edit-note')?.value?.trim();
+
+      if (!customer || !phone) { toast('Vui lòng nhập họ tên và số điện thoại'); return; }
+      if (!date || !time) { toast('Vui lòng chọn ngày và giờ hẹn'); return; }
+
+      try {
+        const result = await api({
+          action: 'updateAppointment',
+          code,
+          customer,
+          phone,
+          serviceId,
+          date,
+          time,
+          status,
+          paymentStatus,
+          deposit,
+          total,
+          address,
+          note
+        });
+        const a = getAppointment(code);
+        if (a) {
+          Object.assign(a, result.appointment);
+          if (status === 'confirmed') a.paymentStatus = 'received';
+        }
+        saveState();
+        toast('✓ Đã cập nhật thông tin lịch hẹn');
+      } catch (err) {
+        toast(err.message || 'Lỗi khi cập nhật lịch hẹn');
+        return;
+      }
+    } else if (action.startsWith('delete-appointment:')) {
+      const code = action.split(':')[1];
+      try {
+        const deletedApt = state.appointments.find(x => x.code === code);
+        await api({ action: 'deleteAppointment', code });
+        state.appointments = state.appointments.filter(x => x.code !== code);
+        // Xóa khách hàng khỏi danh sách nếu không còn lịch hẹn nào
+        if (deletedApt) {
+          const stillHasApt = state.appointments.some(x => x.phone === deletedApt.phone || x.customer === deletedApt.customer);
+          if (!stillHasApt) {
+            state.customers = (state.customers || []).filter(c => c.phone !== deletedApt.phone && c.name !== deletedApt.customer);
+          }
+        }
+        saveState();
+        toast('✓ Đã xóa lịch hẹn thành công');
+      } catch (err) {
+        toast(err.message || 'Lỗi khi xóa lịch hẹn');
+        return;
+      }
+    } else if (action === 'create-appointment') {
       try {
         const result=await api({action:'createAppointment',customer:$('#modal-customer').value,phone:$('#modal-phone').value,serviceId:$('#modal-service').value,date:$('#modal-date').value,time:$('#modal-time').value,travelFee:0});
         state.appointments.unshift(result.appointment); await hydrateBackend(true); toast('Đã tạo lịch hẹn mới');
       } catch(error) { toast(error.message); return; }
+    } else if (action === 'create-slot') {
+      const date = $('#modal-slot-date')?.value || localIso();
+      const type = $('#modal-slot-type')?.value || 'available';
+      const start = $('#modal-slot-start')?.value || '09:00';
+      const end = $('#modal-slot-end')?.value || '10:15';
+      const title = $('#modal-slot-title')?.value?.trim() || '';
+      const serviceId = $('#modal-slot-service')?.value || 'party';
+      const phone = $('#modal-slot-phone')?.value?.trim() || '';
+      const note = $('#modal-slot-note')?.value?.trim() || '';
+
+      if (type === 'appointment') {
+        const cust = title || 'Khách hẹn';
+        const sObj = service(serviceId) || state.services[0];
+        const newApt = {
+          code: 'HOAN-' + Date.now().toString(36).toUpperCase().slice(-6),
+          customer: cust,
+          phone: phone || '0901234567',
+          serviceId: sObj.id,
+          date: date,
+          time: start,
+          endTime: end,
+          address: note || 'Tại studio HOÀN',
+          status: 'confirmed',
+          paymentStatus: 'received',
+          deposit: Number(state.settings.deposit || 200000),
+          total: sObj.price || 650000
+        };
+        try {
+          const res = await api({ action: 'createAppointment', ...newApt });
+          if (res && res.appointment) Object.assign(newApt, res.appointment);
+        } catch(e){}
+        state.appointments.unshift(newApt);
+        saveState();
+        toast(`✓ Đã thêm lịch hẹn cho ${cust} (${start} – ${end})`);
+      } else {
+        const slotStatus = type;
+        const slotNote = title || note || (type === 'travel' ? 'Di chuyển' : type === 'break' ? 'Nghỉ giữa lịch' : 'Không khả dụng');
+        const newSlot = {
+          slotDate: date,
+          slotTime: start,
+          endTime: end,
+          status: slotStatus,
+          note: slotNote
+        };
+        try {
+          await api({ action: 'setScheduleSlot', date, time: start, endTime: end, status: slotStatus, note: slotNote });
+        } catch(e){}
+        const existing = slotRecord(date, start);
+        if (existing) {
+          existing.status = slotStatus;
+          existing.endTime = end;
+          existing.note = slotNote;
+        } else {
+          state.scheduleSlots.push(newSlot);
+        }
+        saveState();
+        toast(`✓ Đã thêm khung giờ ${slotNote} (${start} – ${end})`);
+      }
+      closeModal();
+      render();
+      return;
     } else if (action.startsWith('update-status:')) {
-      try { const code=action.split(':')[1];const result=await api({action:'updateAppointment',code,status:$('#modal-status').value,date:$('#modal-appointment-date')?.value,time:$('#modal-appointment-time')?.value});Object.assign(getAppointment(code),result.appointment);toast('Đã cập nhật trạng thái lịch'); }
+      try {
+        const code=action.split(':')[1];
+        const newStatus=$('#modal-status').value;
+        const result=await api({action:'updateAppointment',code,status:newStatus,date:$('#modal-appointment-date')?.value,time:$('#modal-appointment-time')?.value});
+        const appt = getAppointment(code);
+        if (appt) {
+          Object.assign(appt, result.appointment);
+          if (newStatus === 'confirmed') {
+            appt.paymentStatus = 'received';
+          }
+        }
+        if (newStatus === 'confirmed') {
+          if (state.booking.code === code || bookingCode === code) {
+            state.booking.statusMode = 'confirmed';
+          }
+        }
+        saveState();
+        toast('Đã cập nhật trạng thái lịch: ' + (newStatus === 'confirmed' ? 'Đã xác nhận' : newStatus));
+      }
       catch(error){toast(error.message);return;}
     } else if (action.startsWith('edit-service:')) {
       try { const s=service(action.split(':')[1]);const result=await api({action:'saveService',...s,name:$('#modal-service-name').value,duration:Number($('#modal-service-duration').value),price:Number($('#modal-service-price').value),description:$('#modal-service-desc').value});Object.assign(s,result.service);toast('Đã lưu dịch vụ'); }
@@ -1568,7 +4380,7 @@
   }
 
   let navCloseTimer;
-  const finePointer = () => matchMedia('(hover: hover) and (pointer: fine) and (min-width: 1101px)').matches;
+  const finePointer = () => window.innerWidth > 1100;
   function closeEditorial(focusBack=false) {
     clearTimeout(navCloseTimer);
     const trigger=document.querySelector('[data-nav][aria-expanded="true"]');
@@ -1581,7 +4393,7 @@
     clearTimeout(navCloseTimer);
     document.querySelectorAll('.editorial-menu').forEach(p=>{p.hidden=p.id!=='nav-panel-'+key;});
     document.querySelectorAll('[data-nav],[data-nav-toggle]').forEach(t=>t.setAttribute('aria-expanded',String((t.dataset.nav||t.dataset.navToggle)===key)));
-    const veil=document.querySelector('.nav-veil');if(veil)veil.hidden=false;
+    const veil=document.querySelector('.nav-veil');if(veil)veil.hidden=true;
   }
   function previewEditorial(link) {
     const panel=link.closest('.editorial-menu');
@@ -1616,7 +4428,20 @@
   window.addEventListener('resize',()=>closeEditorial());
   window.addEventListener('hashchange',()=>closeEditorial());
   window.addEventListener('hashchange', render);
+  window.addEventListener('storage', async (event) => {
+    if (event.key && !['hoanDepositSyncTrigger', 'hoanMakeupDraft', 'hoanLastBookingCode'].includes(event.key)) return;
+    state = loadState();
+    if (typeof window !== 'undefined') window.state = state;
+    await hydrateBackend(true);
+    render();
+  });
   if (!location.hash) location.hash = '#/';
+  if (typeof document.createElement === 'function' && location.origin) {
+    import('/site-tools.js?v=140.0').then(({ createSiteTools }) => {
+      siteTools = createSiteTools({ getState: () => state, render, renderPathHtml, hydrateBackend, adminShell, esc, toast, icon });
+      siteTools.start();
+    }).catch(error => console.error('Không tải được công cụ website:', error));
+  }
   render();
   hydrateBackend();
 })();

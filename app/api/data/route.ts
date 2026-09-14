@@ -30,9 +30,9 @@ const initialSettings = {
   timezone: "GMT+7",
   scheduleOpen: true,
   travelFee: "50000",
-  bankName: "",
-  bankAccount: "",
-  bankOwner: "",
+  bankName: "MB Bank (Ngân hàng Quân Đội)",
+  bankAccount: "0901234567",
+  bankOwner: "NGUYEN HOAN",
 };
 
 function messageFor(error: unknown) {
@@ -59,6 +59,10 @@ function parseJson<T>(value: string | undefined, fallback: T): T {
   }
 }
 
+const initialAppointments: Array<typeof appointments.$inferInsert> = [];
+
+const initialScheduleSlots: Array<typeof scheduleSlots.$inferInsert> = [];
+
 async function ensureDefaults() {
   const db = getDb();
   const existingServices = await db.select({ id: services.id }).from(services).limit(1);
@@ -71,6 +75,52 @@ async function ensureDefaults() {
     !keys.has("settings") ? { key: "settings", value: JSON.stringify(initialSettings) } : null,
   ].filter(Boolean) as Array<{ key: string; value: string }>;
   if (missing.length) await db.insert(siteContent).values(missing);
+
+  // 1. Purge all mock/seed/dummy appointments
+  try {
+    const allAppts = await db.select({ code: appointments.code, customer: appointments.customer }).from(appointments);
+    const mockNames = [
+      'Nguyễn Minh Anh', 'Trần Ngọc Hà', 'Lê Thu Trang', 'Phạm Mai Linh', 'Hà Vy',
+      'Đỗ Quỳnh Chi', 'Bùi Thảo Nguyên', 'Nguyễn Thùy Dung', 'Vũ Hoàng Yến',
+      'Cầu Giấy', 'Tây Hồ', 'Nam Từ Liêm', 'Đặng Thu Trang', 'Đinh Mai Anh',
+      'Hoàng Phương Linh', 'Thanh Xuân', 'Mai Anh', 'Lưu Gia Hân', 'Phương Thảo',
+      'Hải Yến', 'Kim Ngân', 'Thu Phương', 'Ngọc Anh', 'Khánh Linh', 'Ngọc Diệp',
+      'Hương Giang', 'Bảo Trâm', 'Quỳnh Anh'
+    ];
+    for (const a of allAppts) {
+      if (
+        mockNames.includes(a.customer) ||
+        ['HMA-090926-BQ0', 'HMA-090926-MQ3', 'HMA-100926-MS7', 'HMA-090926-BIQ', 'HMA-180926-6W2'].includes(a.code)
+      ) {
+        await db.delete(appointments).where(eq(appointments.code, a.code));
+      }
+    }
+  } catch { /* ignore */ }
+
+  // 2. Clear mock schedule slots
+  try {
+    const allSlots = await db.select({ id: scheduleSlots.id, note: scheduleSlots.note }).from(scheduleSlots);
+    for (const s of allSlots) {
+      if (s.note === 'Di chuyển' || s.note === 'Nghỉ giữa lịch' || s.note === 'Không khả dụng' || !s.note) {
+        await db.delete(scheduleSlots).where(eq(scheduleSlots.id, s.id));
+      }
+    }
+  } catch { /* ignore */ }
+
+  // 3. Clear mock customers
+  try {
+    const mockNames = [
+      'Nguyễn Minh Anh', 'Trần Ngọc Hà', 'Lê Thu Trang', 'Phạm Mai Linh', 'Hà Vy',
+      'Đỗ Quỳnh Chi', 'Bùi Thảo Nguyên', 'Nguyễn Thùy Dung', 'Vũ Hoàng Yến',
+      'Cầu Giấy', 'Tây Hồ', 'Nam Từ Liêm', 'Đặng Thu Trang', 'Đinh Mai Anh',
+      'Hoàng Phương Linh', 'Thanh Xuân', 'Mai Anh', 'Lưu Gia Hân', 'Phương Thảo',
+      'Hải Yến', 'Kim Ngân', 'Thu Phương', 'Ngọc Anh', 'Khánh Linh', 'Ngọc Diệp',
+      'Hương Giang', 'Bảo Trâm', 'Quỳnh Anh'
+    ];
+    for (const name of mockNames) {
+      await db.delete(customers).where(eq(customers.name, name));
+    }
+  } catch { /* ignore */ }
 }
 
 async function snapshot() {
@@ -90,7 +140,13 @@ async function snapshot() {
     customers: customerRows,
     scheduleSlots: slotRows,
     brand: parseJson(content.brand, initialBrand),
-    settings: parseJson(content.settings, initialSettings),
+    settings: (() => {
+      const s = parseJson(content.settings, initialSettings);
+      if (!s.bankName) s.bankName = "MB Bank (Ngân hàng Quân Đội)";
+      if (!s.bankAccount) s.bankAccount = "0901234567";
+      if (!s.bankOwner) s.bankOwner = "NGUYEN HOAN";
+      return s;
+    })(),
     bookingDetails: Object.fromEntries(contentRows.filter(r=>r.key.startsWith("booking:")).map(r=>[r.key.slice(8), parseJson(r.value, {})])),
     requests: contentRows.filter(r=>r.key.startsWith("request:")).map(r=>parseJson(r.value, {})),
     serverTime: new Date().toISOString(),
@@ -185,24 +241,54 @@ export async function POST(request: Request) {
       if (allowedStatus.includes(text(payload.status))) changes.status = text(payload.status);
       if (/^\d{4}-\d{2}-\d{2}$/.test(text(payload.date))) changes.date = text(payload.date);
       if (/^\d{2}:\d{2}$/.test(text(payload.time))) changes.time = text(payload.time);
+      if (payload.customer) changes.customer = text(payload.customer);
+      if (payload.phone) changes.phone = text(payload.phone);
+      if (payload.serviceId) changes.serviceId = text(payload.serviceId);
+      if (payload.address !== undefined) changes.address = text(payload.address);
+      if (payload.district !== undefined) changes.district = text(payload.district);
+      if (payload.note !== undefined) changes.note = text(payload.note);
+      if (payload.style !== undefined) changes.style = text(payload.style);
+      if (payload.total !== undefined) changes.total = integer(payload.total);
+
       const [current] = await db.select().from(appointments).where(eq(appointments.code,code)).limit(1);
       if (!current) return Response.json({error:"Không tìm thấy lịch hẹn."},{status:404});
       if (changes.date || changes.time) {
         const nextDate=String(changes.date||current.date), nextTime=String(changes.time||current.time);
         const rows=await db.select().from(appointments).where(and(eq(appointments.date,nextDate),ne(appointments.status,'cancelled'),ne(appointments.code,code)));
         const serviceRows=await db.select().from(services);
+        const sid = String(changes.serviceId || current.serviceId);
         const minutes=(t:string)=>Number(t.slice(0,2))*60+Number(t.slice(3));
-        const start=minutes(nextTime),end=start+(serviceRows.find(s=>s.id===current.serviceId)?.duration||90);
+        const start=minutes(nextTime),end=start+(serviceRows.find(s=>s.id===sid)?.duration||90);
         if(rows.some(a=>start<minutes(a.time)+(serviceRows.find(s=>s.id===a.serviceId)?.duration||90)&&end>minutes(a.time)))return Response.json({error:'Thời gian mới trùng một lịch khác.'},{status:409});
       }
-      if (payload.deposit !== undefined && integer(payload.deposit)>current.total) return Response.json({error:"Khoản đã nhận không được vượt tổng chi phí."},{status:400});
+      const newTotal = changes.total !== undefined ? integer(changes.total) : current.total;
+      if (payload.deposit !== undefined && integer(payload.deposit)>newTotal) return Response.json({error:"Khoản đã nhận không được vượt tổng chi phí."},{status:400});
       if (payload.deposit !== undefined) {
         changes.deposit = integer(payload.deposit);
         changes.paymentStatus = integer(payload.deposit) > 0 ? "received" : "unverified";
       }
+      if (payload.paymentStatus !== undefined && ["received", "pending_verification", "unverified"].includes(text(payload.paymentStatus))) {
+        changes.paymentStatus = text(payload.paymentStatus);
+      }
+      if (payload.status === "confirmed") {
+        if (changes.deposit === undefined && (!current.deposit || current.deposit === 0)) {
+          changes.deposit = 200000;
+        }
+        changes.paymentStatus = "received";
+      } else if (payload.status === "pending" && payload.deposit === undefined && payload.paymentStatus === undefined) {
+        changes.paymentStatus = "pending_verification";
+      }
       const [updated] = await db.update(appointments).set(changes).where(eq(appointments.code, code)).returning();
       if (!updated) return Response.json({ error: "Không tìm thấy lịch hẹn." }, { status: 404 });
       return Response.json({ appointment: updated });
+    }
+
+    if (action === "deleteAppointment") {
+      const code = text(payload.code);
+      if (!code) return Response.json({ error: "Thiếu mã lịch hẹn." }, { status: 400 });
+      await db.delete(appointments).where(eq(appointments.code, code));
+      await db.delete(siteContent).where(eq(siteContent.key, 'booking:' + code));
+      return Response.json({ ok: true });
     }
 
     if (action === "reportPayment") {
@@ -223,13 +309,34 @@ export async function POST(request: Request) {
       await db.insert(siteContent).values({key:'request:'+id,value:JSON.stringify(record)});
       return Response.json({request:record},{status:201});
     }
-    if (action === "resolveRequest") {
-      const key='request:'+text(payload.id); const [row]=await db.select().from(siteContent).where(eq(siteContent.key,key)).limit(1);
-      if(!row)return Response.json({error:'Không tìm thấy yêu cầu.'},{status:404});
-      const record={...parseJson<Record<string,unknown>>(row.value,{}),status:'resolved',reply:text(payload.reply),resolvedAt:new Date().toISOString()};
-      if(!record.reply)return Response.json({error:'Vui lòng nhập kết quả xử lý.'},{status:400});
-      await db.update(siteContent).set({value:JSON.stringify(record),updatedAt:new Date().toISOString()}).where(eq(siteContent.key,key));
-      return Response.json({request:record});
+    if (action === "resolveRequest" || action === "updateRequest") {
+      const id = text(payload.id);
+      const key = 'request:' + id;
+      const [row] = await db.select().from(siteContent).where(eq(siteContent.key, key)).limit(1);
+      if (!row) return Response.json({ error: 'Không tìm thấy yêu cầu.' }, { status: 404 });
+      const current = parseJson<Record<string, unknown>>(row.value, {});
+      const status = text(payload.status) || (text(current.status) || 'pending');
+      const reply = payload.reply !== undefined ? text(payload.reply) : (text(current.reply) || '');
+      const record = {
+        ...current,
+        ...(payload.name !== undefined ? { name: text(payload.name) } : {}),
+        ...(payload.phone !== undefined ? { phone: text(payload.phone) } : {}),
+        ...(payload.email !== undefined ? { email: text(payload.email) } : {}),
+        ...(payload.subject !== undefined ? { subject: text(payload.subject) } : {}),
+        ...(payload.message !== undefined ? { message: text(payload.message) } : {}),
+        status,
+        reply,
+        resolvedAt: status === 'resolved' ? (current.resolvedAt || new Date().toISOString()) : (status === 'pending' ? '' : current.resolvedAt),
+        updatedAt: new Date().toISOString(),
+      };
+      await db.update(siteContent).set({ value: JSON.stringify(record), updatedAt: new Date().toISOString() }).where(eq(siteContent.key, key));
+      return Response.json({ request: record });
+    }
+    if (action === "deleteRequest") {
+      const id = text(payload.id);
+      const key = 'request:' + id;
+      await db.delete(siteContent).where(eq(siteContent.key, key));
+      return Response.json({ ok: true });
     }
     if (action === "setScheduleSlot") {
       const slotDate = text(payload.date);

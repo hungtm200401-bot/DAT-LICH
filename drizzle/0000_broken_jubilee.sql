@@ -1,4 +1,4 @@
-CREATE TABLE `appointments` (
+CREATE TABLE IF NOT EXISTS `appointments` (
 	`code` text PRIMARY KEY NOT NULL,
 	`customer` text NOT NULL,
 	`phone` text NOT NULL,
@@ -20,10 +20,10 @@ CREATE TABLE `appointments` (
 	`updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `appointments_date_idx` ON `appointments` (`date`);--> statement-breakpoint
-CREATE INDEX `appointments_phone_idx` ON `appointments` (`phone`);--> statement-breakpoint
-CREATE INDEX `appointments_status_idx` ON `appointments` (`status`);--> statement-breakpoint
-CREATE TABLE `customers` (
+CREATE INDEX IF NOT EXISTS `appointments_date_idx` ON `appointments` (`date`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `appointments_phone_idx` ON `appointments` (`phone`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `appointments_status_idx` ON `appointments` (`status`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `customers` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`name` text NOT NULL,
 	`phone` text NOT NULL,
@@ -34,8 +34,8 @@ CREATE TABLE `customers` (
 	`updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `customers_phone_unique` ON `customers` (`phone`);--> statement-breakpoint
-CREATE TABLE `schedule_slots` (
+CREATE UNIQUE INDEX IF NOT EXISTS `customers_phone_unique` ON `customers` (`phone`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `schedule_slots` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`slot_date` text NOT NULL,
 	`slot_time` text NOT NULL,
@@ -44,9 +44,9 @@ CREATE TABLE `schedule_slots` (
 	`updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `schedule_date_time_unique` ON `schedule_slots` (`slot_date`,`slot_time`);--> statement-breakpoint
-CREATE INDEX `schedule_date_idx` ON `schedule_slots` (`slot_date`);--> statement-breakpoint
-CREATE TABLE `services` (
+CREATE UNIQUE INDEX IF NOT EXISTS `schedule_date_time_unique` ON `schedule_slots` (`slot_date`,`slot_time`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `schedule_date_idx` ON `schedule_slots` (`slot_date`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `services` (
 	`id` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,
 	`duration` integer NOT NULL,
@@ -58,7 +58,7 @@ CREATE TABLE `services` (
 	`updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE `site_content` (
+CREATE TABLE IF NOT EXISTS `site_content` (
 	`key` text PRIMARY KEY NOT NULL,
 	`value` text NOT NULL,
 	`updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL

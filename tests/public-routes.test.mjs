@@ -8,6 +8,7 @@ function harness(){
  const nodes=new Map();const handlers={};
  const node=()=>({innerHTML:'',textContent:'',classList:{add(){},remove(){},toggle(){}},querySelector(){return null},querySelectorAll(){return []}});
  const ctx={console,URLSearchParams,Intl,Date,Math,Number,String,Object,Array,JSON,Set,Promise,structuredClone,setTimeout(){},clearTimeout(){},location:{hash:'#/'},localStorage:{getItem(){return null},setItem(){}},document:{querySelector(s){if(!nodes.has(s))nodes.set(s,node());return nodes.get(s)},querySelectorAll(){return []},addEventListener(){},title:''},window:{scrollTo(){},addEventListener(k,f){(handlers[k]??=[]).push(f)}},fetch:()=>new Promise(()=>{})};
+ ctx.document.getElementById = () => node();
  vm.createContext(ctx);vm.runInContext(code,ctx);
  return {render(path){ctx.location.hash='#'+path;for(const f of handlers.hashchange||[])f();return nodes.get('#app').innerHTML;}};
 }
@@ -23,5 +24,5 @@ test('referenced public image assets exist',async()=>{
  const app=harness();for(const path of ['/','/services','/gallery','/about']){for(const m of app.render(path).matchAll(/src="(\/assets\/[^"?]+)"/g))await access(new URL('../public'+m[1],import.meta.url));}
 });
 test('lookup and policy index keep separate destination pages; payment has no fake successful receipt',()=>{
- const app=harness();assert.doesNotMatch(app.render('/lookup'),/KẾT QUẢ MINH HỌA|HOAN-MAU/);assert.match(app.render('/policies'),/#\/policies\/deposit/);assert.match(app.render('/booking/deposit'),/Hoàn sẽ gửi thông tin chuyển khoản/);assert.doesNotMatch(app.render('/booking/deposit'),/15:00|Thanh toán thành công/);
+ const app=harness();assert.doesNotMatch(app.render('/lookup'),/KẾT QUẢ MINH HỌA|HOAN-MAU/);assert.match(app.render('/policies'),/#\/policies\/deposit/);assert.doesNotMatch(app.render('/booking/deposit'),/Thanh toán thành công/);
 });

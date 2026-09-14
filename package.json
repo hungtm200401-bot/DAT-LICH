@@ -13,7 +13,7 @@
     "test": "npm run build && node --test tests/project.test.mjs",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate",
-    "db:migrate:local": "wrangler d1 execute site-creator-d1 --config wrangler.local.json --local --file drizzle/0000_broken_jubilee.sql --persist-to .wrangler/state"
+    "db:migrate:local": "wrangler d1 execute site-creator-d1 --config wrangler.local.json --local --file drizzle/0000_broken_jubilee.sql --persist-to .wrangler/state && wrangler d1 execute site-creator-d1 --config wrangler.local.json --local --file drizzle/0001_visit_analytics.sql --persist-to .wrangler/state"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

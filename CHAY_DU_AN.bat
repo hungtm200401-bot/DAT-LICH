@@ -1,4 +1,5 @@
 @echo off
+cd /d "%~dp0"
 chcp 65001 >nul
 title HOAN Makeup Booking Admin
 echo Dang cai dat thu vien...

@@ -413,8 +413,27 @@ button { cursor: pointer; }
 .data-table th { text-align: left; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); padding: 10px 8px; }
 .data-table td { border-bottom: 1px solid #e8e8e8; padding: 11px 8px; vertical-align: middle; }
 .data-table tr:hover td { background: #fafafa; }
-.table-actions { display: flex; gap: 6px; justify-content: flex-end; }
-.mini-action { border: 0; background: transparent; padding: 4px; font-size: .78rem; text-decoration: underline; }
+.table-actions { display: flex; gap: 6px; align-items: center; justify-content: flex-start; flex-wrap: wrap; }
+.mini-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: .78rem;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--ink);
+  text-decoration: none !important;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.mini-action:hover {
+  background: var(--surface);
+  border-color: #cbd5e1;
+}
 .mini-action.icon-only { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid var(--line); text-decoration: none; }
 .mini-action.icon-only:hover { border-color: var(--wine); color: var(--wine); }
 .task-item { display: grid; grid-template-columns: 54px 1fr auto; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); align-items: center; }
@@ -770,8 +789,8 @@ button { cursor: pointer; }
 .gallery-caption .wine { color: #666; }
 .detail-photo img, .look-main img, .look-crop img { transition: transform 1000ms var(--ease); }
 @media (hover:hover) and (pointer:fine) {
-  a:hover > .fashion-photo .fashion-full, a:focus-visible > .fashion-photo .fashion-full { opacity: 0; transform: scale(1.025); }
-  a:hover > .fashion-photo .fashion-detail, a:focus-visible > .fashion-photo .fashion-detail { opacity: 1; transform: scale(1.08); }
+  a:hover > .fashion-photo .fashion-full, a:focus-visible > .fashion-photo .fashion-full { opacity: 1; transform: scale(1.035); }
+  a:hover > .fashion-photo .fashion-detail, a:focus-visible > .fashion-photo .fashion-detail { opacity: 0; }
   a:hover > .fashion-photo .photo-discover, a:focus-visible > .fashion-photo .photo-discover { opacity: 1; transform: none; }
   .hero-photo-link:hover > img, .hero-photo-link:focus-visible > img { transform: scale(1.035); }
   .hero-photo-link:hover .hero-photo-cta::before { transform: scaleX(1); }
