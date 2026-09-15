@@ -60,7 +60,8 @@
       trend: '<path d="m3 17 6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
       star: '<path d="m12 2 3 6 6 .9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 8.9 9 8z"/>',
       lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
-      upload: '<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>'
+      upload: '<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>',
+      close: '<path d="m6 6 12 12M6 18 18 6"/>'
     };
     const title = label ? `<title>${label}</title>` : '';
     return `<svg class="ui-icon ui-icon-${name}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${title}${paths[name] || paths.more}</svg>`;
@@ -380,7 +381,7 @@
     return `<footer class="public-footer couture-footer ${isAbout?'ct-about-footer':''}">${brandMarkup()}<nav aria-label="Thông tin và hỗ trợ">${footerNav.map(([p,t],i)=>`${i>0?'<span class="footer-sep">|</span>':''}<a ${current.startsWith('/'+p)?'aria-current="page"':''} href="#/${p}">${t}</a>`).join('')}</nav>${socialLinks}${tagline}</footer>`;
   }
   function ctPage(active,title,body,breadcrumb=title,wide=false) {
-    return `<div class="page couture ct-page-${active||'default'}">${publicHeader(active)}<main id="main" class="ct-main ${wide?'ct-wide':''}"><div class="breadcrumbs"><a href="#/">Trang chủ</a><span>/</span>${esc(breadcrumb)}</div>${title?`<h1 class="ct-title">${title}</h1>`:''}${body}</main>${publicFooter()}</div>`;
+    return `<div class="page couture ct-page-${active||'default'}">${publicHeader(active)}<main id="main" class="ct-main ${wide?'ct-wide':''}"><div class="breadcrumbs"><a href="#/">Trang chủ</a><span>›</span>${esc(breadcrumb)}</div>${title?`<h1 class="ct-title">${title}</h1>`:''}${body}</main>${publicFooter()}</div>`;
   }
   function bookingInvite() {
     const b = state.brand || {};
@@ -2813,7 +2814,7 @@
     const previous = motionRoute;
     motionRoute = location.hash;
     const main = document.querySelector('.couture main');
-    if (!main || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (!main || new URLSearchParams(location.search).get('cmsPreview') === '1' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const cleanups = [];
     const animations = new Set();
     const animate = (node, frames, options) => {
@@ -4441,7 +4442,11 @@
       siteTools = createSiteTools({ getState: () => state, render, renderPathHtml, hydrateBackend, adminShell, esc, toast, icon });
       siteTools.start();
     }).catch(error => console.error('Không tải được công cụ website:', error));
+    import('/scroll-enhancements.js?v=1.0').then(() => {
+      if (typeof window.initHoanScroll === 'function') window.initHoanScroll();
+    }).catch(() => {});
   }
   render();
   hydrateBackend();
+  if (typeof window.initHoanScroll === 'function') window.initHoanScroll();
 })();

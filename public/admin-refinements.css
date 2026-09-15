@@ -736,4 +736,571 @@
   }
 }
 
+/* ============================================================
+   THANH CUỘN & TIỆN ÍCH CUỘN TRANG CAO CẤP — HOÀN STUDIO ADMIN
+   ============================================================ */
+
+/* === 1. THANH CUỘN CHUYÊN NGHIỆP (LUXURY HAUTE COUTURE SCROLLBAR) === */
+html {
+  scroll-behavior: smooth;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(122, 24, 50, 0.45);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.25s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(122, 24, 50, 0.85);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background-color: #7a1832;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox standard */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(122, 24, 50, 0.5) transparent;
+}
+
+/* Thanh cuộn cho các khu vực bảng, sidebar, modal */
+.admin-sidebar,
+.visit-table-wrap,
+.table-wrap,
+.modal-body,
+#visit-detail {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(122, 24, 50, 0.4) transparent;
+}
+
+.admin-sidebar::-webkit-scrollbar,
+.visit-table-wrap::-webkit-scrollbar,
+.table-wrap::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.admin-sidebar::-webkit-scrollbar-thumb,
+.visit-table-wrap::-webkit-scrollbar-thumb,
+.table-wrap::-webkit-scrollbar-thumb {
+  background-color: rgba(122, 24, 50, 0.35);
+  border-radius: 99px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+.admin-sidebar::-webkit-scrollbar-thumb:hover,
+.visit-table-wrap::-webkit-scrollbar-thumb:hover,
+.table-wrap::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(122, 24, 50, 0.75);
+}
+
+/* === 2. THANH ĐO TIẾN ĐỘ CUỘN TRANG (TOP SCROLL PROGRESS BAR) === */
+#scroll-progress-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  z-index: 99999;
+  background: transparent;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+#scroll-progress-bar.is-active {
+  opacity: 1;
+}
+
+#scroll-progress-bar .scroll-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #7a1832 0%, #a85560 40%, #c9747c 75%, #d4a373 100%);
+  box-shadow: 0 0 10px rgba(122, 24, 50, 0.5), 0 0 4px rgba(212, 163, 115, 0.6);
+  border-radius: 0 2px 2px 0;
+  transition: width 0.1s linear;
+}
+
+/* === 3. NÚT NỔI CUỘN LÊN ĐẦU TRANG (FLOATING BACK TO TOP WITH CIRCULAR PROGRESS) === */
+.back-to-top-btn {
+  position: fixed;
+  bottom: 30px;
+  right: 30px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(122, 24, 50, 0.2);
+  color: #7a1832;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99990;
+  box-shadow: 0 6px 20px rgba(122, 24, 50, 0.12), 0 2px 6px rgba(0, 0, 0, 0.05);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(20px) scale(0.85);
+  transition: opacity 0.3s cubic-bezier(0.2, 0.8, 0.2, 1),
+              transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1),
+              visibility 0.3s,
+              box-shadow 0.25s ease,
+              border-color 0.25s ease;
+  outline: none;
+  padding: 0;
+}
+
+.back-to-top-btn.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+}
+
+.back-to-top-btn:hover {
+  transform: translateY(-4px) scale(1.06);
+  box-shadow: 0 10px 28px rgba(122, 24, 50, 0.22), 0 4px 10px rgba(0, 0, 0, 0.08);
+  border-color: rgba(122, 24, 50, 0.45);
+  background: #ffffff;
+}
+
+.back-to-top-btn.is-clicked {
+  transform: scale(0.92);
+}
+
+.back-to-top-btn .progress-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+  pointer-events: none;
+}
+
+.back-to-top-btn .progress-ring-bg {
+  stroke: rgba(122, 24, 50, 0.1);
+}
+
+.back-to-top-btn .progress-ring-fill {
+  stroke: #7a1832;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.15s linear;
+}
+
+.back-to-top-btn .btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.25s ease, opacity 0.2s ease;
+}
+
+.back-to-top-btn:hover .btn-icon {
+  transform: translateY(-2px);
+  opacity: 0;
+}
+
+.back-to-top-btn .btn-percent {
+  position: absolute;
+  font-family: var(--sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+  font-size: 11px;
+  font-weight: 700;
+  color: #7a1832;
+  letter-spacing: -0.02em;
+  opacity: 0;
+  transform: translateY(3px);
+  transition: transform 0.25s ease, opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.back-to-top-btn:hover .btn-percent {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.back-to-top-btn .btn-tooltip {
+  position: absolute;
+  right: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%) translateX(6px);
+  background: #18181b;
+  color: #ffffff;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.back-to-top-btn .btn-tooltip::after {
+  content: '';
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  border-width: 4px;
+  border-style: solid;
+  border-color: transparent transparent transparent #18181b;
+}
+
+.back-to-top-btn:hover .btn-tooltip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+/* === 4. CỐ ĐỊNH SIDEBAR (BỎ STICKY TH ĐỂ TRÁNH LỖI ĐÈ CẮT DÒNG BẢNG HÀNH TRÌNH) === */
+@media (min-width: 901px) {
+  .admin-sidebar {
+    position: sticky;
+    top: 63px;
+    max-height: calc(100vh - 63px);
+    overflow-y: auto;
+  }
+}
+
+.visit-table th,
+.data-table th {
+  position: static !important;
+  top: auto !important;
+  z-index: auto !important;
+  background: #f9fafb !important;
+  padding: 12px 14px !important;
+  border-bottom: 2px solid var(--line) !important;
+  color: #475569 !important;
+  font-size: 11px !important;
+  letter-spacing: 0.06em !important;
+  box-shadow: none !important;
+}
+
+.visit-table td {
+  padding: 14px 12px !important;
+  vertical-align: top !important;
+  border-bottom: 1px solid #e8e8e8 !important;
+  background: #ffffff !important;
+}
+
+.visit-table tbody tr:hover td {
+  background: #fafbfc !important;
+}
+
+.visitor-profile-cell {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 12px !important;
+}
+
+.visitor-avatar {
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 50% !important;
+  background: #18181b !important;
+  color: #ffffff !important;
+  display: grid !important;
+  place-items: center !important;
+  font-weight: 600 !important;
+  font-size: 15px !important;
+  flex-shrink: 0 !important;
+  margin-top: 1px !important;
+}
+
+.visitor-info-text {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 3px !important;
+}
+
+.visitor-info-text b {
+  font-size: 14px !important;
+  line-height: 1.35 !important;
+  color: #09090b !important;
+  font-weight: 600 !important;
+}
+
+.unverified-tag {
+  display: inline-flex !important;
+  align-items: center !important;
+  width: fit-content !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  color: #71717a !important;
+  background: #f4f4f5 !important;
+  border: 1px solid #e4e4e7 !important;
+  padding: 2px 8px !important;
+  border-radius: 12px !important;
+  margin-top: 4px !important;
+}
+
+#visit-detail {
+  pointer-events: none !important;
+}
+.visit-detail-card {
+  pointer-events: auto !important;
+}
+
+/* === 5. NÚT LIÊN KẾT FACEBOOK CÁ NHÂN TRỰC TIẾP === */
+.btn-fb-direct-link {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  margin-top: 5px !important;
+  padding: 4px 10px !important;
+  border-radius: 4px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  background: #1877f2 !important;
+  color: #ffffff !important;
+  text-decoration: none !important;
+  box-shadow: 0 1px 3px rgba(24, 119, 242, 0.3) !important;
+  transition: all 0.2s ease !important;
+  width: fit-content !important;
+}
+
+.btn-fb-direct-link:hover {
+  background: #166fe5 !important;
+  color: #ffffff !important;
+  box-shadow: 0 3px 8px rgba(24, 119, 242, 0.45) !important;
+  transform: translateY(-1px) !important;
+}
+
+.lead-badge.fb-badge {
+  background: rgba(24, 119, 242, 0.1) !important;
+  color: #1877f2 !important;
+  border: 1px solid rgba(24, 119, 242, 0.25) !important;
+}
+
+/* === 6. TOÀN DIỆN LIVE PREVIEW 100% RỘNG RÃI & GỌN GÀNG === */
+.cms-workspace.full-live-mode,
+.cms-workspace.full-live-mode .cms-live-main-form {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 16px !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.cms-preview-panel.full-width-live-preview {
+  width: 100% !important;
+  max-width: 100% !important;
+  position: static !important;
+  background: #ffffff !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04) !important;
+}
+
+.preview-panel-header.live-top-controls {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+  padding: 14px 20px !important;
+  background: #fafafa !important;
+  border-bottom: 1px solid var(--line) !important;
+  flex-wrap: wrap !important;
+}
+
+.live-controls-left {
+  display: flex !important;
+  align-items: center !important;
+  gap: 14px !important;
+  flex-wrap: wrap !important;
+}
+
+.live-controls-right {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+.cms-inline-select-label {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.inline-select-title {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: var(--ink) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+}
+
+.cms-page-select-modern {
+  padding: 7px 14px !important;
+  border-radius: 6px !important;
+  border: 1px solid var(--line) !important;
+  background: #ffffff !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: var(--ink) !important;
+  cursor: pointer !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+}
+
+.cms-live-status-pill {
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  color: var(--muted) !important;
+  padding: 3px 8px !important;
+  border-radius: 4px !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--line) !important;
+}
+
+.live-preview-viewport {
+  width: 100% !important;
+  height: calc(100vh - 180px) !important;
+  min-height: 850px !important;
+  background: #f8fafc !important;
+}
+
+.live-preview-viewport iframe#cms-real-preview {
+  width: 100% !important;
+  height: 100% !important;
+  border: none !important;
+  display: block !important;
+}
+
+/* === 7. THƯ VIỆN ẢNH THUẦN TÚY (CHỈ HIỂN THỊ ẢNH THEO YÊU CẦU) === */
+.cms-modal-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)) !important;
+  gap: 12px !important;
+  padding: 16px 20px !important;
+  background: #09090b !important;
+  min-height: 240px !important;
+  max-height: 340px !important;
+  overflow-y: auto !important;
+}
+
+.cms-gallery-item {
+  position: relative !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  aspect-ratio: 4 / 3 !important;
+  cursor: pointer !important;
+  border: 2px solid rgba(255, 255, 255, 0.12) !important;
+  background: #18181b !important;
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.cms-gallery-item:hover {
+  transform: translateY(-3px) scale(1.02) !important;
+  border-color: #d4af37 !important;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5) !important;
+}
+
+.cms-gallery-item.selected {
+  border-color: #d4af37 !important;
+  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.5) !important;
+}
+
+.cms-gallery-thumb-wrap {
+  width: 100% !important;
+  height: 100% !important;
+  position: relative !important;
+}
+
+.cms-gallery-thumb-wrap img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
+  transition: transform 0.3s ease !important;
+}
+
+.cms-gallery-item:hover .cms-gallery-thumb-wrap img {
+  transform: scale(1.06) !important;
+}
+
+.cms-gallery-selected-badge {
+  position: absolute !important;
+  top: 8px !important;
+  left: 8px !important;
+  background: #7a1832 !important;
+  color: #ffffff !important;
+  font-size: 10.5px !important;
+  font-weight: 700 !important;
+  padding: 3px 8px !important;
+  border-radius: 4px !important;
+  border: 1px solid #d4af37 !important;
+  letter-spacing: 0.04em !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4) !important;
+  z-index: 2 !important;
+}
+
+.cms-gallery-info,
+.cms-btn-choose,
+.cms-gallery-hover-overlay {
+  display: none !important;
+}
+
+.btn-add-media {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  background: #fdf2f4 !important;
+  color: #7a1832 !important;
+  border: 1px solid rgba(122, 24, 50, 0.3) !important;
+  font-weight: 600 !important;
+  padding: 8px 14px !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  font-size: 13px !important;
+  transition: all 0.2s ease !important;
+}
+.btn-add-media:hover {
+  background: #7a1832 !important;
+  color: #ffffff !important;
+  border-color: #7a1832 !important;
+}
+.cms-preview-hint-pill {
+  position: fixed !important;
+  bottom: 18px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  background: rgba(24, 24, 27, 0.92) !important;
+  backdrop-filter: blur(8px) !important;
+  color: #ffffff !important;
+  padding: 8px 18px !important;
+  border-radius: 99px !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25) !important;
+  pointer-events: none !important;
+  z-index: 999999 !important;
+  letter-spacing: 0.01em !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+}
+
+
+
 

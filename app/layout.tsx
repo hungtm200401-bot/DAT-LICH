@@ -25,7 +25,8 @@ export default function RootLayout({
         <link rel="stylesheet" href="/styles.css?v=2.3" />
         <link rel="stylesheet" href="/couture.css?v=117.0" />
         <link rel="stylesheet" href="/site-tools.css?v=144.0" />
-        <link rel="stylesheet" href="/admin-refinements.css?v=6" />
+        <link rel="stylesheet" href="/admin-refinements.css?v=7" />
+        <script src="/scroll-enhancements.js?v=2.0" defer></script>
       </head>
       <body suppressHydrationWarning>{children}</body>
     </html>

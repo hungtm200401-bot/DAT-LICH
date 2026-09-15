@@ -1,5 +1,6 @@
 // Shared CMS preview and first-party pseudonymous visit analytics. No Meta pixel,
 // fingerprinting, IP storage, form-field harvesting, or inferred identity.
+import { openImageEditor, bindImagePan, positionValue, setImagePosition } from './image-editor.js';
 export const publicPages = [
   ['/', 'Trang chủ'], ['/about', 'Về Hoàn'], ['/services', 'Danh sách dịch vụ'],
   ...['personal', 'party', 'photo', 'bridal'].map((id, i) => ['/services/' + id, ['Cá nhân', 'Dự tiệc', 'Chụp ảnh', 'Cô dâu'][i]]),
@@ -21,7 +22,7 @@ export function createSiteTools(ctx) {
     get(key) { try { return localStorage.getItem(key); } catch { return null; } },
     set(key, value) { try { localStorage.setItem(key, value); } catch { /* storage may be blocked */ } },
   };
-  let pages = {}, selected = '/', draft = {}, revision = '', dirty = false, descriptors = [], framePath = '';
+  let pages = {}, selected = '/', draft = {}, revision = '', dirty = false, descriptors = [], framePath = '', isApplyingPreview = false;
   let report = null, reportError = '', reportLoading = false, offset = 0, days = '7', source = '', onlyActive = false;
   let detailSession = '', detailOffset = 0;
   let activeVisitorTab = 'all', visitorSearchQuery = '', visitorQuickFilter = 'all', lastGeneratedQrSvg = '';
@@ -82,8 +83,12 @@ export function createSiteTools(ctx) {
     return clean.replace(/^\//, '') || 'Trang chủ';
   };
   const frame = () => q('#cms-real-preview');
-  function sendPreview() {
-    frame()?.contentWindow?.postMessage({ type: 'hoan:preview', brand: ctx.getState().brand, settings: ctx.getState().settings, path: selected, fields: draft }, location.origin);
+  function sendPreview(overrides = {}, frameScrollY) {
+    frame()?.contentWindow?.postMessage({
+      type: 'hoan:preview', brand: ctx.getState().brand, settings: ctx.getState().settings,
+      path: selected, fields: { ...draft, ...overrides },
+      ...(frameScrollY !== undefined ? { scrollY: frameScrollY } : {})
+    }, location.origin);
   }
 
   const studioMediaCatalog = [
@@ -142,6 +147,7 @@ export function createSiteTools(ctx) {
     return { tag: 'P', roleName: 'Đoạn văn bản', badgeClass: 'role-p' };
   }
 
+  const originalNodes = new WeakMap();
   function scanNodes(root, path) {
     if (!publicPages.some(([p]) => p === path)) return [];
     const booking = path.startsWith('/booking/') || ['/lookup', '/search'].includes(path);
@@ -158,11 +164,18 @@ export function createSiteTools(ctx) {
       const index = counters[type] = (counters[type] || 0) + 1;
       const section = detectSection(node, path);
       const role = detectRole(node, type);
+      if (!originalNodes.has(node)) originalNodes.set(node, {
+        src: node.getAttribute('src'), alt: node.getAttribute('alt') || '', text: node.textContent,
+        position: node.isConnected ? node.ownerDocument.defaultView.getComputedStyle(node).objectPosition : '50% 50%',
+        inlinePosition: node.style.objectPosition, positionPriority: node.style.getPropertyPriority('object-position'),
+      });
+      const original = originalNodes.get(node);
       if (type === 'img') return [
-        { key: `img-${index}`, label: 'Ảnh · ' + (node.alt || index), original: node.getAttribute('src'), node, attr: 'src', section, role: { tag: 'IMG', roleName: 'Hình ảnh chính', badgeClass: 'role-img' } },
-        { key: `alt-${index}`, label: 'Mô tả ảnh · ' + index, original: node.alt || '', node, attr: 'alt', section, role: { tag: 'ALT', roleName: 'Mô tả ảnh (Alt)', badgeClass: 'role-alt' } },
+        { key: `img-${index}`, label: 'Ảnh · ' + (original.alt || index), original: original.src, node, attr: 'src', section, role: { tag: 'IMG', roleName: 'Hình ảnh chính', badgeClass: 'role-img' } },
+        { key: `alt-${index}`, label: 'Mô tả ảnh · ' + index, original: original.alt, node, attr: 'alt', section, role: { tag: 'ALT', roleName: 'Mô tả ảnh (Alt)', badgeClass: 'role-alt' } },
+        { key: `pos-${index}`, label: 'Góc nhìn ảnh · ' + index, original: original.position, node, attr: 'objectPosition', section, role: { tag: 'GÓC', roleName: 'Góc nhìn ảnh', badgeClass: 'role-pos' } },
       ];
-      return [{ key: `txt-${type}-${index}`, label: ({ h1: 'Tiêu đề trang', h2: 'Tiêu đề mục', h3: 'Tiêu đề nhỏ', p: 'Đoạn văn', li: 'Nội dung danh sách' }[type] || 'Nội dung') + ' · ' + index, original: node.innerText || node.textContent, node, section, role }];
+      return [{ key: `txt-${type}-${index}`, label: ({ h1: 'Tiêu đề trang', h2: 'Tiêu đề mục', h3: 'Tiêu đề nhỏ', p: 'Đoạn văn', li: 'Nội dung danh sách' }[type] || 'Nội dung') + ' · ' + index, original: original.text, node, section, role }];
     });
   }
   function editableNodes(path) {
@@ -190,21 +203,61 @@ export function createSiteTools(ctx) {
     const fields = pages[path]?.fields || {};
     for (const item of nodes) {
       if (isPreview && item.node) {
-        item.node.dataset.cmsKey = item.key;
-        item.node.dataset.cmsLabel = item.label;
-        item.node.classList.add('cms-preview-node');
+        if (item.key.startsWith('alt-') && item.node.tagName === 'IMG') {
+          item.node.dataset.cmsAltKey = item.key;
+          item.node.dataset.cmsAltLabel = item.label;
+        } else if (item.key.startsWith('pos-') && item.node.tagName === 'IMG') {
+          item.node.dataset.cmsPosKey = item.key;
+          item.node.dataset.cmsPosValue = fields[item.key] ?? item.original ?? '50% 50%';
+        } else {
+          item.node.dataset.cmsKey = item.key;
+          item.node.dataset.cmsLabel = item.label;
+          item.node.classList.add('cms-preview-node');
+        }
       }
-      const value = fields[item.key];
-      if (typeof value !== 'string') continue;
       if (item.attr === 'src') {
-        if (!/^(?:\/(?!\/)|https:\/\/)[^\s<>"']+$/.test(value)) continue;
-        item.node.src = value;
+        const value = fields[item.key] ?? (isApplyingPreview ? item.original : undefined);
+        if (typeof value !== 'string' || !/^(?:\/(?!\/)|https:\/\/)[^\s<>"']+$/.test(value)) continue;
+        if (item.node.getAttribute('src') !== value) item.node.src = value;
         const paired = item.node.closest('.fashion-photo')?.querySelector('.fashion-detail');
-        if (paired) paired.src = value;
-      } else if (item.attr) item.node.setAttribute(item.attr, value);
-      else { item.node.textContent = value; item.node.style.whiteSpace = 'pre-line'; }
+        if (paired && paired.getAttribute('src') !== value) paired.src = value;
+      } else if (item.attr === 'objectPosition') {
+        const value = fields[item.key] ?? (isApplyingPreview ? item.original : undefined);
+        if (typeof value !== 'string') continue;
+        if (/^[\d.]+%?\s+[\d.]+%?$|^[a-z]+(?:\s+[a-z]+)?$/i.test(value)) {
+          if (fields[item.key] === undefined) {
+            const original = originalNodes.get(item.node);
+            if (original && item.node.style.objectPosition !== original.inlinePosition) {
+              item.node.style.setProperty('object-position', original.inlinePosition, original.positionPriority);
+              item.node.closest('.fashion-photo')?.querySelector('.fashion-detail')?.style.removeProperty('object-position');
+            }
+          } else if (item.node.style.objectPosition !== value) {
+            setImagePosition(item.node, value);
+          }
+          if (isPreview && item.node) item.node.dataset.cmsPosValue = value;
+        }
+      } else if (item.attr) {
+        const value = fields[item.key] ?? (isApplyingPreview ? item.original : undefined);
+        if (typeof value === 'string' && item.node.getAttribute(item.attr) !== value) {
+          item.node.setAttribute(item.attr, value);
+        }
+      } else {
+        if (fields[item.key] !== undefined) {
+          const value = fields[item.key];
+          if (typeof value === 'string' && item.node.textContent !== value) {
+            item.node.textContent = value;
+            item.node.style.whiteSpace = 'pre-line';
+          }
+        } else if (isApplyingPreview) {
+          const original = originalNodes.get(item.node);
+          if (original && item.node.textContent !== original.text) {
+            item.node.textContent = original.text;
+            item.node.style.removeProperty('white-space');
+          }
+        }
+      }
     }
-    if (isPreview) window.parent.postMessage({ type: 'hoan:fields', path, fields: nodes.map(({ node, ...item }) => ({ ...item, value: fields[item.key] ?? item.original })) }, location.origin);
+    if (isPreview && !isApplyingPreview) window.parent.postMessage({ type: 'hoan:fields', path, fields: nodes.map(({ node, ...item }) => ({ ...item, value: fields[item.key] ?? item.original })) }, location.origin);
   }
   function linkedFields(path) {
     const b = ctx.getState().brand;
@@ -247,93 +300,45 @@ export function createSiteTools(ctx) {
 
   function cmsWorkspaceHtml() {
     return `
-      <div class="cms-workspace">
-        <section class="cms-panel cms-editor-panel">
-          <div class="cms-page-selector-card">
-            <label class="field cms-main-select-field">
-              <span class="field-title">Trang cần chỉnh sửa:</span>
-              <div class="cms-select-wrap">
-                <select id="cms-page-select">
-                  ${publicPages.map(([path, name]) => `<option value="${path}" ${selected === path ? 'selected' : ''}>${esc(name)} (${path})</option>`).join('')}
-                </select>
+      <div class="cms-workspace full-live-mode">
+        <form id="cms-page-form" class="cms-live-main-form">
+          <section class="cms-panel cms-preview-panel full-width-live-preview">
+            <div class="section-head preview-panel-header live-top-controls">
+              <div class="live-controls-left">
+                <label class="cms-inline-select-label">
+                  <span class="inline-select-title">Trang chỉnh sửa:</span>
+                  <select id="cms-page-select" class="cms-page-select-modern">
+                    ${publicPages.map(([path, name]) => `<option value="${path}" ${selected === path ? 'selected' : ''}>${esc(name)}</option>`).join('')}
+                  </select>
+                </label>
+                <div id="cms-status" class="cms-live-status-pill" role="status">Sẵn sàng chỉnh sửa nội dung</div>
               </div>
-            </label>
-          </div>
-
-          <div class="cms-view-tab-bar">
-            <button type="button" class="cms-tab-btn ${activeFilter === 'all' ? 'active' : ''}" data-filter="all">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-              <span>Tất cả</span>
-              <span class="tab-badge" id="count-all">0</span>
-            </button>
-            <button type="button" class="cms-tab-btn ${activeFilter === 'image' ? 'active' : ''}" data-filter="image">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-              <span>Chỉ hình ảnh</span>
-              <span class="tab-badge" id="count-image">0</span>
-            </button>
-            <button type="button" class="cms-tab-btn ${activeFilter === 'text' ? 'active' : ''}" data-filter="text">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-              <span>Chỉ văn bản & chữ</span>
-              <span class="tab-badge" id="count-text">0</span>
-            </button>
-          </div>
-
-          <div class="cms-status-bar">
-            <div id="cms-status" role="status">Sẵn sàng chỉnh sửa nội dung</div>
-          </div>
-
-          <div class="cms-toolbar">
-            <div class="cms-search-box">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-              <input id="cms-field-search" type="text" placeholder="Tìm kiếm văn bản hoặc tên mục..." value="${esc(searchQuery)}" autocomplete="off">
-              <button type="button" id="cms-search-clear" title="Xóa tìm kiếm" style="${searchQuery ? '' : 'display:none;'}">✕</button>
+              <div class="live-controls-right">
+                <button class="btn btn-add-media" type="button" data-cms-action="add-media" title="Thêm hoặc tải ảnh mới từ máy tính">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+                  <span>Thêm ảnh</span>
+                </button>
+                <button class="btn btn-dark btn-save-primary" type="submit">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span>Lưu thay đổi</span>
+                </button>
+                <button class="btn btn-reload-secondary" type="button" data-cms-action="reload">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                  <span>Tải lại</span>
+                </button>
+                <a class="link" id="cms-open-page" href="#${selected}" target="_blank" rel="noopener">Mở trang đã lưu</a>
+              </div>
             </div>
-            <div class="cms-quick-actions">
-              <button type="button" class="cms-link-btn" data-action="expand-all">Mở tất cả</button>
-              <span class="dot-sep">·</span>
-              <button type="button" class="cms-link-btn" data-action="collapse-all">Thu gọn</button>
+            <div class="live-preview-viewport">
+              <iframe id="cms-real-preview" title="Xem trước trang website thật" src="${previewUrl(selected)}"></iframe>
             </div>
-          </div>
+          </section>
 
-          <div class="cms-hidden-pills" style="display:none;" aria-hidden="true">
-            <button type="button" class="cms-filter-pill ${activeFilter === 'all' ? 'active' : ''}" data-filter="all">Tất cả</button>
-            <button type="button" class="cms-filter-pill ${activeFilter === 'image' ? 'active' : ''}" data-filter="image">Ảnh</button>
-            <button type="button" class="cms-filter-pill ${activeFilter === 'heading' ? 'active' : ''}" data-filter="heading">Tiêu đề</button>
-            <button type="button" class="cms-filter-pill ${activeFilter === 'text' ? 'active' : ''}" data-filter="text">Đoạn văn</button>
-          </div>
-
-          <form id="cms-page-form">
+          <!-- Hidden sync container for schema fields within viewport bounds -->
+          <div class="cms-sync-fields-hidden" hidden inert>
             <div id="cms-fields"></div>
-            <div class="cms-save-bar">
-              <button class="btn btn-dark btn-save-primary" type="submit">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
-                <span>Lưu thay đổi lên website</span>
-              </button>
-              <button class="btn btn-reload-secondary" type="button" data-cms-action="reload">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
-                <span>Tải lại bản đã lưu</span>
-              </button>
-            </div>
-          </form>
-          <details class="cms-auth">
-            <summary>Khóa quản trị khi dùng tên miền công khai</summary>
-            <label class="field">Khóa quản trị<input id="cms-admin-token" type="password" autocomplete="off"></label>
-            <button class="btn" data-cms-action="token">Dùng khóa trong phiên này</button>
-          </details>
-        </section>
-        <section class="cms-panel cms-preview-panel">
-          <div class="section-head preview-panel-header">
-            <div>
-              <h2>Trang thật · Xem trước trực quan (Live Preview)</h2>
-              <div class="cms-preview-guide-badge">
-                <span class="guide-badge-pill guide-img"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> Bấm vào ảnh để ĐỔI ẢNH</span>
-                <span class="guide-badge-pill guide-txt"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Bấm vào chữ để SỬA CHỮ</span>
-              </div>
-            </div>
-            <a class="link" id="cms-open-page" href="#${selected}" target="_blank" rel="noopener">Mở trang đã lưu</a>
           </div>
-          <iframe id="cms-real-preview" title="Xem trước trang website thật" src="${previewUrl(selected)}"></iframe>
-        </section>
+        </form>
       </div>
       <div id="cms-media-modal-container"></div>
       <div id="cms-text-modal-container"></div>
@@ -346,7 +351,7 @@ export function createSiteTools(ctx) {
 
   function updateFilterCounts() {
     const total = descriptors.length;
-    const imgCount = descriptors.filter(d => d.key.startsWith('img-') || d.key.startsWith('alt-')).length;
+    const imgCount = descriptors.filter(d => d.key.startsWith('img-') || d.key.startsWith('alt-') || d.key.startsWith('pos-')).length;
     const headingCount = descriptors.filter(d => d.key.includes('-h1-') || d.key.includes('-h2-') || d.key.includes('-h3-')).length;
     const textCount = total - imgCount - headingCount;
     if (q('#count-all')) q('#count-all').textContent = total;
@@ -362,7 +367,7 @@ export function createSiteTools(ctx) {
       return;
     }
     const card = q(`[data-cms-card="${key}"]`) || q(`[data-cms-field="${key}"]`)?.closest('.cms-field-card, .cms-image-field-card, .cms-field');
-    if (!card) return;
+    if (!card || card.closest('.cms-sync-fields-hidden')) return;
     const sec = card.closest('.cms-section-group');
     if (sec && sec.classList.contains('collapsed')) {
       sec.classList.remove('collapsed');
@@ -400,8 +405,8 @@ export function createSiteTools(ctx) {
     const role = item.role || { tag: 'TXT', roleName: 'Văn bản', badgeClass: 'role-p' };
 
     modalWrap.innerHTML = `
-      <div class="cms-modal-overlay" data-action="close-text-modal">
-        <div class="cms-modal-box cms-text-modal-box" onclick="event.stopPropagation()">
+      <div class="cms-modal-overlay" id="cms-text-overlay">
+        <div class="cms-modal-box cms-text-modal-box">
           <div class="cms-modal-header">
             <div class="cms-modal-title">
               <span class="cms-role-badge ${role.badgeClass}">${role.tag}</span>
@@ -442,73 +447,35 @@ export function createSiteTools(ctx) {
     }
   }
 
+  let closeImageEditor = null;
   function openMediaModal(targetKey) {
-    activeMediaKey = targetKey;
-    let modalWrap = q('#cms-media-modal-container');
-    if (!modalWrap) {
-      modalWrap = document.createElement('div');
-      modalWrap.id = 'cms-media-modal-container';
-      document.body.append(modalWrap);
+    const key = targetKey?.replace(/^pos-/, 'img-') || descriptors.find(d => d.key?.startsWith('img-'))?.key || 'img-1';
+    let item = descriptors.find(d => d.key === key && d.attr === 'src') || descriptors.find(d => d.attr === 'src');
+    const liveImage = frame()?.contentDocument?.querySelector(`img[data-cms-key="${item?.key || key}"]`) || frame()?.contentDocument?.querySelector('img[data-cms-key]') || frame()?.contentDocument?.querySelector('img');
+    if (!liveImage) return;
+    if (!item) {
+      item = { key: liveImage.dataset.cmsKey || key, label: 'Hình ảnh', original: liveImage.src, value: liveImage.src };
     }
-    const currentVal = draft[targetKey] || '';
-    const item = descriptors.find(d => d.key === targetKey);
-    modalWrap.innerHTML = `
-      <div class="cms-modal-overlay" data-action="close-media-modal">
-        <div class="cms-modal-box" onclick="event.stopPropagation()">
-          <div class="cms-modal-header">
-            <div class="cms-modal-title">
-              <span class="cms-role-badge role-img">ẢNH</span>
-              <h3>Thư viện ảnh Haute Couture — HOÀN Studio</h3>
-            </div>
-            <button type="button" class="cms-modal-close" data-action="close-media-modal" title="Đóng">&times;</button>
-          </div>
-          <div class="cms-modal-target-notice">
-            <span>Bạn đang đổi ảnh cho mục: <b>${esc(item?.label || targetKey)}</b>. Click vào ảnh bất kỳ dưới đây để thay thế ngay:</span>
-          </div>
-          <div class="cms-modal-toolbar">
-            <div class="cms-modal-tabs">
-              <button type="button" class="modal-tab-btn active" data-tab="all">Tất cả ảnh</button>
-              <button type="button" class="modal-tab-btn" data-tab="bridal">Cô dâu</button>
-              <button type="button" class="modal-tab-btn" data-tab="party">Dự tiệc</button>
-              <button type="button" class="modal-tab-btn" data-tab="campaign">Chiến dịch</button>
-              <button type="button" class="modal-tab-btn" data-tab="process">Quy trình & Không gian</button>
-            </div>
-            <label class="btn btn-dark btn-sm modal-upload-btn">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              <span>Tải ảnh từ máy tính</span>
-              <input type="file" id="modal-file-input" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;">
-            </label>
-          </div>
-          <div class="cms-modal-grid">
-            ${studioMediaCatalog.map(img => `
-              <div class="cms-gallery-item ${currentVal === img.src ? 'selected' : ''}" data-action="select-media-item" data-src="${img.src}" data-category="${img.category}">
-                <div class="cms-gallery-thumb-wrap">
-                  <img src="${img.src}" alt="${esc(img.title)}">
-                  <span class="cms-gallery-ratio">${img.ratio}</span>
-                  <div class="cms-gallery-hover-overlay">
-                    <span>✓ Chọn ảnh này</span>
-                  </div>
-                </div>
-                <div class="cms-gallery-info">
-                  <strong class="cms-gallery-item-title">${esc(img.title)}</strong>
-                  <span class="cms-gallery-tag">${img.tag}</span>
-                  <small class="cms-gallery-desc">${esc(img.desc)}</small>
-                </div>
-                <button type="button" class="btn btn-sm cms-btn-choose">Chọn ảnh này</button>
-              </div>
-            `).join('')}
-          </div>
-          <div class="cms-modal-footer">
-            <div class="cms-modal-custom-url">
-              <span>Hoặc dán URL link ảnh trực tiếp:</span>
-              <input id="modal-custom-url-input" placeholder="https://... hoặc /assets/..." value="${esc(currentVal)}">
-              <button type="button" class="btn btn-sm btn-dark" data-action="apply-custom-url">Áp dụng link</button>
-            </div>
-            <button type="button" class="btn" data-action="close-media-modal">Đóng</button>
-          </div>
-        </div>
-      </div>
-    `;
+    closeImageEditor?.();
+    const effectiveKey = item.key || key;
+    activeMediaKey = effectiveKey;
+    const index = effectiveKey.replace(/^[a-z]+-/, '');
+    const values = state => ({ [effectiveKey]: state.source, ['pos-' + index]: state.position, ['alt-' + index]: state.alt });
+    closeImageEditor = openImageEditor({
+      container: q('#cms-media-modal-container'), liveImage,
+      label: item.label, source: draft[key] ?? item.value ?? item.original,
+      catalog: studioMediaCatalog, esc, icon,
+      onPreview: state => sendPreview(values(state)),
+      onApply: state => {
+        Object.assign(draft, values(state));
+        dirty = true;
+        drawFields();
+        sendPreview();
+        q('#cms-status').textContent = 'Có thay đổi chưa lưu';
+        closeImageEditor = null;
+      },
+      onCancel: () => { sendPreview(); closeImageEditor = null; },
+    });
   }
 
   function renderFieldCard(item, isFocused = false) {
@@ -516,6 +483,8 @@ export function createSiteTools(ctx) {
     const role = item.role || { tag: 'TXT', roleName: 'Văn bản', badgeClass: 'role-p' };
 
     if (item.key.startsWith('img-')) {
+      const imgIndex = item.key.replace(/^img-/, '');
+      const posKey = 'pos-' + imgIndex;
       const isUploaded = typeof val === 'string' && val.startsWith('/uploads/');
       const isExternal = typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://'));
       const badgeLabel = isUploaded ? 'Ảnh tải lên' : isExternal ? 'Link ngoài' : 'Ảnh hệ thống';
@@ -548,6 +517,10 @@ export function createSiteTools(ctx) {
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                   <span>Thư viện ảnh</span>
                 </button>
+                <button type="button" class="btn btn-sm cms-btn-focal" data-action="open-media-modal" data-key="${item.key}" title="Kéo góc ảnh để đẹp nhất">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg>
+                  <span>Kéo góc ảnh</span>
+                </button>
                 <label class="btn btn-sm cms-btn-upload">
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                   <span>Tải từ máy</span>
@@ -556,6 +529,14 @@ export function createSiteTools(ctx) {
                 <button type="button" class="btn btn-sm cms-btn-reset-img" data-action="reset-img" data-key="${item.key}" data-orig="${esc(item.original)}" title="Khôi phục ảnh gốc">
                   <span>Mặc định</span>
                 </button>
+              </div>
+              <div class="cms-pos-quick-row" style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+                <span style="font-size:11px; color:#64748b; font-weight:600; white-space:nowrap;">GÓC NHÌN:</span>
+                <div class="cms-focal-quick-chips">
+                  <button type="button" class="focal-preset-btn" data-action="quick-set-pos" data-key="${posKey}" data-val="50% 18%">Khuôn mặt (50% 18%)</button>
+                  <button type="button" class="focal-preset-btn" data-action="quick-set-pos" data-key="${posKey}" data-val="50% 50%">Chính giữa (50% 50%)</button>
+                  <button type="button" class="focal-preset-btn" data-action="quick-set-pos" data-key="${posKey}" data-val="50% 80%">Dáng váy (50% 80%)</button>
+                </div>
               </div>
               <div class="cms-image-presets-drawer">
                 <span class="preset-label">CHỌN NHANH ẢNH MẪU (1 CLICK):</span>
@@ -582,6 +563,34 @@ export function createSiteTools(ctx) {
                   <input class="cms-url-input" data-cms-field="${item.key}" value="${esc(val)}" placeholder="/assets/... hoặc https://..." autocomplete="off">
                 </div>
               </details>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (item.key.startsWith('pos-')) {
+      const imgKey = 'img-' + item.key.slice(4);
+      return `
+        <div class="cms-field-card cms-pos-field-card" data-cms-card="${item.key}" style="padding:10px 14px;">
+          <div class="cms-card-header" style="margin-bottom:6px;">
+            <div class="cms-card-title-group">
+              <span class="cms-role-badge role-pos">GÓC ẢNH</span>
+              <b class="cms-card-label">${esc(item.label)}</b>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button type="button" class="btn btn-sm cms-btn-focal" data-action="open-media-modal" data-key="${imgKey}">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg>
+                <span>Chỉnh góc ảnh</span>
+              </button>
+            </div>
+          </div>
+          <div class="cms-card-body" style="display:flex;align-items:center;gap:12px;">
+            <input class="cms-url-input" data-cms-field="${item.key}" value="${esc(val || '50% 50%')}" placeholder="50% 50%" style="width:140px;">
+            <div class="cms-focal-quick-chips">
+              <button type="button" class="focal-preset-btn" data-action="quick-set-pos" data-key="${item.key}" data-val="50% 18%">Mặt (50% 18%)</button>
+              <button type="button" class="focal-preset-btn" data-action="quick-set-pos" data-key="${item.key}" data-val="50% 50%">Giữa (50% 50%)</button>
+              <button type="button" class="focal-preset-btn" data-action="quick-set-pos" data-key="${item.key}" data-val="50% 80%">Váy (50% 80%)</button>
             </div>
           </div>
         </div>
@@ -658,9 +667,9 @@ export function createSiteTools(ctx) {
 
     for (const [secId, sec] of sectionMap.entries()) {
       const matchedItems = sec.items.filter(item => {
-        if (activeFilter === 'image' && !item.key.startsWith('img-') && !item.key.startsWith('alt-')) return false;
+        if (activeFilter === 'image' && !item.key.startsWith('img-') && !item.key.startsWith('alt-') && !item.key.startsWith('pos-')) return false;
         if (activeFilter === 'heading' && !item.key.includes('-h1-') && !item.key.includes('-h2-') && !item.key.includes('-h3-')) return false;
-        if (activeFilter === 'text' && (item.key.startsWith('img-') || item.key.startsWith('alt-'))) return false;
+        if (activeFilter === 'text' && (item.key.startsWith('img-') || item.key.startsWith('alt-') || item.key.startsWith('pos-'))) return false;
         if (sLower) {
           const val = String(draft[item.key] ?? item.value ?? '').toLowerCase();
           const orig = String(item.original ?? '').toLowerCase();
@@ -695,7 +704,7 @@ export function createSiteTools(ctx) {
     }
 
     container.innerHTML = renderedSectionsHtml || '<div class="cms-no-results">Không tìm thấy trường nội dung nào khớp với bộ lọc hoặc từ khóa tìm kiếm.</div>';
-    q('#cms-status').textContent = `${descriptors.length} trường liên kết · ${pages[selected]?.updatedAt ? 'Lưu lúc ' + time(pages[selected].updatedAt) : 'Đang dùng nội dung gốc'}${dirty ? ' · Có thay đổi chưa lưu' : ''}`;
+    q('#cms-status').textContent = dirty ? 'Có thay đổi chưa lưu' : pages[selected]?.updatedAt ? 'Đã lưu lúc ' + time(pages[selected].updatedAt) : 'Đã tải nội dung';
   }
   async function selectPage(path) {
     selected = path; draft = { ...(pages[path]?.fields || {}) }; revision = pages[path]?.revision || ''; dirty = false; framePath = '';
@@ -1035,6 +1044,16 @@ export function createSiteTools(ctx) {
                   <span>Tên bài đăng / chiến dịch:</span>
                   <input name="campaign" placeholder="vi-du: makeup-co-dau-thang-9" maxlength="120" required>
                 </label>
+                <div class="field-split-row" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                  <label class="field" style="margin-bottom:0;">
+                    <span>Tên khách Facebook (tự động nhận diện khi khách click):</span>
+                    <input name="fbName" placeholder="Ví dụ: Thảo Vy (Cô dâu tháng 10)" maxlength="80">
+                  </label>
+                  <label class="field" style="margin-bottom:0;">
+                    <span>Link Facebook cá nhân (tự động dẫn link đến khách):</span>
+                    <input name="fbUrl" placeholder="https://www.facebook.com/thaovy hoặc thaovy.bridal" maxlength="300">
+                  </label>
+                </div>
                 <div class="share-presets-row">
                   <span class="presets-label">Gợi ý nhanh:</span>
                   <span class="share-chip" role="button" tabindex="0" data-action="set-campaign-preset" data-source="facebook" data-val="facebook-post-co-dau">Bài viết Facebook</span>
@@ -1402,12 +1421,18 @@ export function createSiteTools(ctx) {
                         </div>
                         <div class="visitor-info-text">
                           <div class="visitor-name-lead-row">
-                            <b>${esc(session.display_name || 'Khách vãng lai')}</b>
-                            ${isLead ? '<span class="lead-badge"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg> Khách tiềm năng</span>' : ''}
+                            <b>${esc(session.display_name || (session.facebook_url ? 'Khách Facebook' : 'Khách vãng lai'))}</b>
+                            ${session.facebook_url ? '<span class="lead-badge fb-badge"><svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg> Facebook cá nhân</span>' : (isLead ? '<span class="lead-badge"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg> Khách tiềm năng</span>' : '')}
                           </div>
                           <small>Mã phiên: ${esc(session.id.slice(0, 8))}</small>
-                          ${session.facebook_url ? `<a href="${esc(session.facebook_url)}" target="_blank" rel="noopener noreferrer">Facebook tự khai</a>` : ''}
-                          ${session.display_name || session.facebook_url ? '<small class="unverified-tag">Chưa xác minh danh tính</small>' : ''}
+                          ${session.facebook_url ? `
+                            <a href="${esc(session.facebook_url)}" target="_blank" rel="noopener noreferrer" class="btn-fb-direct-link" title="Bấm để mở trang cá nhân Facebook của người này: ${esc(session.facebook_url)}">
+                              <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+                              <span>Mở Facebook cá nhân</span>
+                              <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                            </a>
+                          ` : ''}
+                          <small class="unverified-tag">Chưa xác minh danh tính</small>
                           <small class="device-tag">${deviceIcon} ${esc(session.device || 'Thiết bị')} · ${esc(session.browser || 'Trình duyệt')}</small>
                         </div>
                       </div>
@@ -1696,8 +1721,33 @@ export function createSiteTools(ctx) {
     if (tracking) return true;
     if (starting) return starting;
     const params = new URLSearchParams(location.search);
-    const hashParams = new URLSearchParams(location.hash.split('?')[1]);
-    starting = request('/api/visits', { type: 'start', mode: 'anonymous', page: currentPath(), referrer: document.referrer, source: params.get('utm_source') || hashParams.get('utm_source'), medium: params.get('utm_medium') || hashParams.get('utm_medium'), campaign: params.get('utm_campaign') || hashParams.get('utm_campaign'), facebookClick: params.has('fbclid') }).then(result => { tracking = !result.ignored; lastBeat = Date.now(); return tracking; }).catch(() => false).finally(() => { starting = null; });
+    const hashParams = new URLSearchParams((location.hash.split('?')[1] || ''));
+    const getParam = (...keys) => {
+      for (const k of keys) {
+        const val = params.get(k) || hashParams.get(k);
+        if (val && val.trim()) return val.trim();
+      }
+      return '';
+    };
+
+    const displayName = getParam('fb_name', 'fb_user', 'name', 'fbName', 'ten_fb', 'customer');
+    let facebookUrl = getParam('fb_url', 'facebook_url', 'fb_link', 'facebookUrl', 'link_fb', 'fb', 'fb_id');
+    if (facebookUrl && !/^https?:\/\//i.test(facebookUrl)) {
+      facebookUrl = 'https://www.facebook.com/' + facebookUrl.replace(/^@/, '');
+    }
+
+    starting = request('/api/visits', {
+      type: 'start',
+      mode: 'anonymous',
+      page: currentPath(),
+      referrer: document.referrer,
+      source: params.get('utm_source') || hashParams.get('utm_source') || (facebookUrl || displayName ? 'facebook' : ''),
+      medium: params.get('utm_medium') || hashParams.get('utm_medium'),
+      campaign: params.get('utm_campaign') || hashParams.get('utm_campaign'),
+      facebookClick: params.has('fbclid') || Boolean(facebookUrl),
+      displayName,
+      facebookUrl
+    }).then(result => { tracking = !result.ignored; lastBeat = Date.now(); return tracking; }).catch(() => false).finally(() => { starting = null; });
     return starting;
   }
   async function track(type, extra = {}) {
@@ -1770,82 +1820,56 @@ export function createSiteTools(ctx) {
     const refinements = document.createElement('link'); refinements.rel = 'stylesheet'; refinements.href = '/admin-refinements.css?v=6';
     const style = document.createElement('link'); style.rel = 'stylesheet'; style.href = '/site-tools.css?v=144.0'; document.head.append(style);
     document.head.append(refinements);
+    const imageEditorStyle = document.createElement('link'); imageEditorStyle.rel = 'stylesheet'; imageEditorStyle.href = '/image-editor.css'; document.head.append(imageEditorStyle);
     loadPages().then(() => ctx.render()).catch(error => { toast(error.message); ctx.render(); });
 
     if (isPreview) {
-      const s = document.createElement('style');
-      s.textContent = `
-        .cms-preview-node {
-          position: relative !important;
-          transition: outline 0.15s ease, box-shadow 0.15s ease, background 0.15s ease !important;
-          cursor: pointer !important;
+      const style = document.createElement('style');
+      style.textContent = `
+        html { scroll-behavior: auto !important; }
+        .cms-preview-node { cursor: pointer; }
+        .cms-preview-node:hover, .cms-preview-highlight {
+          outline: 1px solid #7a1832 !important; outline-offset: -1px !important;
         }
-        .cms-preview-node:hover {
-          outline: 2px dashed #7a1832 !important;
-          outline-offset: 3px !important;
-          box-shadow: 0 0 14px rgba(122, 24, 50, 0.35) !important;
-          background: rgba(122, 24, 50, 0.05) !important;
-          border-radius: 3px !important;
-        }
-        .cms-preview-node[data-cms-key^="img-"],
-        img.cms-preview-node {
-          cursor: pointer !important;
-          transition: transform 0.2s ease, outline 0.15s ease, box-shadow 0.15s ease !important;
-        }
-        .cms-preview-node[data-cms-key^="img-"]:hover,
-        img.cms-preview-node:hover {
-          outline: 3px solid #7a1832 !important;
-          outline-offset: 4px !important;
-          box-shadow: 0 0 0 6px rgba(184, 151, 88, 0.65), 0 10px 25px rgba(0,0,0,0.3) !important;
-        }
-        .cms-preview-highlight {
-          outline: 3px solid #7a1832 !important;
-          outline-offset: 4px !important;
-          box-shadow: 0 0 0 6px rgba(184, 151, 88, 0.5) !important;
-          border-radius: 4px !important;
-          animation: cmsGlowPulse 1.5s ease-in-out infinite alternate !important;
-        }
-        @keyframes cmsGlowPulse {
-          from { box-shadow: 0 0 0 4px rgba(184, 151, 88, 0.3); }
-          to { box-shadow: 0 0 0 8px rgba(122, 24, 50, 0.6); }
-        }
+        img.cms-preview-node { cursor: grab; user-select: none; touch-action: pan-y; }
+        img.cms-preview-node:active { cursor: grabbing; }
+        .couture .fashion-photo { transform: none !important; }
+        .couture .fashion-photo > img:first-child { transform: none !important; transition: none !important; }
+        .couture .ct-detail-crop .fashion-photo > img:first-child { transform: scale(1.9) !important; }
+        .couture .ct-look-detail .fashion-photo > img:first-child { transform: scale(1.6) !important; }
+        .couture .fashion-detail, .couture .photo-discover { display: none !important; }
       `;
-      document.head.append(s);
-
-      const hoverTip = document.createElement('div');
-      hoverTip.id = 'cms-hover-tip';
-      hoverTip.style.cssText = 'position:fixed; display:none; pointer-events:none; z-index:999999; background:#7a1832; color:#fff; font-size:12px; font-weight:600; padding:6px 14px; border-radius:20px; box-shadow:0 4px 14px rgba(0,0,0,0.35); border:1.5px solid #b89758; font-family:sans-serif; letter-spacing:0.02em;';
-      document.body.append(hoverTip);
-
-      document.addEventListener('mousemove', event => {
-        const node = event.target.closest('[data-cms-key]');
-        if (node) {
-          const isImg = node.dataset.cmsKey?.startsWith('img-');
-          hoverTip.innerHTML = isImg ? 'Bấm vào ảnh để ĐỔI ẢNH này' : 'Bấm vào chữ để SỬA CHỮ này';
-          hoverTip.style.display = 'block';
-          hoverTip.style.left = Math.min(window.innerWidth - 280, event.clientX + 15) + 'px';
-          hoverTip.style.top = Math.max(10, event.clientY - 38) + 'px';
-        } else {
-          hoverTip.style.display = 'none';
-        }
-      }, { passive: true });
-
+      document.head.append(style);
+      const targetImage = event => event.target.closest('img[data-cms-key]') ||
+        event.target.closest('.fashion-photo')?.querySelector('img[data-cms-key]');
+      const consumeDrag = bindImagePan(document, {
+        resolve: targetImage, mouseOnly: true,
+        change: (img, position) => setImagePosition(img, positionValue(position)),
+        commit: img => {
+          const frameScrollY = window.scrollY;
+          window.parent.postMessage({
+            type: 'hoan:update-pos', path: currentPath(), key: img.dataset.cmsKey,
+            posKey: img.dataset.cmsPosKey, value: img.style.objectPosition,
+            scrollY: frameScrollY,
+          }, location.origin);
+        },
+      });
       document.addEventListener('click', event => {
-        const target = event.target.closest('[data-cms-key]');
+        if (consumeDrag()) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+        const img = targetImage(event);
+        const target = img || event.target.closest('[data-cms-key]');
         if (!target) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const key = target.dataset.cmsKey;
-        if (key.startsWith('img-')) {
-          window.parent.postMessage({ type: 'hoan:quick-change-image', key }, location.origin);
-        } else {
-          window.parent.postMessage({ type: 'hoan:quick-edit-text', key }, location.origin);
-        }
+        event.preventDefault(); event.stopImmediatePropagation();
+        window.parent.postMessage({
+          type: img ? 'hoan:quick-change-image' : 'hoan:quick-edit-text',
+          path: currentPath(), key: target.dataset.cmsKey,
+        }, location.origin);
       }, true);
     }
 
     window.addEventListener('message', event => {
       if (event.origin !== location.origin) return;
+      if (isAdmin() && event.source !== frame()?.contentWindow) return;
       const message = event.data;
       if (isPreview && message?.type === 'hoan:highlight-node') {
         document.querySelectorAll('.cms-preview-highlight').forEach(el => el.classList.remove('cms-preview-highlight'));
@@ -1853,7 +1877,7 @@ export function createSiteTools(ctx) {
           const target = document.querySelector(`[data-cms-key="${message.key}"]`);
           if (target) {
             target.classList.add('cms-preview-highlight');
-            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            if (message.scroll) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
         }
         return;
@@ -1862,12 +1886,28 @@ export function createSiteTools(ctx) {
         document.querySelectorAll('.cms-preview-highlight').forEach(el => el.classList.remove('cms-preview-highlight'));
         return;
       }
+      if (isAdmin() && message?.type === 'hoan:update-pos') {
+        const { posKey, value, scrollY } = message;
+        if (message.path !== selected || !descriptors.some(item => item.key === posKey)) return;
+        draft[posKey] = value;
+        dirty = true;
+        const posInput = q(`input[data-cms-field="${posKey}"]`);
+        if (posInput) posInput.value = value;
+        q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+        sendPreview({}, scrollY);
+        return;
+      }
+      if (isAdmin() && message?.type === 'hoan:close-modals') {
+        const textModal = q('#cms-text-modal-container');
+        if (textModal) textModal.innerHTML = '';
+        closeImageEditor?.();
+        closeDetail();
+        return;
+      }
       if (isAdmin() && message?.type === 'hoan:quick-change-image') {
+        if (message.path !== selected) return;
         activeFocusKey = message.key;
-        highlightFieldInEditor(message.key);
-        highlightNodeInPreview(message.key);
         openMediaModal(message.key);
-        toast('Đang mở thư viện ảnh — Bấm chọn ảnh mới để thay thế ngay.');
         return;
       }
       if (isAdmin() && (message?.type === 'hoan:quick-edit-text' || message?.type === 'hoan:select-field')) {
@@ -1875,19 +1915,34 @@ export function createSiteTools(ctx) {
         highlightFieldInEditor(message.key);
         highlightNodeInPreview(message.key);
         openTextModal(message.key);
-        toast('Đang mở hộp sửa chữ — Nhập chữ mới rồi bấm áp dụng.');
         return;
       }
       if (isPreview && event.source === window.parent && message?.type === 'hoan:preview') {
+        if (message.path !== currentPath()) return;
+        const previousBrand = JSON.stringify(ctx.getState().brand);
+        const previousSettings = JSON.stringify(ctx.getState().settings);
         previewDraft = message;
         if (message.brand) ctx.getState().brand = message.brand;
         if (message.settings) ctx.getState().settings = message.settings;
-        if (message.path === currentPath() && message.fields) pages[message.path] = { ...pages[message.path], fields: message.fields };
-        ctx.render(); return;
+        pages[message.path] = { ...(pages[message.path] || {}), fields: message.fields || {} };
+        isApplyingPreview = true;
+        try {
+          if (previousBrand !== JSON.stringify(ctx.getState().brand) || previousSettings !== JSON.stringify(ctx.getState().settings)) {
+            const scroll = { left: window.scrollX, top: message.scrollY ?? window.scrollY, behavior: 'instant' };
+            ctx.render();
+            window.scrollTo(scroll);
+          } else {
+            applyContent(message.path);
+            if (message.scrollY !== undefined) {
+              window.scrollTo({ left: window.scrollX, top: message.scrollY, behavior: 'instant' });
+            }
+          }
+        } finally { isApplyingPreview = false; }
+        return;
       }
       if (!isAdmin() || event.source !== frame()?.contentWindow || message?.type !== 'hoan:fields') return;
       const state = ctx.getState();
-      const isPages = currentPath() === '/admin/content-pages' || (currentPath() === '/admin/content' && (state.contentViewMode === 'pages' || state.contentActiveTab === 'pages'));
+      const isPages = currentPath() === '/admin/content-pages' || (currentPath() === '/admin/content' && (state.contentViewMode === 'pages' || state.contentActiveTab === 'pages' || state.contentViewMode !== 'general'));
       if (!isPages) {
         if (framePath !== message.path) { framePath = message.path; sendPreview(); }
         return;
@@ -2037,6 +2092,14 @@ export function createSiteTools(ctx) {
         url.searchParams.set('utm_source', 'facebook');
         url.searchParams.set('utm_medium', 'social');
         url.searchParams.set('utm_campaign', data.campaign);
+        if (data.fbName && data.fbName.trim()) {
+          url.searchParams.set('fb_name', data.fbName.trim());
+        }
+        if (data.fbUrl && data.fbUrl.trim()) {
+          let u = data.fbUrl.trim();
+          if (!/^https?:\/\//i.test(u)) u = 'https://www.facebook.com/' + u.replace(/^@/, '');
+          url.searchParams.set('fb_url', u);
+        }
         const targetPage = (data.targetPage || '').trim() || '#/';
         url.hash = targetPage.startsWith('#') ? targetPage : '#' + targetPage;
         const fullUrl = url.href;
@@ -2086,7 +2149,7 @@ export function createSiteTools(ctx) {
         openTextModal(openTextBtn.dataset.key);
         return;
       }
-      if (event.target.closest('[data-action="close-text-modal"]')) {
+      if (event.target.id === 'cms-text-overlay' || event.target.closest('[data-action="close-text-modal"]')) {
         event.preventDefault();
         const container = q('#cms-text-modal-container');
         if (container) container.innerHTML = '';
@@ -2220,10 +2283,13 @@ export function createSiteTools(ctx) {
         openMediaModal(openMediaBtn.dataset.key);
         return;
       }
-      if (event.target.closest('[data-action="close-media-modal"]')) {
+      if (event.target.id === 'cms-media-overlay' || event.target.closest('[data-action="close-media-modal"]')) {
         event.preventDefault();
-        const container = q('#cms-media-modal-container');
-        if (container) container.innerHTML = '';
+        if (closeImageEditor) closeImageEditor();
+        else {
+          const container = q('#cms-media-modal-container');
+          if (container) container.innerHTML = '';
+        }
         return;
       }
       const modalTab = event.target.closest('.modal-tab-btn');
@@ -2233,7 +2299,7 @@ export function createSiteTools(ctx) {
         modalTab.parentElement.querySelectorAll('.modal-tab-btn').forEach(b => b.classList.remove('active'));
         modalTab.classList.add('active');
         document.querySelectorAll('.cms-gallery-item').forEach(item => {
-          item.style.display = (tab === 'all' || item.dataset.category === tab) ? '' : 'none';
+          item.style.display = (tab === 'all' || item.dataset.category === tab || (tab === 'process' && (item.dataset.category === 'process' || item.dataset.category === 'space'))) ? '' : 'none';
         });
         return;
       }
@@ -2241,36 +2307,40 @@ export function createSiteTools(ctx) {
       if (selectMediaItem) {
         event.preventDefault();
         const src = selectMediaItem.dataset.src;
-        if (src && activeMediaKey) {
-          draft[activeMediaKey] = src;
+        const key = activeMediaKey || descriptors.find(d => d.key.startsWith('img-'))?.key || 'img-1';
+        if (src && key) {
+          activeMediaKey = key;
+          draft[key] = src;
           dirty = true;
-          const input = q(`input[data-cms-field="${activeMediaKey}"]`);
+          const input = q(`input[data-cms-field="${key}"]`);
           if (input) input.value = src;
-          const thumb = q('#thumb-' + activeMediaKey);
+          const thumb = q('#thumb-' + key);
           if (thumb) thumb.src = src;
           q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
           sendPreview();
           const container = q('#cms-media-modal-container');
           if (container) container.innerHTML = '';
-          toast('Đã chọn ảnh từ thư viện.');
+          toast('Đã chọn và thay thế ảnh thành công.');
         }
         return;
       }
       if (event.target.closest('[data-action="apply-custom-url"]')) {
         event.preventDefault();
         const url = q('#modal-custom-url-input')?.value.trim();
-        if (url && activeMediaKey) {
-          draft[activeMediaKey] = url;
+        const key = activeMediaKey || descriptors.find(d => d.key.startsWith('img-'))?.key || 'img-1';
+        if (url && key) {
+          activeMediaKey = key;
+          draft[key] = url;
           dirty = true;
-          const input = q(`input[data-cms-field="${activeMediaKey}"]`);
+          const input = q(`input[data-cms-field="${key}"]`);
           if (input) input.value = url;
-          const thumb = q('#thumb-' + activeMediaKey);
+          const thumb = q('#thumb-' + key);
           if (thumb) thumb.src = url;
           q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
           sendPreview();
           const container = q('#cms-media-modal-container');
           if (container) container.innerHTML = '';
-          toast('Đã áp dụng link ảnh.');
+          toast('Đã áp dụng link ảnh mới.');
         }
         return;
       }
@@ -2290,6 +2360,22 @@ export function createSiteTools(ctx) {
         q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
         sendPreview();
         toast('Đã chọn ảnh mẫu.');
+        return;
+      }
+      const quickPosBtn = event.target.closest('[data-action="quick-set-pos"]');
+      if (quickPosBtn) {
+        event.preventDefault();
+        const key = quickPosBtn.dataset.key;
+        const val = quickPosBtn.dataset.val;
+        if (key && val) {
+          draft[key] = val;
+          dirty = true;
+          const input = q(`input[data-cms-field="${key}"]`);
+          if (input) input.value = val;
+          q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+          sendPreview();
+          toast('Đã căn góc: ' + val);
+        }
         return;
       }
       const resetImgBtn = event.target.closest('[data-action="reset-img"]');
@@ -2347,11 +2433,27 @@ export function createSiteTools(ctx) {
         toast('Đã tải mã QR SVG chất lượng cao.');
         return;
       }
+      if (event.target.closest('[data-action="save-cms-live"]')) {
+        event.preventDefault();
+        const submitBtn = q('#cms-page-form button[type=submit]');
+        if (submitBtn) submitBtn.click();
+        else q('#cms-page-form')?.requestSubmit();
+        return;
+      }
       const button = event.target.closest('[data-cms-action], [data-visit-action], [data-visit-admin], [data-visit-session]');
       if (!button) return;
       event.preventDefault();
       if (button.dataset.cmsAction === 'token') { try { sessionStorage.setItem('hoanAdminToken', q('#cms-admin-token').value); toast('Đã dùng khóa trong phiên quản trị.'); await loadReport(); } catch { toast('Trình duyệt không cho lưu khóa phiên.'); } }
       if (button.dataset.cmsAction === 'reload') { if (dirty && !confirm('Bỏ thay đổi chưa lưu và tải lại bản đã lưu?')) return; await loadPages(); await selectPage(selected); }
+      if (button.dataset.cmsAction === 'add-media') {
+        const firstImgKey = descriptors.find(d => d.key?.startsWith('img-'))?.key || activeFocusKey || 'img-1';
+        openMediaModal(firstImgKey);
+        setTimeout(() => {
+          const libraryTab = q('#image-library-tab') || document.querySelector('#image-library-tab');
+          if (libraryTab) libraryTab.click();
+        }, 100);
+        return;
+      }
       const action = button.dataset.visitAction;
       if (action === 'preferences') consentPanel(true);
       if (action === 'close') q('#visit-consent')?.remove();
@@ -2379,6 +2481,19 @@ export function createSiteTools(ctx) {
     window.addEventListener('keydown', event => {
       if (event.key === 'Escape') {
         closeDetail();
+        const textModal = q('#cms-text-modal-container');
+        if (textModal) textModal.innerHTML = '';
+        if (closeImageEditor) {
+          closeImageEditor();
+        } else {
+          const mediaModal = q('#cms-media-modal-container');
+          if (mediaModal) mediaModal.innerHTML = '';
+        }
+      }
+      if (event.target.id === 'modal-custom-url-input' && event.key === 'Enter') {
+        event.preventDefault();
+        const applyBtn = q('[data-action="apply-custom-url"]');
+        if (applyBtn) applyBtn.click();
       }
     });
     document.addEventListener('click', event => {

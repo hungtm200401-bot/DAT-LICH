@@ -7,6 +7,7 @@ export default function Home() {
       <div id="app" aria-live="polite" suppressHydrationWarning />
       <div id="toast" className="toast" role="status" aria-live="polite" />
       <div id="modal-root" />
+      <Script src="/scroll-enhancements.js?v=1.0" strategy="afterInteractive" />
       <Script src="/app.js?v=138.1" strategy="afterInteractive" />
     </>
   );

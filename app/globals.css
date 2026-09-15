@@ -6,6 +6,94 @@ body {
   background: #fff;
 }
 
+/* ============================================================
+   THANH CUỘN CHUYÊN NGHIỆP - HOÀN Makeup Admin
+   ============================================================ */
+
+/* === Webkit (Chrome, Edge, Safari) === */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(122, 24, 50, 0.45);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.25s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(122, 24, 50, 0.85);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background-color: #7a1832;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* === Firefox === */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(122, 24, 50, 0.5) transparent;
+}
+
+/* === Các vùng scroll nội bộ (bảng, panel, danh sách) === */
+.overflow-auto,
+.overflow-y-auto,
+.overflow-x-auto,
+[class*="scroll"],
+[class*="table-wrap"],
+[class*="list-wrap"],
+[class*="panel"],
+.visit-table-wrap,
+.customer-list,
+.booking-list,
+.report-table,
+.data-table,
+.sidebar,
+.content-area,
+.main-content,
+.page-content,
+.modal-body,
+.drawer-body {
+  scrollbar-width: thin;
+  scrollbar-color: #c9747c transparent;
+}
+
+.overflow-auto::-webkit-scrollbar,
+.overflow-y-auto::-webkit-scrollbar,
+.overflow-x-auto::-webkit-scrollbar,
+[class*="scroll"]::-webkit-scrollbar,
+[class*="table-wrap"]::-webkit-scrollbar,
+[class*="panel"]::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.overflow-auto::-webkit-scrollbar-thumb,
+.overflow-y-auto::-webkit-scrollbar-thumb,
+.overflow-x-auto::-webkit-scrollbar-thumb,
+[class*="scroll"]::-webkit-scrollbar-thumb,
+[class*="table-wrap"]::-webkit-scrollbar-thumb,
+[class*="panel"]::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #e8b4b8 0%, #c9747c 100%);
+  border-radius: 100px;
+}
+
+/* === Smooth scroll toàn trang === */
+html {
+  scroll-behavior: smooth;
+}
+
 /* Luôn giữ hiển thị ảnh khi hover */
 .fashion-photo img.fashion-full,
 a:hover > .fashion-photo img.fashion-full,

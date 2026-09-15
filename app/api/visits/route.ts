@@ -32,8 +32,28 @@ export async function POST(request: Request) {
     if (!page) return Response.json({ error: "Trang không hợp lệ." }, { status: 400 });
     if (payload.type === "start") {
       if (payload.mode !== "anonymous") return Response.json({ error: "Chế độ thống kê không hợp lệ." }, { status: 400 });
+      const displayName = clean(payload.displayName || payload.name || payload.fbName, 80);
+      let rawFb = clean(payload.facebookUrl || payload.fbUrl || payload.fb, 300);
+      if (rawFb && !/^https?:\/\//i.test(rawFb)) {
+        rawFb = `https://www.facebook.com/${rawFb.replace(/^@/, '')}`;
+      }
+      let facebookUrl = "";
+      if (rawFb) {
+        try {
+          const u = new URL(rawFb);
+          if (["facebook.com", "www.facebook.com", "m.facebook.com", "fb.com"].includes(u.hostname) && !u.username && !u.password) {
+            facebookUrl = rawFb;
+          }
+        } catch { /* ignore */ }
+      }
+
       const existing = id ? await db.prepare("SELECT id FROM visit_sessions WHERE id = ? AND last_seen_at >= ?").bind(id, new Date(Date.now() - 1800000).toISOString()).first() : null;
-      if (existing) return Response.json({ ok: true }, { headers: { ...privateHeaders, "Set-Cookie": cookie(request, id) } });
+      if (existing) {
+        if (displayName || facebookUrl) {
+          await db.prepare("UPDATE visit_sessions SET display_name = CASE WHEN display_name = '' THEN ? ELSE display_name END, facebook_url = CASE WHEN facebook_url = '' THEN ? ELSE facebook_url END WHERE id = ?").bind(displayName, facebookUrl, id).run();
+        }
+        return Response.json({ ok: true }, { headers: { ...privateHeaders, "Set-Cookie": cookie(request, id) } });
+      }
       // Exclude known link-preview crawlers. Counters describe measured browser sessions, not all Facebook clicks.
       const ua = request.headers.get("User-Agent") || "";
       if (/bot|crawler|spider|facebookexternalhit/i.test(ua)) return Response.json({ ok: true, ignored: true });
@@ -41,11 +61,11 @@ export async function POST(request: Request) {
       let referrer = "";
       try { referrer = new URL(clean(payload.referrer, 1000)).hostname; } catch { /* direct */ }
       const utm = clean(payload.source, 60).toLowerCase();
-      const source = utm || (/(^|\.)facebook\.com$|(^|\.)fb\.com$/.test(referrer) || payload.facebookClick === true ? "facebook" : referrer || "direct");
+      const source = utm || (/(^|\.)facebook\.com$|(^|\.)fb\.com$/.test(referrer) || payload.facebookClick === true || facebookUrl ? "facebook" : referrer || "direct");
       const device = /iPad|Tablet/i.test(ua) ? "Máy tính bảng" : /Mobile|Android|iPhone/i.test(ua) ? "Điện thoại" : "Máy tính";
       const browser = /FBAN|FBAV/i.test(ua) ? "Facebook" : /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Khác";
       await db.batch([
-        db.prepare("INSERT INTO visit_sessions (id,started_at,last_seen_at,source,medium,campaign,referrer,device,browser,landing_page,current_page) VALUES (?,?,?,?,?,?,?,?,?,?,?)").bind(newId, now, now, source, clean(payload.medium, 60), clean(payload.campaign), referrer, device, browser, page, page),
+        db.prepare("INSERT INTO visit_sessions (id,started_at,last_seen_at,source,medium,campaign,referrer,device,browser,landing_page,current_page,display_name,facebook_url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(newId, now, now, source, clean(payload.medium, 60), clean(payload.campaign), referrer, device, browser, page, page, displayName, facebookUrl),
         db.prepare("DELETE FROM visit_events WHERE occurred_at < ?").bind(new Date(Date.now() - 90 * 86400000).toISOString()),
         db.prepare("DELETE FROM visit_sessions WHERE last_seen_at < ?").bind(new Date(Date.now() - 90 * 86400000).toISOString()),
       ]);
