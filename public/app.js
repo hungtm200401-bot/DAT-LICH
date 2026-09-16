@@ -172,6 +172,7 @@
   };
   let state = loadState();
   let siteTools;
+
   if (typeof window !== 'undefined') window.state = state;
   const saveState = (message) => {
     try {
@@ -201,7 +202,15 @@
 
   async function api(payload) {
     if (payload && window.parent !== window && new URLSearchParams(location.search).get('cmsPreview') === '1') throw new Error('Bản xem trước không gửi dữ liệu nghiệp vụ.');
-    const options = payload ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {};
+    const token = (() => { try { return localStorage.getItem('hoanAdminToken') || sessionStorage.getItem('hoanAdminToken') || ''; } catch { return ''; } })();
+    const options = payload ? {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': 'Bearer ' + token } : {})
+      },
+      body: JSON.stringify(payload)
+    } : (token ? { headers: { 'Authorization': 'Bearer ' + token } } : {});
     const response = await fetch('/api/data', options);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Không thể kết nối dữ liệu');
@@ -2929,7 +2938,9 @@
     const [path, queryString=''] = raw.split('?');
     const query = new URLSearchParams(queryString);
     const parts = path.split('/').filter(Boolean);
-    let html = renderPathHtml(raw);
+    let html = path.startsWith('/admin') && window.HoanMobileAdmin?.matches()
+      ? window.HoanMobileAdmin.render(raw, state)
+      : renderPathHtml(raw);
     if (!html) {
       if (path === '/admin/requests') html = adminRequests();
       else if (path === '/admin' || path === '/admin/') html = adminOverview();
@@ -4438,7 +4449,7 @@
   });
   if (!location.hash) location.hash = '#/';
   if (typeof document.createElement === 'function' && location.origin) {
-    import('/site-tools.js?v=140.0').then(({ createSiteTools }) => {
+    import('/site-tools.js?v=146.0').then(({ createSiteTools }) => {
       siteTools = createSiteTools({ getState: () => state, render, renderPathHtml, hydrateBackend, adminShell, esc, toast, icon });
       siteTools.start();
     }).catch(error => console.error('Không tải được công cụ website:', error));

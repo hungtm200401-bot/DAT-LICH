@@ -12,10 +12,11 @@ Cần Node.js 22.13 trở lên. Trên Windows nên dùng WSL hoặc Git Bash vì
 
 1. Giải nén toàn bộ thư mục.
 2. Mở terminal tại thư mục có `package.json`.
-3. Chạy `npm ci`.
-4. Chạy `npm run db:migrate:local` một lần để khởi tạo cơ sở dữ liệu cục bộ.
-5. Chạy `npm run dev` và mở địa chỉ được terminal hiển thị.
-6. Thêm `/#/admin` vào địa chỉ để mở quản trị.
+3. Chạy `npm run dev` để cài thư viện, khởi tạo cơ sở dữ liệu cục bộ và mở server local.
+4. Mở địa chỉ được terminal hiển thị, thường là `http://localhost:5173/`.
+5. Thêm `/#/admin` vào địa chỉ để mở quản trị.
+
+Nếu PowerShell báo lỗi `npm.ps1 cannot be loaded`, mở Command Prompt hoặc chạy `cmd /c npm run dev`.
 
 Website và quản trị dùng chung API và cơ sở dữ liệu; không cần chạy hai ứng dụng riêng.
 

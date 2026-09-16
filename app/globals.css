@@ -89,9 +89,17 @@ body {
   border-radius: 100px;
 }
 
-/* === Smooth scroll toàn trang === */
-html {
-  scroll-behavior: smooth;
+/* === Smooth scroll chỉ áp dụng cho desktop, tắt trên mobile để tránh giật lag khi vuốt chạm === */
+@media (min-width: 769px) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+@media (max-width: 768px) {
+  html, body {
+    scroll-behavior: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
 }
 
 /* Luôn giữ hiển thị ảnh khi hover */

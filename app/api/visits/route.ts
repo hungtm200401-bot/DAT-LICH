@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { siteAdmin, sameOrigin, privateHeaders } from "../../../lib/site-admin";
 
 const cookieName = "hoan_visit";
+const pageSize = 10;
 const clean = (value: unknown, limit = 120) => typeof value === "string" ? value.trim().slice(0, limit) : "";
 const sessionId = (request: Request) => request.headers.get("Cookie")?.match(/(?:^|;\s*)hoan_visit=([a-f0-9-]{36})(?:;|$)/)?.[1] || "";
 function pagePath(value: unknown) {
@@ -115,8 +116,8 @@ export async function GET(request: Request) {
   const where = "started_at >= ? AND (? = '' OR source = ?) AND (? = 0 OR last_seen_at >= ?)";
   const args = [since, source, source, activeOnly ? 1 : 0, activeSince];
   const [rows, summary] = await db.batch([
-    db.prepare(`SELECT *, (SELECT COUNT(*) FROM visit_events e WHERE e.session_id=visit_sessions.id AND e.type='pageview') AS pageviews FROM visit_sessions WHERE ${where} ORDER BY last_seen_at DESC LIMIT 25 OFFSET ?`).bind(...args, offset),
+    db.prepare(`SELECT *, (SELECT COUNT(*) FROM visit_events e WHERE e.session_id=visit_sessions.id AND e.type='pageview') AS pageviews FROM visit_sessions WHERE ${where} ORDER BY last_seen_at DESC LIMIT ? OFFSET ?`).bind(...args, pageSize, offset),
     db.prepare(`SELECT COUNT(*) AS total, COALESCE(SUM(last_seen_at >= ?),0) AS active, COALESCE(SUM(source='facebook'),0) AS facebook, COALESCE(SUM(display_name <> '' OR facebook_url <> ''),0) AS identified FROM visit_sessions WHERE ${where}`).bind(activeSince, ...args),
   ]);
-  return Response.json({ sessions: rows.results, summary: summary.results[0], serverTime: new Date().toISOString(), activeSince, retentionDays: 90 }, { headers: privateHeaders });
+  return Response.json({ sessions: rows.results, summary: summary.results[0], serverTime: new Date().toISOString(), activeSince, retentionDays: 90, pageSize }, { headers: privateHeaders });
 }

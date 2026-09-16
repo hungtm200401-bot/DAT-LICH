@@ -29,6 +29,33 @@
 .content-preview #cms-real-preview { height:650px }
 .cms-auth { margin-top:22px; font-size:13px }
 .cms-auth summary { cursor:pointer; margin-bottom:12px }
+.cms-block-manager { border:1px solid #e5e7eb; background:#fbfbfc; padding:14px; margin:0 0 18px; border-radius:8px }
+.cms-block-manager-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap }
+.cms-block-manager-head strong { display:block; font-size:14px; color:#111827 }
+.cms-block-manager-head span { display:block; margin-top:3px; color:#64748b; font-size:12px }
+.cms-block-manager-actions { display:flex; gap:8px; flex-wrap:wrap }
+.cms-block-empty { margin:12px 0 0; color:#64748b; font-size:13px }
+.cms-block-list { display:grid; gap:12px; margin-top:14px }
+.cms-block-card { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:14px }
+.cms-block-card header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px }
+.cms-block-card header b { font-size:13px; color:#111827 }
+.cms-block-card header div { display:flex; gap:6px; flex-wrap:wrap }
+.cms-block-card .cms-field { margin-bottom:12px; font-size:12px; font-weight:600; color:#334155 }
+.cms-block-card input,.cms-block-card textarea { margin-top:6px; font-weight:400 }
+.cms-danger-btn { color:#991b1b !important; border-color:#fecdd3 !important; background:#fff5f7 !important }
+.cms-block-image-row { display:grid; grid-template-columns:150px 1fr; gap:14px; align-items:start; margin-bottom:12px }
+.cms-block-image-row>img { width:150px; height:120px; object-fit:cover; border:1px solid #e5e7eb; border-radius:6px; background:#f8fafc }
+.cms-block-preset-row { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px }
+.preset-chip.mini { width:auto; min-width:72px; padding:5px; border:1px solid #e5e7eb; border-radius:6px; background:#fff; cursor:pointer; display:inline-flex; align-items:center; gap:5px }
+.preset-chip.mini img { width:24px; height:24px; object-fit:cover; border-radius:4px }
+.preset-chip.mini span { font-size:11px; color:#475569 }
+.cms-extra-blocks { width:min(1100px,100%); margin:58px auto 0; padding-top:34px; border-top:1px solid #ddd; display:grid; gap:36px }
+.cms-extra-block { display:grid; gap:14px }
+.cms-extra-block h2 { margin:0; font-size:clamp(24px,3vw,40px); line-height:1.08 }
+.cms-extra-block p { margin:0; max-width:780px; color:#424242; line-height:1.8 }
+.cms-extra-image figure { margin:0; display:grid; gap:10px }
+.cms-extra-image img { width:100%; max-height:680px; object-fit:cover; border:0; background:#f6f6f6 }
+.cms-extra-image figcaption { color:#666; font-size:13px; text-align:center }
 .visit-overview-header {
   background: #ffffff;
   border: 1px solid #e5e7eb;
@@ -178,7 +205,14 @@
   box-shadow: 0 2px 6px rgba(122, 24, 50, 0.08) !important;
 }
 
-.visit-pagination { display:flex; gap:18px; align-items:center; justify-content:flex-end; margin:22px 0 }
+.visit-pagination { display:flex; gap:12px; align-items:center; justify-content:flex-end; margin:22px 0; flex-wrap:wrap }
+.page-indicator { display:inline-flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:center; color:#475569; font-size:12.5px; font-weight:500 }
+.page-range { white-space:nowrap }
+.page-number-group { display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:center }
+.visit-page-number { height:34px; min-width:72px; padding:0 12px; border:1px solid #d1d5db; border-radius:6px; background:#fff; color:#1f2937; font-size:13px; font-weight:600; cursor:pointer }
+.visit-page-number:hover { border-color:#7a1832; color:#7a1832; background:#fff8fa }
+.visit-page-number.active,.visit-page-number:disabled { border-color:#111827; background:#111827; color:#fff; cursor:default }
+.visit-page-gap { color:#94a3b8; padding:0 2px }
 .visit-error { border:1px solid #e5c9d1; background:#fff5f7; padding:20px; color:#7a1832 }
 
 /* ==========================================================================
@@ -980,7 +1014,6 @@
 .visit-consent input:not([type=checkbox]),.visit-consent textarea { width:100%; box-sizing:border-box; border:1px solid #ccc; padding:9px; font:inherit }
 .visit-consent form > label { display:block; margin:12px 0 }
 .visit-consent form button { margin-top:12px }
-.visit-preferences { display:block; margin:15px auto 0; font-size:12px; cursor:pointer; border:0; background:none }
 .content-header-modes {
   margin-bottom: 20px;
   display: flex;
@@ -2374,4 +2407,3 @@
   border-color: #7a1832;
   color: #7a1832;
 }
-

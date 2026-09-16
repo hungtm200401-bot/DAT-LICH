@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, ne } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { appointments, customers, scheduleSlots, services, siteContent } from "../../../db/schema";
+import { siteAdmin } from "../../../lib/site-admin";
 
 const initialServices = [
   { id: "personal", name: "Trang điểm cá nhân", duration: 60, price: 450000, description: "Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.", enabled: true, contact: false, sortOrder: 1 },
@@ -167,6 +168,23 @@ export async function POST(request: Request) {
     const action = text(payload.action);
     const db = getDb();
     await ensureDefaults();
+
+    const adminActions = [
+      "updateAppointment",
+      "deleteAppointment",
+      "setScheduleSlot",
+      "saveContent",
+      "saveService",
+      "deleteService",
+      "resolveRequest",
+      "updateRequest",
+      "deleteRequest",
+    ];
+    if (adminActions.includes(action)) {
+      if (!await siteAdmin(request)) {
+        return Response.json({ error: "Yêu cầu quyền quản trị để thực hiện thao tác này." }, { status: 401 });
+      }
+    }
 
     if (action === "createAppointment") {
       const customer = text(payload.customer);

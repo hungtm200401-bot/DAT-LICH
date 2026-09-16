@@ -17,8 +17,20 @@ export async function POST(request: Request) {
     if (typeof path !== "string" || !/^\/(?:[a-z0-9/-]{0,100})$/.test(path) || path.startsWith("/admin") || !fields || Array.isArray(fields) || typeof fields !== "object" || Object.keys(fields).length > 200)
       return Response.json({ error: "Trang hoặc nội dung không hợp lệ." }, { status: 400 });
     for (const [key, value] of Object.entries(fields)) {
-      if (!/^[a-z0-9_-]{1,100}$/.test(key) || typeof value !== "string" || value.length > 6000)
+      if (!/^[a-z0-9_-]{1,100}$/.test(key) || typeof value !== "string" || value.length > (key === "blocks" ? 30000 : 6000))
         return Response.json({ error: "Trường nội dung không hợp lệ (tối đa 6.000 ký tự)." }, { status: 400 });
+      if (key === "blocks") {
+        const blocks = JSON.parse(value || "[]");
+        if (!Array.isArray(blocks) || blocks.length > 30) return Response.json({ error: "Danh sách khối nội dung không hợp lệ." }, { status: 400 });
+        for (const block of blocks) {
+          if (!block || typeof block !== "object" || !["text", "image"].includes(block.type)) return Response.json({ error: "Khối nội dung không hợp lệ." }, { status: 400 });
+          for (const field of ["title", "text", "image", "alt", "caption"]) {
+            if (block[field] !== undefined && (typeof block[field] !== "string" || block[field].length > 6000)) return Response.json({ error: "Nội dung khối quá dài." }, { status: 400 });
+          }
+          if (block.image && !/^(?:\/(?!\/)|https:\/\/)[^\s<>"']+$/.test(block.image)) return Response.json({ error: "Ảnh trong khối phải dùng đường dẫn /assets/… hoặc HTTPS." }, { status: 400 });
+        }
+        continue;
+      }
       if (key.startsWith("img-") && value && !/^(?:\/(?!\/)|https:\/\/)[^\s<>"']+$/.test(value))
         return Response.json({ error: "Ảnh phải dùng đường dẫn /assets/… hoặc HTTPS." }, { status: 400 });
     }

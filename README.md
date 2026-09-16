@@ -15,19 +15,19 @@ Project full-stack gồm website giới thiệu/đặt lịch và hệ thống q
 
 Yêu cầu Node.js `>=22.13.0`.
 
-### Windows
-
-Nhấp đúp `CHAY_DU_AN.bat`.
-
-### macOS / Linux
+Mở terminal tại thư mục ngoài cùng của dự án, nơi có `package.json`, rồi chạy:
 
 ```bash
-npm install
-npm run db:migrate:local
 npm run dev
 ```
 
-Mở địa chỉ Vite hiển thị trong terminal. Website dùng hash route; trang quản trị tại `/#/admin`, lịch làm việc tại `/#/admin/schedule`.
+Lệnh này sẽ cài thư viện cho thư mục `HOAN_Makeup_Web_Admin`, khởi tạo cơ sở dữ liệu local và chạy website trên máy. Mở địa chỉ Vite hiển thị trong terminal, thường là `http://localhost:5173/`. Website dùng hash route; trang quản trị tại `/#/admin`, lịch làm việc tại `/#/admin/schedule`.
+
+Nếu PowerShell báo lỗi `npm.ps1 cannot be loaded`, mở Command Prompt hoặc chạy qua `cmd /c`:
+
+```bash
+cmd /c npm run dev
+```
 
 ## Cấu trúc quan trọng
 

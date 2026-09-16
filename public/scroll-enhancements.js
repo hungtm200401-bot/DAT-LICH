@@ -13,12 +13,13 @@
 
   function injectStyles() {
     if (window.parent !== window || new URLSearchParams(location.search).get('cmsPreview') === '1') return;
+    if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) return;
     if (document.getElementById('hoan-scroll-styles')) return;
     const style = document.createElement('style');
     style.id = 'hoan-scroll-styles';
     style.textContent = `
-      /* === LUXURY HAUTE COUTURE SCROLLBAR === */
-      @media (prefers-reduced-motion: no-preference) {
+      /* === LUXURY HAUTE COUTURE SCROLLBAR (Desktop only) === */
+      @media (min-width: 769px) and (prefers-reduced-motion: no-preference) {
         html {
           scroll-behavior: smooth;
         }
@@ -342,7 +343,10 @@
   }
 
   function init() {
+    if (window.__hoanScrollInitialized) return;
     if (window.parent !== window || new URLSearchParams(location.search).get('cmsPreview') === '1') return;
+    if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) return;
+    window.__hoanScrollInitialized = true;
     ensureElements();
     updateScrollProgress();
 

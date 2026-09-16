@@ -24,8 +24,9 @@ export function createSiteTools(ctx) {
   };
   let pages = {}, selected = '/', draft = {}, revision = '', dirty = false, descriptors = [], framePath = '', isApplyingPreview = false;
   let report = null, reportError = '', reportLoading = false, offset = 0, days = '7', source = '', onlyActive = false;
+  const VISIT_PAGE_SIZE = 10;
   let detailSession = '', detailOffset = 0;
-  let activeVisitorTab = 'all', visitorSearchQuery = '', visitorQuickFilter = 'all', lastGeneratedQrSvg = '';
+  let activeVisitorTab = 'live', visitorSearchQuery = '', visitorQuickFilter = 'all', lastGeneratedQrSvg = '';
   let tracking = false, starting = null, lastPage = '', lastActivity = Date.now(), lastBeat = Date.now();
   let consent = storage.get('hoanAnalyticsConsent') === 'no' ? 'no' : 'yes';
   let refreshTimer, polling = false, previewDraft = null;
@@ -105,6 +106,130 @@ export function createSiteTools(ctx) {
     { src: '/assets/contact-brushes.jpg', title: 'Không gian Studio & Bàn phấn', category: 'campaign', tag: 'Không gian', ratio: '16:9', desc: 'Không gian đón tiếp khách hàng sang trọng' },
   ];
 
+  const newBlockId = () => 'blk-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+  function getBlocks(fields = draft) {
+    try {
+      const raw = fields.blocks ? JSON.parse(fields.blocks) : [];
+      if (!Array.isArray(raw)) return [];
+      return raw.slice(0, 30).map(block => ({
+        id: typeof block.id === 'string' && block.id ? block.id : newBlockId(),
+        type: block.type === 'image' ? 'image' : 'text',
+        title: typeof block.title === 'string' ? block.title : '',
+        text: typeof block.text === 'string' ? block.text : '',
+        image: typeof block.image === 'string' ? block.image : '',
+        alt: typeof block.alt === 'string' ? block.alt : '',
+        caption: typeof block.caption === 'string' ? block.caption : '',
+      }));
+    } catch {
+      return [];
+    }
+  }
+  function writeBlocks(blocks, redraw = true) {
+    draft.blocks = JSON.stringify(blocks.slice(0, 30));
+    dirty = true;
+    if (q('#cms-status')) q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+    if (redraw) drawBlockManager();
+    sendPreview();
+  }
+  function renderExtraBlocks(path, fields = pages[path]?.fields || {}) {
+    const main = q('#main');
+    if (!main || path.startsWith('/admin')) return;
+    main.querySelector('.cms-extra-blocks')?.remove();
+    const blocks = getBlocks(fields).filter(block => block.type === 'image' ? block.image : (block.title || block.text));
+    if (!blocks.length) return;
+    const section = document.createElement('section');
+    section.className = 'cms-extra-blocks';
+    section.setAttribute('aria-label', 'Nội dung bổ sung');
+    for (const block of blocks) {
+      const article = document.createElement('article');
+      article.className = `cms-extra-block cms-extra-${block.type}`;
+      if (block.title) {
+        const h = document.createElement('h2');
+        h.textContent = block.title;
+        article.append(h);
+      }
+      if (block.type === 'image') {
+        const figure = document.createElement('figure');
+        const image = document.createElement('img');
+        image.src = block.image;
+        image.alt = block.alt || block.title || block.caption || 'Hình ảnh bổ sung';
+        image.loading = 'lazy';
+        figure.append(image);
+        if (block.caption) {
+          const figcaption = document.createElement('figcaption');
+          figcaption.textContent = block.caption;
+          figure.append(figcaption);
+        }
+        article.append(figure);
+      } else if (block.text) {
+        const p = document.createElement('p');
+        p.textContent = block.text;
+        p.style.whiteSpace = 'pre-line';
+        article.append(p);
+      }
+      section.append(article);
+    }
+    main.append(section);
+  }
+  function drawBlockManager() {
+    const root = q('#cms-block-manager');
+    if (!root) return;
+    const blocks = getBlocks();
+    root.innerHTML = `
+      <div class="cms-block-manager-head">
+        <div>
+          <strong>Khối thêm mới của trang này</strong>
+          <span>${blocks.length ? `${blocks.length} khối đang thêm vào cuối trang` : 'Chưa có khối thêm mới'}</span>
+        </div>
+        <div class="cms-block-manager-actions">
+          <button type="button" class="btn btn-sm" data-action="add-cms-block" data-type="text">+ Khối nội dung</button>
+          <button type="button" class="btn btn-sm" data-action="add-cms-block" data-type="image">+ Khối ảnh</button>
+        </div>
+      </div>
+      ${blocks.length ? `<div class="cms-block-list">${blocks.map((block, index) => `
+        <article class="cms-block-card" data-block-id="${esc(block.id)}">
+          <header>
+            <b>${block.type === 'image' ? 'Khối ảnh' : 'Khối nội dung'} ${index + 1}</b>
+            <div>
+              <button type="button" class="btn btn-sm" data-action="move-cms-block" data-dir="-1" data-id="${esc(block.id)}" ${index === 0 ? 'disabled' : ''}>Lên</button>
+              <button type="button" class="btn btn-sm" data-action="move-cms-block" data-dir="1" data-id="${esc(block.id)}" ${index === blocks.length - 1 ? 'disabled' : ''}>Xuống</button>
+              <button type="button" class="btn btn-sm cms-danger-btn" data-action="delete-cms-block" data-id="${esc(block.id)}">Xóa</button>
+            </div>
+          </header>
+          <label class="cms-field">Tiêu đề khối
+            <input data-block-field="title" data-block-id="${esc(block.id)}" value="${esc(block.title)}" placeholder="Ví dụ: Vì sao chọn Hoàn">
+          </label>
+          ${block.type === 'image' ? `
+            <div class="cms-block-image-row">
+              <img src="${esc(block.image || '/assets/campaign.png')}" alt="" onerror="this.src='/assets/campaign.png'">
+              <div>
+                <label class="cms-field">Ảnh
+                  <input data-block-field="image" data-block-id="${esc(block.id)}" value="${esc(block.image)}" placeholder="/assets/... hoặc https://...">
+                </label>
+                <label class="btn btn-sm cms-btn-upload">Tải ảnh từ máy
+                  <input type="file" data-block-upload="${esc(block.id)}" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+                </label>
+                <div class="cms-block-preset-row">
+                  ${studioMediaCatalog.slice(0, 8).map(media => `<button type="button" class="preset-chip mini" data-action="apply-block-preset-image" data-id="${esc(block.id)}" data-src="${esc(media.src)}"><img src="${esc(media.src)}" alt=""><span>${esc(media.tag)}</span></button>`).join('')}
+                </div>
+              </div>
+            </div>
+            <label class="cms-field">Mô tả ảnh
+              <input data-block-field="alt" data-block-id="${esc(block.id)}" value="${esc(block.alt)}" placeholder="Mô tả ngắn cho SEO và trợ năng">
+            </label>
+            <label class="cms-field">Chú thích dưới ảnh
+              <textarea data-block-field="caption" data-block-id="${esc(block.id)}" rows="2" placeholder="Có thể để trống">${esc(block.caption)}</textarea>
+            </label>
+          ` : `
+            <label class="cms-field">Nội dung
+              <textarea data-block-field="text" data-block-id="${esc(block.id)}" rows="4" placeholder="Nhập đoạn nội dung muốn thêm vào trang">${esc(block.text)}</textarea>
+            </label>
+          `}
+        </article>
+      `).join('')}</div>` : '<p class="cms-block-empty">Bấm “Khối nội dung” hoặc “Khối ảnh” để thêm nội dung vào cuối trang đang chọn.</p>'}
+    `;
+  }
+
   function detectSection(node, path) {
     if (node.closest('header, .ct-editorial > header, .hero, .booking-art, .ct-hero')) {
       return { id: 'sec-hero', title: 'Đầu trang', icon: '' };
@@ -154,6 +279,7 @@ export function createSiteTools(ctx) {
     const selector = booking ? '#main h1, #main .ct-subtitle' : '#main h1, #main h2, #main h3, #main p, #main li, #main figcaption, #main img';
     const counters = {};
     return [...root.querySelectorAll(selector)].filter(node => {
+      if (node.closest('.cms-extra-blocks')) return false;
       if (node.closest('.ct-service-grid, .ct-service-meta, .ct-price, .ct-select-services, .ct-summary, .booking-summary, form, .breadcrumbs')) return false;
       if (node.matches('img') && (node.getAttribute('aria-hidden') === 'true' || node.classList.contains('fashion-detail'))) return false;
       if (!node.matches('img') && [...node.children].some(child => child.tagName !== 'BR')) return false;
@@ -257,6 +383,7 @@ export function createSiteTools(ctx) {
         }
       }
     }
+    renderExtraBlocks(path, fields);
     if (isPreview && !isApplyingPreview) window.parent.postMessage({ type: 'hoan:fields', path, fields: nodes.map(({ node, ...item }) => ({ ...item, value: fields[item.key] ?? item.original })) }, location.origin);
   }
   function linkedFields(path) {
@@ -286,11 +413,10 @@ export function createSiteTools(ctx) {
       socials.className = 'ct-footer-socials';
       socials.innerHTML = [['facebookUrl', 'Facebook'], ['instagramUrl', 'Instagram'], ['tiktokUrl', 'TikTok']].filter(([key]) => /^https:\/\//.test(b[key] || '')).map(([key, label]) => `<a href="${esc(b[key])}" target="_blank" rel="noopener noreferrer">${label}</a>`).join('');
       if (!socials.parentNode && socials.innerHTML) footer.append(socials);
-      if (!isPreview) { const button = document.createElement('button'); button.className = 'link visit-preferences'; button.dataset.visitAction = 'preferences'; button.textContent = 'Quyền riêng tư & thống kê'; footer.append(button); }
     }
     if (path === '/policies/privacy') {
       const notice = document.createElement('section'); notice.className = 'visit-policy';
-      notice.innerHTML = '<h2>Thống kê truy cập website</h2><p>Website tự ghi nhận nguồn truy cập, trang đã xem, thời gian hoạt động và thao tác với các nút điều hướng. Thông tin được lưu tối đa 90 ngày để đánh giá nội dung và nhu cầu tư vấn. Không thu thập địa chỉ IP, nội dung bạn đang gõ hoặc tự lấy tài khoản Facebook. Bạn có thể tắt thống kê và xóa phiên hiện tại tại “Quyền riêng tư & thống kê” ở chân trang.</p>';
+      notice.innerHTML = '<h2>Thống kê truy cập website</h2><p>Website tự ghi nhận nguồn truy cập, trang đã xem, thời gian hoạt động và thao tác với các nút điều hướng. Thông tin được lưu tối đa 90 ngày để đánh giá nội dung và nhu cầu tư vấn. Không thu thập địa chỉ IP, nội dung bạn đang gõ hoặc tự lấy tài khoản Facebook.</p>';
       q('#main').append(notice);
     }
   }
@@ -318,6 +444,8 @@ export function createSiteTools(ctx) {
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
                   <span>Thêm ảnh</span>
                 </button>
+                <button class="btn" type="button" data-action="add-cms-block" data-type="text">+ Khối nội dung</button>
+                <button class="btn" type="button" data-action="add-cms-block" data-type="image">+ Khối ảnh</button>
                 <button class="btn btn-dark btn-save-primary" type="submit">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
                   <span>Lưu thay đổi</span>
@@ -329,6 +457,7 @@ export function createSiteTools(ctx) {
                 <a class="link" id="cms-open-page" href="#${selected}" target="_blank" rel="noopener">Mở trang đã lưu</a>
               </div>
             </div>
+            <div id="cms-block-manager" class="cms-block-manager"></div>
             <div class="live-preview-viewport">
               <iframe id="cms-real-preview" title="Xem trước trang website thật" src="${previewUrl(selected)}"></iframe>
             </div>
@@ -643,6 +772,7 @@ export function createSiteTools(ctx) {
   function drawFields() {
     const container = q('#cms-fields'); if (!container) return;
     updateFilterCounts();
+    drawBlockManager();
 
     if (descriptors.length === 0) {
       container.innerHTML = '<div class="cms-no-results">Đang đồng bộ cấu trúc trang…</div>';
@@ -721,6 +851,7 @@ export function createSiteTools(ctx) {
     }
 
     if (frame()) frame().src = previewUrl(path);
+    drawBlockManager();
   }
   async function savePage() {
     const button = q('#cms-page-form button[type="submit"]');
@@ -898,13 +1029,7 @@ export function createSiteTools(ctx) {
     const campaignSec = q('.visitor-section-campaign');
     const paginationSec = q('.visit-pagination');
 
-    if (activeVisitorTab === 'live') {
-      if (kpiSec) kpiSec.style.display = '';
-      if (analyticsSec) analyticsSec.style.display = 'none';
-      if (tableArea) tableArea.style.display = '';
-      if (paginationSec) paginationSec.style.display = '';
-      if (campaignSec) campaignSec.style.display = 'none';
-    } else if (activeVisitorTab === 'campaign') {
+    if (activeVisitorTab === 'campaign') {
       if (kpiSec) kpiSec.style.display = 'none';
       if (analyticsSec) analyticsSec.style.display = 'none';
       if (tableArea) tableArea.style.display = 'none';
@@ -917,12 +1042,12 @@ export function createSiteTools(ctx) {
       if (paginationSec) paginationSec.style.display = 'none';
       if (campaignSec) campaignSec.style.display = 'none';
     } else {
-      // 'all'
+      // 'live' (Khách & Hành trình - mặc định)
       if (kpiSec) kpiSec.style.display = '';
-      if (analyticsSec) analyticsSec.style.display = '';
+      if (analyticsSec) analyticsSec.style.display = 'none';
       if (tableArea) tableArea.style.display = '';
       if (paginationSec) paginationSec.style.display = '';
-      if (campaignSec) campaignSec.style.display = '';
+      if (campaignSec) campaignSec.style.display = 'none';
     }
   }
 
@@ -948,22 +1073,18 @@ export function createSiteTools(ctx) {
 
         <!-- Segmented Tab Navigation -->
         <div class="visitor-tab-bar" role="tablist">
-          <button class="visitor-tab-btn ${activeVisitorTab === 'all' ? 'active' : ''}" data-action="set-visitor-tab" data-tab="all">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-            <span>Tất cả không gian</span>
-          </button>
           <button class="visitor-tab-btn ${activeVisitorTab === 'live' ? 'active' : ''}" data-action="set-visitor-tab" data-tab="live">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             <span>Khách & Hành trình</span>
             <span class="visitor-tab-badge" id="tab-live-badge">${report?.summary?.active || 0}</span>
           </button>
-          <button class="visitor-tab-btn ${activeVisitorTab === 'campaign' ? 'active' : ''}" data-action="set-visitor-tab" data-tab="campaign">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-            <span>Tạo link & Mã QR Hub</span>
-          </button>
           <button class="visitor-tab-btn ${activeVisitorTab === 'analytics' ? 'active' : ''}" data-action="set-visitor-tab" data-tab="analytics">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
             <span>Biểu đồ & Báo cáo</span>
+          </button>
+          <button class="visitor-tab-btn ${activeVisitorTab === 'campaign' ? 'active' : ''}" data-action="set-visitor-tab" data-tab="campaign">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            <span>Tạo link & Mã QR Hub</span>
           </button>
         </div>
 
@@ -1014,7 +1135,7 @@ export function createSiteTools(ctx) {
         <section id="visit-detail" hidden></section>
 
         <!-- Upgraded Campaign Link & QR Hub -->
-        <section class="cms-panel visit-share visitor-section-campaign" data-section="campaign,all" ${activeVisitorTab === 'live' || activeVisitorTab === 'analytics' ? 'style="display:none;"' : ''}>
+        <section class="cms-panel visit-share visitor-section-campaign" data-section="campaign" ${activeVisitorTab !== 'campaign' ? 'style="display:none;"' : ''}>
           <div class="share-head-group">
             <span class="share-tag">CHIẾN DỊCH QUẢNG BÁ & QR MARKETING</span>
             <h2>Tạo link chia sẻ Facebook & Mã QR tiếp thị</h2>
@@ -1113,6 +1234,10 @@ export function createSiteTools(ctx) {
       report = await request('/api/visits?' + params, null, true); reportError = '';
     } catch (error) { reportError = error.message; }
     finally { reportLoading = false; drawReport(); }
+  }
+  function scrollToVisitJourney() {
+    const target = q('.visitor-section-table-area') || q('#visit-report');
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   function buildTrafficChart(sessions, daysParam, totalVisits) {
     const numDays = Math.min(Number(daysParam) || 7, 7);
@@ -1357,7 +1482,7 @@ export function createSiteTools(ctx) {
       </section>
 
       <!-- Table & Quick Filter Area -->
-      <div class="visitor-section-table-area" data-section="live,all">
+      <div class="visitor-section-table-area" data-section="live">
         <div class="visitor-filter-toolbar">
           <div class="visitor-search-box">
             <svg class="search-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -1493,9 +1618,26 @@ export function createSiteTools(ctx) {
       }
     }
 
-    q('#visit-page-label').textContent = `Trang ${Math.floor(offset / 25) + 1} · ${summary.total} phiên`;
+    const pageSize = Number(report.pageSize) || VISIT_PAGE_SIZE;
+    const totalSessions = Number(summary.total) || 0;
+    const currentPage = Math.floor(offset / pageSize) + 1;
+    const totalPages = Math.max(1, Math.ceil(totalSessions / pageSize));
+    const pageStart = totalSessions ? offset + 1 : 0;
+    const pageEnd = Math.min(offset + pageSize, totalSessions);
+    const visiblePages = [];
+    for (let page = 1; page <= totalPages; page++) {
+      if (totalPages <= 7 || page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1) {
+        visiblePages.push(page);
+      }
+    }
+    const pageButtons = visiblePages.map((page, index) => {
+      const hasGap = index > 0 && page - visiblePages[index - 1] > 1;
+      const button = `<button type="button" class="visit-page-number ${page === currentPage ? 'active' : ''}" data-visit-admin="page" data-page="${page}" ${page === currentPage ? 'disabled aria-current="page"' : ''}>Trang ${page}</button>`;
+      return `${hasGap ? '<span class="visit-page-gap">...</span>' : ''}${button}`;
+    }).join('');
+    q('#visit-page-label').innerHTML = `<span class="page-range">${pageStart}-${pageEnd} / ${totalSessions} phiên</span><span class="page-number-group">${pageButtons}</span>`;
     q('[data-visit-admin="prev"]').disabled = offset === 0;
-    q('[data-visit-admin="next"]').disabled = offset + 25 >= Number(summary.total);
+    q('[data-visit-admin="next"]').disabled = offset + pageSize >= totalSessions;
     const tabLiveBadge = q('#tab-live-badge');
     if (tabLiveBadge) tabLiveBadge.textContent = Number(summary.active) || 0;
     updateVisitorTabVisibility();
@@ -1705,7 +1847,7 @@ export function createSiteTools(ctx) {
     const cell = value => '"' + String(value ?? '').replace(/^[=+@-]/, "'$&").replaceAll('"', '""') + '"';
     const rows = [['Phiên', 'Tên tự khai', 'Facebook tự khai - chưa xác minh', 'Nguồn', 'Chiến dịch', 'Giờ vào', 'Gần nhất', 'Trang vào', 'Trang hiện tại', 'Số lượt xem', 'Giây hoạt động', 'Mục đích tự khai'], ...report.sessions.map(s => [s.id, s.display_name, s.facebook_url, s.source, s.campaign, time(s.started_at), time(s.last_seen_at), s.landing_page, s.current_page, s.pageviews, s.active_seconds, s.declared_purpose])];
     const url = URL.createObjectURL(new Blob(['\ufeff' + rows.map(row => row.map(cell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'hoan-truy-cap-trang-' + (offset / 25 + 1) + '.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const link = document.createElement('a'); link.href = url; link.download = 'hoan-truy-cap-trang-' + (Math.floor(offset / VISIT_PAGE_SIZE) + 1) + '.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   function consentPanel(preferences = false) {
@@ -1817,10 +1959,15 @@ export function createSiteTools(ctx) {
   }
 
   function start() {
-    const refinements = document.createElement('link'); refinements.rel = 'stylesheet'; refinements.href = '/admin-refinements.css?v=6';
-    const style = document.createElement('link'); style.rel = 'stylesheet'; style.href = '/site-tools.css?v=144.0'; document.head.append(style);
-    document.head.append(refinements);
-    const imageEditorStyle = document.createElement('link'); imageEditorStyle.rel = 'stylesheet'; imageEditorStyle.href = '/image-editor.css'; document.head.append(imageEditorStyle);
+    if (!document.querySelector('link[href*="site-tools.css"]')) {
+      const style = document.createElement('link'); style.rel = 'stylesheet'; style.href = '/site-tools.css?v=146.0'; document.head.append(style);
+    }
+    if (!document.querySelector('link[href*="admin-refinements.css"]')) {
+      const refinements = document.createElement('link'); refinements.rel = 'stylesheet'; refinements.href = '/admin-refinements.css?v=7'; document.head.append(refinements);
+    }
+    if (!document.querySelector('link[href*="image-editor.css"]')) {
+      const imageEditorStyle = document.createElement('link'); imageEditorStyle.rel = 'stylesheet'; imageEditorStyle.href = '/image-editor.css'; document.head.append(imageEditorStyle);
+    }
     loadPages().then(() => ctx.render()).catch(error => { toast(error.message); ctx.render(); });
 
     if (isPreview) {
@@ -1993,6 +2140,23 @@ export function createSiteTools(ctx) {
         sendPreview();
         return;
       }
+      if (event.target.matches('[data-block-field]')) {
+        const id = event.target.dataset.blockId;
+        const field = event.target.dataset.blockField;
+        const blocks = getBlocks();
+        const block = blocks.find(item => item.id === id);
+        if (!block || !field) return;
+        block[field] = event.target.value;
+        draft.blocks = JSON.stringify(blocks);
+        dirty = true;
+        if (q('#cms-status')) q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+        if (field === 'image') {
+          const img = event.target.closest('.cms-block-card')?.querySelector('.cms-block-image-row img');
+          if (img) img.src = event.target.value || '/assets/campaign.png';
+        }
+        sendPreview();
+        return;
+      }
       if (event.target.matches('[data-cms-field]')) {
         const key = event.target.dataset.cmsField;
         const val = event.target.value;
@@ -2068,6 +2232,23 @@ export function createSiteTools(ctx) {
           q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
           sendPreview();
           toast('Đã tải ảnh lên thành công.');
+        } catch (error) { toast(error.message); }
+      }
+      if (event.target.matches('[data-block-upload]')) {
+        const file = event.target.files[0]; if (!file) return;
+        if (file.size > 5 * 1024 * 1024) return toast('Ảnh tối đa 5 MB.');
+        const id = event.target.dataset.blockUpload;
+        const data = new FormData(); data.append('files', file);
+        try {
+          const response = await fetch('/api/uploads', { method: 'POST', body: data });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error);
+          const blocks = getBlocks();
+          const block = blocks.find(item => item.id === id);
+          if (!block) return;
+          block.image = result.paths[0];
+          writeBlocks(blocks);
+          toast('Đã tải ảnh lên khối ảnh.');
         } catch (error) { toast(error.message); }
       }
       if (event.target.matches('#visit-days, #visit-source, #visit-active')) { days = q('#visit-days').value; source = q('#visit-source').value; onlyActive = q('#visit-active').checked; offset = 0; await loadReport(); }
@@ -2269,6 +2450,40 @@ export function createSiteTools(ctx) {
         document.querySelectorAll('.cms-section-group').forEach(g => g.classList.add('collapsed'));
         return;
       }
+      const addBlockBtn = event.target.closest('[data-action="add-cms-block"]');
+      if (addBlockBtn) {
+        event.preventDefault();
+        const type = addBlockBtn.dataset.type === 'image' ? 'image' : 'text';
+        const block = type === 'image'
+          ? { id: newBlockId(), type, title: 'Hình ảnh mới', image: '/assets/campaign.png', alt: 'Hình ảnh bổ sung', caption: '' }
+          : { id: newBlockId(), type, title: 'Tiêu đề mới', text: 'Nhập nội dung mới tại đây.' };
+        const blocks = getBlocks();
+        blocks.push(block);
+        writeBlocks(blocks);
+        q('#cms-block-manager')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        toast(type === 'image' ? 'Đã thêm khối ảnh.' : 'Đã thêm khối nội dung.');
+        return;
+      }
+      const moveBlockBtn = event.target.closest('[data-action="move-cms-block"]');
+      if (moveBlockBtn) {
+        event.preventDefault();
+        const blocks = getBlocks();
+        const index = blocks.findIndex(block => block.id === moveBlockBtn.dataset.id);
+        const nextIndex = index + Number(moveBlockBtn.dataset.dir || 0);
+        if (index >= 0 && nextIndex >= 0 && nextIndex < blocks.length) {
+          [blocks[index], blocks[nextIndex]] = [blocks[nextIndex], blocks[index]];
+          writeBlocks(blocks);
+        }
+        return;
+      }
+      const deleteBlockBtn = event.target.closest('[data-action="delete-cms-block"]');
+      if (deleteBlockBtn) {
+        event.preventDefault();
+        if (!confirm('Xóa khối này khỏi trang đang chỉnh sửa?')) return;
+        writeBlocks(getBlocks().filter(block => block.id !== deleteBlockBtn.dataset.id));
+        toast('Đã xóa khối khỏi bản nháp.');
+        return;
+      }
       const locateBtn = event.target.closest('[data-action="locate-element"]');
       if (locateBtn) {
         event.preventDefault();
@@ -2360,6 +2575,17 @@ export function createSiteTools(ctx) {
         q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
         sendPreview();
         toast('Đã chọn ảnh mẫu.');
+        return;
+      }
+      const blockPresetBtn = event.target.closest('[data-action="apply-block-preset-image"]');
+      if (blockPresetBtn) {
+        event.preventDefault();
+        const blocks = getBlocks();
+        const block = blocks.find(item => item.id === blockPresetBtn.dataset.id);
+        if (!block) return;
+        block.image = blockPresetBtn.dataset.src || block.image;
+        writeBlocks(blocks);
+        toast('Đã chọn ảnh mẫu cho khối ảnh.');
         return;
       }
       const quickPosBtn = event.target.closest('[data-action="quick-set-pos"]');
@@ -2457,7 +2683,7 @@ export function createSiteTools(ctx) {
       const action = button.dataset.visitAction;
       if (action === 'preferences') consentPanel(true);
       if (action === 'close') q('#visit-consent')?.remove();
-      if (action === 'accept') { consent = 'yes'; storage.set('hoanAnalyticsConsent', consent); q('#visit-consent')?.remove(); lastPage = ''; trackPage(); toast('Bạn có thể giới thiệu nhu cầu tại Quyền riêng tư & thống kê ở chân trang.'); }
+      if (action === 'accept') { consent = 'yes'; storage.set('hoanAnalyticsConsent', consent); q('#visit-consent')?.remove(); lastPage = ''; trackPage(); toast('Đã bật thống kê truy cập.'); }
       if (action === 'decline') {
         consent = 'no'; storage.set('hoanAnalyticsConsent', consent); tracking = false; lastPage = '';
         try { await request('/api/visits', { type: 'revoke' }); q('#visit-consent')?.remove(); }
@@ -2465,7 +2691,8 @@ export function createSiteTools(ctx) {
       }
       const admin = button.dataset.visitAdmin;
       if (admin === 'refresh') await loadReport();
-      if (admin === 'prev' || admin === 'next') { offset = Math.max(0, offset + (admin === 'next' ? 25 : -25)); await loadReport(); }
+      if (admin === 'prev' || admin === 'next') { const pageSize = Number(report?.pageSize) || VISIT_PAGE_SIZE; offset = Math.max(0, offset + (admin === 'next' ? pageSize : -pageSize)); await loadReport(); scrollToVisitJourney(); }
+      if (admin === 'page') { const pageSize = Number(report?.pageSize) || VISIT_PAGE_SIZE; offset = Math.max(0, ((Number(button.dataset.page) || 1) - 1) * pageSize); await loadReport(); scrollToVisitJourney(); }
       if (admin === 'export') exportCsv();
       if (admin === 'close-detail') closeDetail();
       if (admin === 'events-prev' || admin === 'events-next') await showDetail(detailSession, Math.max(0, detailOffset + (admin === 'events-next' ? 100 : -100)));

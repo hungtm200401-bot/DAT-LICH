@@ -1,0 +1,15 @@
+{
+  "name": "HOÀN — Makeup Artist Admin",
+  "short_name": "HOÀN Admin",
+  "start_url": "/#/admin",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#8b1538",
+  "icons": [
+    {
+      "src": "/assets/hoan-logo.png",
+      "sizes": "192x192 512x512",
+      "type": "image/png"
+    }
+  ]
+}
