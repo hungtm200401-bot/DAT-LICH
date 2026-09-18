@@ -402,7 +402,63 @@
   }
 
   function account() {
-    return shell(`<h1>Tài khoản & ứng dụng</h1><div class="ma-account"><span class="ma-account-avatar">HN</span><div><b>Hoàn Nguyễn</b><small style="display:block;color:#657083;margin-top:4px">Quản trị viên</small></div></div>${settingsLink('bell','Trung tâm thông báo','/admin/notifications')}${settingsLink('sliders','Tùy chọn nhận thông báo','/admin/notification-settings')}${settingsLink('device','Cài HOÀN Admin Mobile','/admin/install')}<div class="ma-summary" style="margin-top:12px">Thiết bị này</div>${settingsLink('download','Cài ứng dụng','/admin/install','Chưa kiểm tra')}${settingsLink('bell','Thông báo đẩy','/admin/push',ui.pushEnabled?'Đã bật':'Chưa bật')}<button class="ma-btn" style="width:100%;margin-top:16px" data-ma-action="logout">${icon('logout')}Đăng xuất</button><p style="text-align:center;color:#657083;font-size:11px">HOÀN · Quản trị vận hành</p>`,{ title:'', back:'#/admin', active:'customers' });
+    return shell(`<h1>Tài khoản & ứng dụng</h1><div class="ma-account"><span class="ma-account-avatar">HN</span><div><b>Hoàn Nguyễn</b><small style="display:block;color:#657083;margin-top:4px">Quản trị viên</small></div></div><div class="ma-summary" style="margin-top:12px">Vận hành studio</div>${settingsLink('sliders','Quản lý dịch vụ & giá niêm yết','/admin/services')}${settingsLink('card','Cài đặt tài khoản nhận cọc','/admin/settings')}${settingsLink('bell','Trung tâm thông báo','/admin/notifications')}${settingsLink('sliders','Tùy chọn nhận thông báo','/admin/notification-settings')}${settingsLink('device','Cài HOÀN Admin Mobile','/admin/install')}<div class="ma-summary" style="margin-top:12px">Thiết bị này</div>${settingsLink('download','Cài ứng dụng','/admin/install','Chưa kiểm tra')}${settingsLink('bell','Thông báo đẩy','/admin/push',ui.pushEnabled?'Đã bật':'Chưa bật')}<button class="ma-btn" style="width:100%;margin-top:16px" data-ma-action="logout">${icon('logout')}Đăng xuất</button><p style="text-align:center;color:#657083;font-size:11px">HOÀN · Quản trị vận hành</p>`,{ title:'', back:'#/admin', active:'customers' });
+  }
+
+  function mobileServices() {
+    const list = state().services || [];
+    return shell(`
+      <div class="ma-title-row">
+        <h1>Quản lý dịch vụ</h1>
+      </div>
+      <p style="margin:-2px 0 14px;color:#657083;font-size:12px">Bật/tắt dịch vụ hiển thị cho khách và giá niêm yết</p>
+      <div class="ma-service-list">
+        ${list.map((s) => `
+          <div class="ma-card" style="padding:14px;margin-bottom:12px;border:1px solid var(--ma-line);border-radius:8px;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,0.03)">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+              <div style="flex:1">
+                <b style="font-size:15px;color:#111;display:block">${esc(s.name)}</b>
+                <div style="margin-top:4px;font-size:12px;color:#657083;line-height:1.4">${esc(s.description || '')}</div>
+              </div>
+              <button class="ma-switch ${s.enabled !== false ? 'on' : ''}" data-ma-action="toggle-service" data-id="${esc(s.id)}" aria-label="Bật tắt ${esc(s.name)}"></button>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;padding-top:10px;border-top:1px dashed var(--ma-line);font-size:13px">
+              <span style="color:#657083">Thời lượng: <b style="color:#111">${s.duration || 60} phút</b></span>
+              <span style="color:var(--ma-wine);font-weight:600">${s.contact ? 'Giá liên hệ' : money(s.price)}</span>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `, { title: 'Dịch vụ', back: '#/admin/account', active: 'customers' });
+  }
+
+  function mobileSettings() {
+    const s = state().settings || {};
+    const b = state().brand || {};
+    return shell(`
+      <h1>Cài đặt vận hành</h1>
+      <p style="margin:-2px 0 14px;color:#657083;font-size:12px">Tài khoản nhận cọc, hotline và nhận lịch</p>
+      <form class="ma-form" data-ma-form="save-mobile-settings">
+        <div class="ma-summary" style="margin-bottom:12px"><b>Tài khoản nhận tiền cọc</b></div>
+        <div class="ma-form-grid">
+          ${field('bankName','Ngân hàng','text',s.bankName || 'MB Bank (Ngân hàng Quân Đội)',true,'Tên ngân hàng')}
+          ${field('bankAccount','Số tài khoản','text',s.bankAccount || '0901234567',true,'Số tài khoản nhận cọc')}
+          ${field('bankOwner','Chủ tài khoản','text',s.bankOwner || 'NGUYEN HOAN',true,'Tên chủ tài khoản')}
+        </div>
+
+        <div class="ma-summary" style="margin:16px 0 12px"><b>Chính sách cọc & Hotline</b></div>
+        <div class="ma-form-grid">
+          ${field('deposit','Mức cọc tối thiểu (VNĐ)','number',s.deposit || '200000',true,'Số tiền cọc')}
+          ${field('travelFee','Phí di chuyển / km (VNĐ)','number',s.travelFee || '50000',false,'Phí di chuyển')}
+          ${field('bookingWindow','Số ngày nhận lịch trước','number',s.bookingWindow || '60',true,'Số ngày')}
+          ${field('phone','Hotline / Zalo tư vấn','tel',b.phone || s.phone || '0988123456',true,'Số điện thoại tư vấn')}
+        </div>
+
+        <div class="ma-form-footer" style="margin-top:20px">
+          <button class="ma-btn primary" type="submit">Lưu cài đặt</button>
+        </div>
+      </form>
+    `, { title: 'Cài đặt', back: '#/admin/account', active: 'customers' });
   }
 
   function settingsLink(ico,label,href,status='') { return `<a class="ma-settings-link" href="${href.startsWith('#') ? href : '#'+href}">${icon(ico)}<span>${label}</span>${status?`<small>${status}</small>`:'<span></span>'}${icon('chevron')}</a>`; }
@@ -420,7 +476,7 @@
   }
 
   function utilityPage(path) {
-    const names={ services:'Dịch vụ', promotions:'Mã ưu đãi', gallery:'Bộ sưu tập', content:'Nội dung website', reports:'Báo cáo', settings:'Cài đặt', audit:'Nhật ký hoạt động', permissions:'Phân quyền', visitors:'Khách truy cập website' };
+    const names={ promotions:'Mã ưu đãi', gallery:'Bộ sưu tập', content:'Nội dung website', reports:'Báo cáo', audit:'Nhật ký hoạt động', permissions:'Phân quyền', visitors:'Khách truy cập website' };
     const key=path.split('/')[2], title=names[key] || 'Tài khoản & ứng dụng';
     return shell(`<h1>${title}</h1><div class="ma-note">${icon('info')}<span>Mục này sử dụng bố cục quản trị rút gọn trên điện thoại. Bạn có thể tiếp tục thao tác ở bản desktop khi cần dữ liệu dạng bảng.</span></div>${settingsLink('bell','Trung tâm thông báo','/admin/notifications')}${settingsLink('calendar','Lịch hẹn','/admin/appointments')}${settingsLink('card','Tiền cọc','/admin/payments')}${settingsLink('sliders','Lịch làm việc','/admin/schedule')}${settingsLink('user','Tài khoản & ứng dụng','/admin/account')}`,{ title:'', back:'#/admin', active:'overview' });
   }
@@ -431,6 +487,8 @@
     const path=pathOf(raw), parts=path.split('/').filter(Boolean);
     if(path==='/admin/login') return loginPage();
     if(path==='/admin' || path==='/admin/') return dashboard();
+    if(path==='/admin/services') return mobileServices();
+    if(path==='/admin/settings') return mobileSettings();
     if(path==='/admin/notifications') return notifications(raw);
     if(path==='/admin/notification-settings') return notificationSettings();
     if(path==='/admin/push') return pushPage();
@@ -481,6 +539,16 @@
     const action=el.dataset.maAction; event.preventDefault();
     try {
       if(action==='toggle'){ el.classList.toggle('on'); return; }
+      if(action==='toggle-service'){
+        const s=(state().services || []).find(item => item.id === el.dataset.id);
+        if(s){
+          s.enabled = s.enabled === false;
+          el.classList.toggle('on', s.enabled);
+          await api({action:'saveService',...s});
+          toast(s.enabled ? 'Đã bật hiển thị dịch vụ' : 'Đã tạm ẩn dịch vụ');
+        }
+        return;
+      }
       if(action==='copy'){ await navigator.clipboard.writeText(el.dataset.value || ''); toast('Đã sao chép'); return; }
       if(action==='read-all'){ ui.notificationRead=true; refresh(); return; }
       if(action==='cancel-sheet'){ cancelSheet(el.dataset.code); return; }
@@ -533,14 +601,45 @@
         await api({action:'setScheduleSlot',date:data.date,time:data.time,status:'blocked',note:data.note}); state().scheduleSlots.push({slotDate:data.date,slotTime:data.time,status:'blocked',note:data.note}); toast('Đã chặn khung giờ'); go('/admin/schedule'); return;
       }
       if(kind==='week-settings' || kind==='copy-week'){ toast(kind==='copy-week'?'Đã sao chép thiết lập tuần':'Đã lưu thiết lập tuần'); go('/admin/schedule'); return; }
+      if(kind==='save-mobile-settings'){
+        const curSettings = state().settings || {};
+        const newSettings = {
+          ...curSettings,
+          bankName: data.bankName,
+          bankAccount: data.bankAccount,
+          bankOwner: data.bankOwner,
+          deposit: String(data.deposit || '200000'),
+          travelFee: String(data.travelFee || '50000'),
+          bookingWindow: String(data.bookingWindow || '60'),
+          phone: data.phone,
+        };
+        state().settings = newSettings;
+        if(state().brand) state().brand.phone = data.phone;
+        await api({ action: 'saveContent', key: 'settings', value: newSettings });
+        toast('Đã lưu cài đặt thành công');
+        go('/admin/account');
+        return;
+      }
       if(kind==='login'){ sessionStorage.setItem('hoanAdminToken',data.password || 'mobile-session'); toast('Đăng nhập thành công'); go('/admin'); return; }
     } catch(error) { toast(error.message || 'Không thể lưu thay đổi'); }
     finally { if(submit) submit.disabled=false; }
   },true);
 
   window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); window.__hoanInstallPrompt=event; });
-  let mobile = matchMedia(`(max-width:${MAX_WIDTH}px)`).matches;
-  window.addEventListener('resize',() => { const next=matchMedia(`(max-width:${MAX_WIDTH}px)`).matches; if(next!==mobile){ mobile=next; refresh(); } });
+  const isForcedMobile = () => {
+    try {
+      const q = new URLSearchParams(location.search || location.hash.split('?')[1] || '');
+      if (q.get('mobile') === '1' || q.get('view') === 'mobile') return true;
+      if (window.parent && window.parent !== window) return true;
+    } catch {}
+    return false;
+  };
+  if (isForcedMobile()) {
+    document.documentElement.classList.add('force-mobile');
+    document.body?.classList.add('force-mobile');
+  }
+  let mobile = isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches;
+  window.addEventListener('resize',() => { const next=isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches; if(next!==mobile){ mobile=next; refresh(); } });
 
-  window.HoanMobileAdmin = { matches:() => matchMedia(`(max-width:${MAX_WIDTH}px)`).matches, render, refresh };
+  window.HoanMobileAdmin = { matches:() => isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches, render, refresh };
 })();

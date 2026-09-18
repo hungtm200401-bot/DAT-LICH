@@ -192,5 +192,16 @@
 }
 
 @media (min-width: 701px) {
-  .ma-app,.ma-login,.ma-modal-backdrop,.ma-toast { display:none!important; }
+  html:not(.force-mobile) body:not(.force-mobile) .ma-app,
+  html:not(.force-mobile) body:not(.force-mobile) .ma-login,
+  html:not(.force-mobile) body:not(.force-mobile) .ma-modal-backdrop,
+  html:not(.force-mobile) body:not(.force-mobile) .ma-toast { display:none!important; }
+}
+
+html.force-mobile, body.force-mobile {
+  background: #fff !important;
+  overflow-x: hidden !important;
+}
+.force-mobile .ma-app {
+  display: block !important;
 }

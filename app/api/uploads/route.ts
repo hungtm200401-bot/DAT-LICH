@@ -3,6 +3,7 @@ export async function POST(request: Request) {
   try {
     const form=await request.formData();const files=form.getAll('files');
     if(!files.length||files.length>3)return Response.json({error:'Chọn từ 1 đến 3 ảnh.'},{status:400});
+    if(!env.BUCKET)return Response.json({paths:[]});
     const paths:string[]=[];
     for(const value of files){
       if(!(value instanceof File)||!['image/jpeg','image/png','image/webp'].includes(value.type)||value.size>5*1024*1024)return Response.json({error:'Ảnh phải là JPG, PNG hoặc WebP và không quá 5 MB.'},{status:400});
@@ -17,6 +18,7 @@ export async function POST(request: Request) {
 }
 export async function GET(request:Request){
   try{
+    if(!env.BUCKET)return new Response('Không tìm thấy',{status:404});
     const key=new URL(request.url).searchParams.get('key')||'';
     if(!/^references\/[a-f0-9-]{36}$/.test(key))return new Response('Không tìm thấy',{status:404});
     const object=await env.BUCKET.get(key);if(!object)return new Response('Không tìm thấy',{status:404});

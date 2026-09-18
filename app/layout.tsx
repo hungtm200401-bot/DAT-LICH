@@ -36,14 +36,25 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-title" content="HOÀN Admin" />
         <link rel="apple-touch-icon" href="/assets/hoan-logo.png" />
         <link rel="manifest" href="/manifest.json" />
+        <link rel="preload" href="/fonts/hoan-5.ttf" as="font" type="font/ttf" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/tinos-Tinos-Regular.ttf" as="font" type="font/ttf" crossOrigin="anonymous" />
         <link rel="stylesheet" href="/fonts/fonts.css" />
-        <link rel="stylesheet" href="/styles.css?v=2.3" />
-        <link rel="stylesheet" href="/couture.css?v=117.0" />
-        <link rel="stylesheet" href="/site-tools.css?v=144.0" />
-        <link rel="stylesheet" href="/admin-refinements.css?v=7" />
-        <link rel="stylesheet" href="/mobile-admin.css?v=1.1" />
+        <link rel="stylesheet" href="/styles.css?v=2.5" />
+        <link rel="stylesheet" href="/couture.css?v=119.0" />
+        <link rel="stylesheet" href="/site-tools.css?v=145.0" />
+        <link rel="stylesheet" href="/admin-refinements.css?v=8" />
+        <link rel="stylesheet" href="/mobile-admin.css?v=1.2" />
       </head>
-      <body suppressHydrationWarning>{children}</body>
+      <body suppressHydrationWarning>
+        {children}
+        <script dangerouslySetInnerHTML={{ __html: `
+          if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+              navigator.serviceWorker.register('/sw.js').catch(() => {});
+            });
+          }
+        `}} />
+      </body>
     </html>
   );
 }

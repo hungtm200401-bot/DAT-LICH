@@ -370,8 +370,8 @@
   const imageFor = s => s.id==='bridal'?(state.brand.bridalImage||'bridal-new.png'):s.id==='personal'||s.id==='photo'?(state.brand.personalImage||'natural.png'):(state.brand.partyImage||'evening.png');
   const field = (name,label,type='text',required=false,value=state.booking[name]||'') => `<label class="ct-field">${label}${required?' *':''}<input name="${name}" type="${type}" value="${esc(value)}" ${required?'required':''} ${type==='tel'?'inputmode="tel" pattern="[+0-9 ()-]{9,16}"':''}></label>`;
   const selectField = (name,label,options,value=state.booking[name]) => `<label class="ct-field">${label}<select name="${name}">${options.map(x=>`<option ${value===x?'selected':''}>${esc(x)}</option>`).join('')}</select></label>`;
-  function brandMarkup() {
-    return `<a class="brand approved-brand" href="#/" aria-label="HOÀN Makeup Artist — Trang chủ"><img src="/assets/hoan-logo.png" width="155" height="69" alt="HOÀN MAKEUP ARTIST"></a>`;
+  function brandMarkup(invert = false) {
+    return `<a class="brand approved-brand ${invert ? 'brand-invert' : ''}" href="#/" aria-label="HOÀN Makeup Artist — Trang chủ"><span class="brand-text"><b class="brand-title">HOÀN</b><small class="brand-sub">MAKEUP ARTIST</small></span></a>`;
   }
   function publicHeader(active='') {
     const nav=[['home','/','Trang chủ'],['services','/services','Dịch vụ'],['bridal','/services/bridal','Cô dâu'],['gallery','/gallery','Bộ sưu tập'],['about','/about','Về Hoàn']];
@@ -2458,11 +2458,14 @@
           </div>
           <div style="border:1px solid var(--line);padding:12px;background:#fafafa;border-radius:4px;">
             <div style="height:120px;overflow:hidden;background:#050505;display:flex;align-items:center;justify-content:center;margin-bottom:8px;border-radius:2px;">
-              <img id="preview-img-logo" src="/assets/hoan-logo.png" style="max-height:60px;max-width:100%;object-fit:contain;">
+              <div class="brand-text" style="display:flex;flex-direction:column;align-items:center;color:#fff;">
+                <span style="font-family:var(--didone,'Bodoni Moda',serif);font-size:26px;letter-spacing:0.16em;font-weight:500;">HOÀN</span>
+                <span style="font-family:var(--sans,Inter,sans-serif);font-size:9.5px;letter-spacing:0.28em;color:rgba(255,255,255,0.75);margin-top:4px;padding-left:0.28em;">MAKEUP ARTIST</span>
+              </div>
             </div>
             <label style="font-weight:600;font-size:12px;display:block;margin-bottom:4px;">Logo Thương hiệu HOÀN</label>
-            <input value="/assets/hoan-logo.png" disabled style="font-size:12px;background:#eee;">
-            <small class="muted" style="display:block;margin-top:6px;font-size:11px;">Được cố định chuẩn bộ nhận diện thương hiệu</small>
+            <input value="Typography Text Logo (HOÀN · MAKEUP ARTIST)" disabled style="font-size:12px;background:#eee;">
+            <small class="muted" style="display:block;margin-top:6px;font-size:11px;">Định dạng Text Typography cao cấp, sắc nét trên mọi thiết bị</small>
           </div>
         </div>
       `;
