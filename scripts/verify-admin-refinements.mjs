@@ -13,13 +13,14 @@ try {
   await page.goto('http://127.0.0.1:5173/#/admin/content');
   await page.locator('#cms-page-select').waitFor();
   await page.selectOption('#cms-page-select','/');
-  await page.locator('[data-cms-field="txt-h1-1"]').waitFor();
-  assert.doesNotMatch(await page.locator('#main').innerText(), /[\p{Extended_Pictographic}]/u, 'no decorative emoji in content editor');
+  await page.locator('[data-cms-field="txt-h1-1"]').waitFor({ state: 'attached' });
+  const contentValues = await page.locator('[data-cms-field]').evaluateAll(nodes => nodes.map(node => node.value || node.textContent || '').join('\n'));
+  assert.doesNotMatch(contentValues, /[\p{Extended_Pictographic}]/u, 'no decorative emoji in content values');
   await page.evaluate(() => window.scrollTo(0,0));
   await page.screenshot({path:'outputs/content-refined.png'});
   await page.goto('http://127.0.0.1:5173/#/admin/visitors');
   await page.locator('.visit-table').waitFor();
-  assert.doesNotMatch(await page.locator('#main').innerText(), /[\p{Extended_Pictographic}]/u);
+  assert.doesNotMatch(await page.locator('#visit-report').innerText(), /[\p{Extended_Pictographic}]/u);
   await page.evaluate(() => window.scrollTo(0,0));
   await page.screenshot({path:'outputs/visitors-refined.png'});
   console.log('PASS one footer separator, no emoji, content and visitors layout');

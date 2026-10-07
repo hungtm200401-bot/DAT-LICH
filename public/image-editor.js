@@ -78,7 +78,7 @@ export function bindImagePan(surface, { resolve, change, commit = () => {}, mous
   return () => { const result = suppressClick; suppressClick = false; return result; };
 }
 
-export function openImageEditor({ container, liveImage, label, source, catalog, esc, icon, onPreview, onApply, onCancel }) {
+export function openImageEditor({ container, liveImage, label, source, catalog, esc, icon, uploadHeaders = () => ({}), onPreview, onApply, onCancel }) {
   const geometry = imageGeometry(liveImage);
   const initial = { source, position: parsePosition(liveImage.ownerDocument.defaultView.getComputedStyle(liveImage).objectPosition), alt: liveImage.alt };
   let current = { ...initial, position: [...initial.position] }, ready = false, committed = false, requestId = 0, disposed = false;
@@ -111,7 +111,7 @@ export function openImageEditor({ container, liveImage, label, source, catalog, 
         </section>
         <section id="image-library-panel" role="tabpanel" aria-labelledby="image-library-tab" hidden>
           <div class="cms-image-library-tools">
-            <label class="cms-image-upload">${icon('plus')} Tải ảnh lên<input type="file" data-image-upload accept="image/png,image/jpeg,image/webp,image/gif" hidden></label>
+            <label class="cms-image-upload">${icon('plus')} Tải ảnh lên<input type="file" data-image-upload accept="image/png,image/jpeg,image/webp" hidden></label>
             <select data-image-category aria-label="Nhóm ảnh"><option value="all">Tất cả ảnh</option><option value="bridal">Cô dâu</option><option value="party">Dự tiệc</option><option value="campaign">Chiến dịch</option><option value="process">Không gian</option></select>
           </div>
           <div class="cms-image-library">${catalog.map(img => `<button type="button" class="cms-image-choice" data-image-source="${esc(img.src)}" data-category="${img.category}" aria-label="${esc(img.title)}" title="${esc(img.title)}" aria-pressed="${img.src === source}"><img src="${esc(img.src)}" alt="${esc(img.title)}" loading="lazy"></button>`).join('')}</div>
@@ -202,7 +202,7 @@ export function openImageEditor({ container, liveImage, label, source, catalog, 
       event.target.disabled = true; ready = false; syncControls(); message.textContent = 'Đang tải ảnh lên...';
       const data = new FormData(); data.append('files', file);
       try {
-        const response = await fetch('/api/uploads', { method: 'POST', body: data });
+        const response = await fetch('/api/uploads', { method: 'POST', body: data, headers: uploadHeaders() });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Không tải được ảnh.');
         if (!disposed && id === requestId) await selectSource(result.paths[0]);

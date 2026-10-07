@@ -20,6 +20,9 @@ test('all approved public pages render with the same header and independent foot
 test('existing admin destinations remain renderable without fake appointments',()=>{
  const app=harness();for(const route of ['','appointments','schedule','services','customers','payments','promotions','gallery','content','notifications','reports','permissions','audit','settings','requests']){assert.ok(app.render('/admin/'+route).length>100,route);}
 });
+test('website content admin no longer exposes the general configuration mode',()=>{
+ const html=harness().render('/admin/content');assert.doesNotMatch(html,/Cấu hình chung|switch-content-view/);
+});
 test('referenced public image assets exist',async()=>{
  const app=harness();for(const path of ['/','/services','/gallery','/about']){for(const m of app.render(path).matchAll(/src="(\/assets\/[^"?]+)"/g))await access(new URL('../public'+m[1],import.meta.url));}
 });

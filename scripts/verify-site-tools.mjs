@@ -21,12 +21,13 @@ try {
   await admin.goto(base + '/#/admin/content-pages');
   await admin.locator('#cms-page-select').waitFor();
   await admin.selectOption('#cms-page-select', cmsPath);
-  await admin.locator('[data-cms-field="txt-h1-1"]').waitFor();
+  await admin.frameLocator('#cms-real-preview').locator('#main h1').click();
+  await admin.locator('#modal-quick-text').waitFor();
   const heading = 'Kiểm thử nội dung — ' + Date.now();
-  await admin.locator('[data-cms-field="txt-h1-1"]').fill(heading);
+  await admin.locator('#modal-quick-text').fill(heading);
   await wait(() => admin.frameLocator('#cms-real-preview').locator('#main h1').textContent().then(text => text === heading), 'preview reflects draft');
   assert.notEqual((await read('/api/site-content')).pages[cmsPath]?.fields?.['txt-h1-1'], heading, 'draft must not be published');
-  await admin.locator('#cms-page-form button[type=submit]').click();
+  await admin.locator('#cms-page-form').evaluate(form => form.requestSubmit());
   await wait(async () => (await read('/api/site-content')).pages[cmsPath]?.fields?.['txt-h1-1'] === heading, 'CMS save');
   changed = true;
   const publicContext = await context();
@@ -47,7 +48,7 @@ try {
   // Every configured public template must render and expose at least one editable field.
   for (const [path] of publicPages) {
     await admin.selectOption('#cms-page-select', path);
-    await wait(async () => await admin.locator('#cms-status').textContent().then(text => /trường liên kết/.test(text)), 'CMS fields ' + path);
+    await wait(async () => await admin.locator('[data-cms-field]').count() > 0, 'CMS fields ' + path);
     assert.ok(await admin.locator('[data-cms-field]').count(), path);
   }
   console.log('PASS all ' + publicPages.length + ' public CMS templates');
@@ -82,6 +83,8 @@ try {
   await admin.locator(`[data-visit-session="${session.id}"]`).click();
   await admin.locator('.visit-timeline').waitFor();
   assert.ok((await admin.locator('#visit-report').textContent()).includes('Chưa xác minh danh tính'));
+  await admin.locator('[data-action="set-visitor-tab"][data-tab="campaign"]').click();
+  await admin.locator('#visit-share-form').waitFor();
   await admin.locator('#visit-share-form [name=website]').fill('https://hoan.example/');
   await admin.locator('#visit-share-form [name=campaign]').fill('makeup-thang-9');
   await admin.locator('#visit-share-form button').click();

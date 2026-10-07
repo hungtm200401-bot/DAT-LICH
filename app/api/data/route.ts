@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ne } from "drizzle-orm";
+import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { appointments, customers, scheduleSlots, services, siteContent } from "../../../db/schema";
 import { siteAdmin } from "../../../lib/site-admin";
@@ -77,51 +77,19 @@ async function ensureDefaults() {
   ].filter(Boolean) as Array<{ key: string; value: string }>;
   if (missing.length) await db.insert(siteContent).values(missing);
 
-  // 1. Purge all mock/seed/dummy appointments
+  // Remove only explicitly known legacy test appointment codes.
   try {
-    const allAppts = await db.select({ code: appointments.code, customer: appointments.customer }).from(appointments);
-    const mockNames = [
-      'Nguyễn Minh Anh', 'Trần Ngọc Hà', 'Lê Thu Trang', 'Phạm Mai Linh', 'Hà Vy',
-      'Đỗ Quỳnh Chi', 'Bùi Thảo Nguyên', 'Nguyễn Thùy Dung', 'Vũ Hoàng Yến',
-      'Cầu Giấy', 'Tây Hồ', 'Nam Từ Liêm', 'Đặng Thu Trang', 'Đinh Mai Anh',
-      'Hoàng Phương Linh', 'Thanh Xuân', 'Mai Anh', 'Lưu Gia Hân', 'Phương Thảo',
-      'Hải Yến', 'Kim Ngân', 'Thu Phương', 'Ngọc Anh', 'Khánh Linh', 'Ngọc Diệp',
-      'Hương Giang', 'Bảo Trâm', 'Quỳnh Anh'
-    ];
-    for (const a of allAppts) {
-      if (
-        mockNames.includes(a.customer) ||
-        ['HMA-090926-BQ0', 'HMA-090926-MQ3', 'HMA-100926-MS7', 'HMA-090926-BIQ', 'HMA-180926-6W2'].includes(a.code)
-      ) {
-        await db.delete(appointments).where(eq(appointments.code, a.code));
-      }
+    for (const code of ['HMA-090926-BQ0', 'HMA-090926-MQ3', 'HMA-100926-MS7', 'HMA-090926-BIQ', 'HMA-180926-6W2']) {
+      await db.delete(appointments).where(eq(appointments.code, code));
     }
   } catch { /* ignore */ }
 
-  // 2. Clear mock schedule slots
-  try {
-    const allSlots = await db.select({ id: scheduleSlots.id, note: scheduleSlots.note }).from(scheduleSlots);
-    for (const s of allSlots) {
-      if (s.note === 'Di chuyển' || s.note === 'Nghỉ giữa lịch' || s.note === 'Không khả dụng' || !s.note) {
-        await db.delete(scheduleSlots).where(eq(scheduleSlots.id, s.id));
-      }
-    }
-  } catch { /* ignore */ }
+}
 
-  // 3. Clear mock customers
-  try {
-    const mockNames = [
-      'Nguyễn Minh Anh', 'Trần Ngọc Hà', 'Lê Thu Trang', 'Phạm Mai Linh', 'Hà Vy',
-      'Đỗ Quỳnh Chi', 'Bùi Thảo Nguyên', 'Nguyễn Thùy Dung', 'Vũ Hoàng Yến',
-      'Cầu Giấy', 'Tây Hồ', 'Nam Từ Liêm', 'Đặng Thu Trang', 'Đinh Mai Anh',
-      'Hoàng Phương Linh', 'Thanh Xuân', 'Mai Anh', 'Lưu Gia Hân', 'Phương Thảo',
-      'Hải Yến', 'Kim Ngân', 'Thu Phương', 'Ngọc Anh', 'Khánh Linh', 'Ngọc Diệp',
-      'Hương Giang', 'Bảo Trâm', 'Quỳnh Anh'
-    ];
-    for (const name of mockNames) {
-      await db.delete(customers).where(eq(customers.name, name));
-    }
-  } catch { /* ignore */ }
+async function createNotification(db: ReturnType<typeof getDb>, notification: Record<string, string>) {
+  const id = "NT-" + crypto.randomUUID().slice(0, 8).toUpperCase();
+  const record = { id, ...notification, status: "unread", createdAt: new Date().toISOString() };
+  await db.insert(siteContent).values({ key: "notification:" + id, value: JSON.stringify(record), updatedAt: record.createdAt });
 }
 
 async function snapshot() {
@@ -150,13 +118,42 @@ async function snapshot() {
     })(),
     bookingDetails: Object.fromEntries(contentRows.filter(r=>r.key.startsWith("booking:")).map(r=>[r.key.slice(8), parseJson(r.value, {})])),
     requests: contentRows.filter(r=>r.key.startsWith("request:")).map(r=>parseJson(r.value, {})),
+    notifications: contentRows.filter(r=>r.key.startsWith("notification:")).map(r=>parseJson(r.value, {})),
     serverTime: new Date().toISOString(),
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    return Response.json(await snapshot(), { headers: { "Cache-Control": "no-store" } });
+    const url = new URL(request.url);
+    const lookupCode = text(url.searchParams.get("code")).toUpperCase();
+    const lookupPhone = text(url.searchParams.get("phone")).replace(/\s+/g, "");
+    if (lookupCode || lookupPhone) {
+      if (!lookupCode || !lookupPhone || lookupCode.length > 60 || lookupPhone.length > 30) {
+        return Response.json({ error: "Mã lịch hoặc số điện thoại không hợp lệ." }, { status: 400 });
+      }
+      await ensureDefaults();
+      const db = getDb();
+      const [appointment] = await db.select().from(appointments).where(eq(appointments.code, lookupCode)).limit(1);
+      if (!appointment || appointment.phone.replace(/\s+/g, "") !== lookupPhone) {
+        return Response.json({ error: "Không tìm thấy lịch phù hợp." }, { status: 404 });
+      }
+      const [details] = await db.select().from(siteContent).where(eq(siteContent.key, "booking:" + appointment.code)).limit(1);
+      return Response.json({ appointment, bookingDetails: parseJson(details?.value, {}) }, { headers: { "Cache-Control": "no-store" } });
+    }
+
+    const data = await snapshot();
+    if (await siteAdmin(request)) return Response.json(data, { headers: { "Cache-Control": "no-store", "Vary": "Authorization" } });
+    const privateSettingKeys = new Set(["bankName", "bankAccount", "bankOwner"]);
+    const publicSettings = Object.fromEntries(Object.entries(data.settings).filter(([key]) => !privateSettingKeys.has(key)));
+    return Response.json({
+      services: data.services,
+      appointments: data.appointments.map(({ code, date, time, serviceId, status }) => ({ code, date, time, serviceId, status })),
+      scheduleSlots: data.scheduleSlots,
+      brand: data.brand,
+      settings: publicSettings,
+      serverTime: data.serverTime,
+    }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return Response.json({ error: messageFor(error) }, { status: 500 });
   }
@@ -179,6 +176,7 @@ export async function POST(request: Request) {
       "resolveRequest",
       "updateRequest",
       "deleteRequest",
+      "markNotificationsRead",
     ];
     if (adminActions.includes(action)) {
       if (!await siteAdmin(request)) {
@@ -198,7 +196,7 @@ export async function POST(request: Request) {
       const [selectedService] = await db.select().from(services).where(eq(services.id, serviceId)).limit(1);
       if (!selectedService?.enabled) return Response.json({ error: "Dịch vụ hiện không khả dụng." }, { status: 400 });
       if (new Date(date+'T'+time+':00+07:00').getTime()<=Date.now()) return Response.json({error:'Vui lòng chọn thời gian trong tương lai.'},{status:400});
-      const dayBookings=await db.select().from(appointments).where(and(eq(appointments.date,date),ne(appointments.status,'cancelled')));
+      const dayBookings=await db.select().from(appointments).where(and(eq(appointments.date,date),ne(appointments.status,'cancelled'),ne(appointments.status,'completed')));
       const allServices=await db.select().from(services);
       const minutes=(t:string)=>Number(t.slice(0,2))*60+Number(t.slice(3));
       const start=minutes(time),end=start+selectedService.duration;
@@ -215,25 +213,44 @@ export async function POST(request: Request) {
       if (settings.scheduleOpen === false) return Response.json({error:"Hiện đang tạm ngừng nhận lịch."},{status:409});
       const travelFee = payload.locationType === "artist" ? 0 : integer(settings.travelFee,50000);
       const total = selectedService.price + travelFee;
-      const [created] = await db.insert(appointments).values({
-        code,
-        customer,
-        phone,
-        email: text(payload.email),
-        serviceId,
-        date,
-        time,
-        locationType: text(payload.locationType, "client"),
-        address: text(payload.address),
-        district: text(payload.district),
-        ward: text(payload.ward),
-        style: text(payload.style),
-        note: text(payload.note),
-        total,
-        deposit: 0,
-        paymentStatus: "unverified",
-        status: "pending",
-      }).returning();
+      const reservation = await db.run(sql`
+        INSERT INTO appointments (
+          code, customer, phone, email, service_id, date, time, location_type,
+          address, district, ward, style, note, total, deposit, payment_status, status
+        )
+        SELECT ${code}, ${customer}, ${phone}, ${text(payload.email)}, ${serviceId}, ${date}, ${time},
+          ${text(payload.locationType, "client")}, ${text(payload.address)}, ${text(payload.district)},
+          ${text(payload.ward)}, ${text(payload.style)}, ${text(payload.note)}, ${total}, 0, 'unverified', 'pending'
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM appointments existing
+          LEFT JOIN services existing_service ON existing_service.id = existing.service_id
+          WHERE existing.date = ${date}
+            AND existing.status IN ('pending', 'confirmed')
+            AND ${start} < (
+              CAST(substr(existing.time, 1, 2) AS INTEGER) * 60
+              + CAST(substr(existing.time, 4, 2) AS INTEGER)
+              + COALESCE(existing_service.duration, 90)
+            )
+            AND ${end} > (
+              CAST(substr(existing.time, 1, 2) AS INTEGER) * 60
+              + CAST(substr(existing.time, 4, 2) AS INTEGER)
+            )
+        )
+      `);
+      if (reservation.meta.changes !== 1) {
+        return Response.json({ error: "Thời gian này vừa được đặt bởi khách khác. Vui lòng chọn giờ khác." }, { status: 409 });
+      }
+      const [created] = await db.select().from(appointments).where(eq(appointments.code, code)).limit(1);
+      if (!created) return Response.json({ error: "Không thể tạo lịch hẹn. Vui lòng thử lại." }, { status: 500 });
+
+      await createNotification(db, {
+        type: "appointment.created",
+        title: "Có lịch đặt mới",
+        message: `${customer} đã đặt ${selectedService.name} vào ${date} lúc ${time}.`,
+        entityType: "appointment",
+        entityId: code,
+      });
 
       const details = {skin:text(payload.skin),allergy:text(payload.allergy),allergyNote:text(payload.allergyNote),city:text(payload.city),locationNote:text(payload.locationNote),travelFee,depositRequired:Math.min(total,integer(settings.deposit,200000)),references:Array.isArray(payload.references)?payload.references.filter(x=>typeof x==='string'&&/^\/api\/uploads\?key=/.test(x)).slice(0,3):[]};
       await db.insert(siteContent).values({key:'booking:'+code,value:JSON.stringify(details)});
@@ -270,9 +287,13 @@ export async function POST(request: Request) {
 
       const [current] = await db.select().from(appointments).where(eq(appointments.code,code)).limit(1);
       if (!current) return Response.json({error:"Không tìm thấy lịch hẹn."},{status:404});
+      const nextStatus = text(payload.status);
+      if (nextStatus === "completed" && current.status !== "confirmed") return Response.json({ error: "Chỉ lịch đã xác nhận mới được đánh dấu hoàn thành." }, { status: 409 });
+      if (current.status === "completed" && nextStatus && nextStatus !== "completed") return Response.json({ error: "Lịch đã hoàn thành không thể quay về trạng thái khác." }, { status: 409 });
+      if (current.status === "cancelled" && nextStatus && nextStatus !== "cancelled") return Response.json({ error: "Lịch đã hủy không thể mở lại từ thao tác này." }, { status: 409 });
       if (changes.date || changes.time) {
         const nextDate=String(changes.date||current.date), nextTime=String(changes.time||current.time);
-        const rows=await db.select().from(appointments).where(and(eq(appointments.date,nextDate),ne(appointments.status,'cancelled'),ne(appointments.code,code)));
+        const rows=await db.select().from(appointments).where(and(eq(appointments.date,nextDate),ne(appointments.status,'cancelled'),ne(appointments.status,'completed'),ne(appointments.code,code)));
         const serviceRows=await db.select().from(services);
         const sid = String(changes.serviceId || current.serviceId);
         const minutes=(t:string)=>Number(t.slice(0,2))*60+Number(t.slice(3));
@@ -288,16 +309,33 @@ export async function POST(request: Request) {
       if (payload.paymentStatus !== undefined && ["received", "pending_verification", "unverified"].includes(text(payload.paymentStatus))) {
         changes.paymentStatus = text(payload.paymentStatus);
       }
-      if (payload.status === "confirmed") {
-        if (changes.deposit === undefined && (!current.deposit || current.deposit === 0)) {
-          changes.deposit = 200000;
-        }
-        changes.paymentStatus = "received";
-      } else if (payload.status === "pending" && payload.deposit === undefined && payload.paymentStatus === undefined) {
-        changes.paymentStatus = "pending_verification";
+      if (payload.refundStatus !== undefined && ["none", "pending", "approved", "paid", "rejected"].includes(text(payload.refundStatus))) {
+        changes.refundStatus = text(payload.refundStatus);
       }
+      if (payload.refundNote !== undefined) changes.refundNote = text(payload.refundNote).slice(0, 1000);
+      if (nextStatus === "cancelled" && current.deposit > 0 && !payload.refundStatus) changes.refundStatus = "pending";
       const [updated] = await db.update(appointments).set(changes).where(eq(appointments.code, code)).returning();
       if (!updated) return Response.json({ error: "Không tìm thấy lịch hẹn." }, { status: 404 });
+      if (nextStatus && nextStatus !== current.status) {
+        const statusLabels: Record<string, string> = { pending: "chờ xác nhận", confirmed: "đã xác nhận", completed: "đã hoàn thành", cancelled: "đã hủy" };
+        await createNotification(db, {
+          type: "appointment.status",
+          title: "Trạng thái lịch đã thay đổi",
+          message: `Lịch ${code} của ${updated.customer} ${statusLabels[nextStatus] || nextStatus}.`,
+          entityType: "appointment",
+          entityId: code,
+        });
+      }
+      if (changes.refundStatus && changes.refundStatus !== current.refundStatus) {
+        const refundLabels: Record<string, string> = { pending: "đang chờ hoàn", approved: "đã được duyệt hoàn", paid: "đã hoàn tiền", rejected: "bị từ chối hoàn" };
+        await createNotification(db, {
+          type: "payment.refund",
+          title: "Trạng thái hoàn cọc đã thay đổi",
+          message: `Khoản cọc của lịch ${code} ${refundLabels[String(changes.refundStatus)] || changes.refundStatus}.`,
+          entityType: "appointment",
+          entityId: code,
+        });
+      }
       return Response.json({ appointment: updated });
     }
 
@@ -313,9 +351,28 @@ export async function POST(request: Request) {
       const code=text(payload.code);
       const [a]=await db.select().from(appointments).where(eq(appointments.code,code)).limit(1);
       if(!a||a.status==='cancelled')return Response.json({error:'Lịch không khả dụng.'},{status:404});
-      if(a.paymentStatus==='received')return Response.json({appointment:a});
+      if(a.paymentStatus==='received' || a.paymentStatus==='pending_verification')return Response.json({appointment:a});
       const [appointment]=await db.update(appointments).set({paymentStatus:'pending_verification',updatedAt:new Date().toISOString()}).where(eq(appointments.code,code)).returning();
+      await createNotification(db, {
+        type: "payment.reported",
+        title: "Khách báo đã chuyển cọc",
+        message: `Lịch ${code} đang chờ kiểm tra giao dịch và xác nhận tiền cọc.`,
+        entityType: "appointment",
+        entityId: code,
+      });
       return Response.json({appointment});
+    }
+    if (action === "markNotificationsRead") {
+      const notificationId = text(payload.id);
+      const rows = await db.select().from(siteContent);
+      const targets = rows.filter(row => row.key.startsWith("notification:") && (!notificationId || row.key === "notification:" + notificationId));
+      for (const row of targets) {
+        const notification = parseJson<Record<string, unknown>>(row.value, {});
+        if (notification.status === "unread") {
+          await db.update(siteContent).set({ value: JSON.stringify({ ...notification, status: "read", readAt: new Date().toISOString() }), updatedAt: new Date().toISOString() }).where(eq(siteContent.key, row.key));
+        }
+      }
+      return Response.json({ ok: true, count: targets.length });
     }
     if (action === "createRequest") {
       const message=text(payload.message); const subject=text(payload.subject); const code=text(payload.code);
@@ -323,8 +380,15 @@ export async function POST(request: Request) {
       const name=text(payload.name)||a?.customer||'';const phone=text(payload.phone)||a?.phone||'';
       if(!name||!phone||!message||!subject||message.length>4000)return Response.json({error:'Vui lòng nhập đầy đủ thông tin và lời nhắn (tối đa 4.000 ký tự).'},{status:400});
       const id='YC-'+crypto.randomUUID().slice(0,8).toUpperCase();
-      const record={id,code,name,phone,email:text(payload.email),subject,message,date:text(payload.date),time:text(payload.time),status:'pending',createdAt:new Date().toISOString(),reply:''};
+      const record={id,kind:code?'appointment':'consultation',code,name,phone,email:text(payload.email),subject,message,date:text(payload.date),time:text(payload.time),status:'pending',createdAt:new Date().toISOString(),reply:''};
       await db.insert(siteContent).values({key:'request:'+id,value:JSON.stringify(record)});
+      await createNotification(db, {
+        type: code ? "appointment.request" : "consultation.created",
+        title: code ? "Có yêu cầu từ lịch hẹn" : "Có yêu cầu tư vấn mới",
+        message: code ? `${name} gửi yêu cầu cho lịch ${code}.` : `${name} gửi yêu cầu tư vấn: ${subject}.`,
+        entityType: "request",
+        entityId: id,
+      });
       return Response.json({request:record},{status:201});
     }
     if (action === "resolveRequest" || action === "updateRequest") {
@@ -347,6 +411,41 @@ export async function POST(request: Request) {
         resolvedAt: status === 'resolved' ? (current.resolvedAt || new Date().toISOString()) : (status === 'pending' ? '' : current.resolvedAt),
         updatedAt: new Date().toISOString(),
       };
+      const requestedDate = text(current.date);
+      const requestedTime = text(current.time);
+      const isReschedule = Boolean(current.code) && /đổi lịch|đổi ngày|reschedule/i.test(text(current.subject));
+      if (action === "resolveRequest" && status === "resolved" && isReschedule && requestedDate && requestedTime) {
+        const code = text(current.code);
+        const [appointment] = await db.select().from(appointments).where(eq(appointments.code, code)).limit(1);
+        if (!appointment || appointment.status === "cancelled" || appointment.status === "completed") {
+          return Response.json({ error: "Lịch hẹn không còn đủ điều kiện để đổi lịch." }, { status: 409 });
+        }
+        const [serviceRows, conflictRows, blockedRows] = await Promise.all([
+          db.select().from(services),
+          db.select().from(appointments).where(and(
+            eq(appointments.date, requestedDate),
+            ne(appointments.code, code),
+            ne(appointments.status, "cancelled"),
+            ne(appointments.status, "completed"),
+          )),
+          db.select().from(scheduleSlots).where(and(eq(scheduleSlots.slotDate, requestedDate), eq(scheduleSlots.status, "blocked"))),
+        ]);
+        const minutes = (value: string) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
+        const start = minutes(requestedTime);
+        const duration = serviceRows.find(service => service.id === appointment.serviceId)?.duration || 90;
+        const end = start + duration;
+        const busy = conflictRows.some(row => {
+          const rowStart = minutes(row.time);
+          const rowDuration = serviceRows.find(service => service.id === row.serviceId)?.duration || 90;
+          return start < rowStart + rowDuration && end > rowStart;
+        });
+        const blocked = blockedRows.some(row => {
+          const slotStart = minutes(row.slotTime);
+          return slotStart >= start && slotStart < end;
+        });
+        if (busy || blocked) return Response.json({ error: "Ngày giờ mới không còn trống." }, { status: 409 });
+        await db.update(appointments).set({ date: requestedDate, time: requestedTime, updatedAt: new Date().toISOString() }).where(eq(appointments.code, code));
+      }
       await db.update(siteContent).set({ value: JSON.stringify(record), updatedAt: new Date().toISOString() }).where(eq(siteContent.key, key));
       return Response.json({ request: record });
     }

@@ -30,6 +30,25 @@ export default function RootLayout({
   return (
     <html lang="vi" suppressHydrationWarning>
       <head>
+        <meta charSet="utf-8" />
+        {process.env.NODE_ENV === "development" && (
+          <script dangerouslySetInnerHTML={{ __html: `
+            if ('serviceWorker' in navigator) {
+              (async () => {
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                const own = registrations.filter(registration =>
+                  [registration.active, registration.waiting, registration.installing].some(worker =>
+                    worker && new URL(worker.scriptURL).pathname === '/sw.js'));
+                const controlled = navigator.serviceWorker.controller &&
+                  new URL(navigator.serviceWorker.controller.scriptURL).pathname === '/sw.js';
+                await Promise.all(own.map(registration => registration.unregister()));
+                const keys = await caches.keys();
+                await Promise.all(keys.filter(key => key.startsWith('hoan-makeup-')).map(key => caches.delete(key)));
+                if (controlled && own.length) location.reload();
+              })().catch(console.error);
+            }
+          `}} />
+        )}
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -41,19 +60,19 @@ export default function RootLayout({
         <link rel="stylesheet" href="/fonts/fonts.css" />
         <link rel="stylesheet" href="/styles.css?v=2.5" />
         <link rel="stylesheet" href="/couture.css?v=119.0" />
-        <link rel="stylesheet" href="/site-tools.css?v=145.0" />
+        <link rel="stylesheet" href="/site-tools.css?v=146.0" />
         <link rel="stylesheet" href="/admin-refinements.css?v=8" />
         <link rel="stylesheet" href="/mobile-admin.css?v=1.2" />
       </head>
       <body suppressHydrationWarning>
         {children}
-        <script dangerouslySetInnerHTML={{ __html: `
+        {process.env.NODE_ENV !== "development" && <script dangerouslySetInnerHTML={{ __html: `
           if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
               navigator.serviceWorker.register('/sw.js').catch(() => {});
             });
           }
-        `}} />
+        `}} />}
       </body>
     </html>
   );

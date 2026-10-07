@@ -30,3 +30,106 @@ test("uses the reference typography and white admin canvas", async () => {
   assert.match(css, /font-variant-numeric:\s*tabular-nums/);
   assert.match(css, /grid-template-columns:\s*150px repeat\(7/);
 });
+
+test("prevents selecting an occupied booking time", async () => {
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  assert.match(source, /time-slot-unavailable/);
+  assert.match(source, /Đã có khách/);
+  assert.match(source, /el\.disabled \|\| slotUnavailable/);
+});
+
+test("lets admins mark all notifications as read", async () => {
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  assert.match(source, /mark-all-notifications-read/);
+  assert.match(source, /markNotificationsRead/);
+  assert.match(source, /Đã đánh dấu toàn bộ thông báo là đã đọc/);
+});
+
+test("applies approved reschedule requests to the appointment", async () => {
+  const api = await readFile(new URL("../app/api/data/route.ts", import.meta.url), "utf8");
+  assert.match(api, /isReschedule/);
+  assert.match(api, /Ngày giờ mới không còn trống/);
+  assert.match(api, /date: requestedDate, time: requestedTime/);
+});
+
+test("tracks refund status for cancelled appointments", async () => {
+  const api = await readFile(new URL("../app/api/data/route.ts", import.meta.url), "utf8");
+  const schema = await readFile(new URL("../db/schema.ts", import.meta.url), "utf8");
+  assert.match(api, /refundStatus/);
+  assert.match(api, /current\.deposit > 0/);
+  assert.match(schema, /refundStatus: text\("refund_status"/);
+});
+
+test("notifies admins when appointment status changes", async () => {
+  const api = await readFile(new URL("../app/api/data/route.ts", import.meta.url), "utf8");
+  assert.match(api, /appointment\.status/);
+  assert.match(api, /Trạng thái lịch đã thay đổi/);
+  assert.match(api, /payment\.refund/);
+});
+
+test("only shows a received deposit after backend payment confirmation", async () => {
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  assert.match(source, /Boolean\(apt && apt\.paymentStatus === 'received' && Number\(apt\.deposit\) > 0\)/);
+  assert.match(source, /a\.paymentStatus === 'received' && Number\(a\.deposit\) >= needed/);
+  assert.doesNotMatch(source, /const isPaid = apt\s*\? apt\.paymentStatus === 'received'\s*:\s*\(!!state\.booking\.depositPaid/);
+});
+
+test("sends deposit reports to the admin notification flow", async () => {
+  const api = await readFile(new URL("../app/api/data/route.ts", import.meta.url), "utf8");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  assert.match(api, /action === "reportPayment"/);
+  assert.match(api, /type: "payment\.reported"/);
+  assert.match(source, /await api\(\{action:'reportPayment'/);
+  assert.match(source, /Đã gửi thông báo chuyển khoản cho Hoàn/);
+});
+
+test("routes approved appointments into the work schedule", async () => {
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const mobile = await readFile(new URL("../public/mobile-admin.js", import.meta.url), "utf8");
+  assert.match(source, /a\.status === 'confirmed' && !staleCodes\.includes\(a\.code\)/);
+  assert.match(mobile, /a\.status === 'confirmed'/);
+  assert.match(source, /query\.get\('code'\)/);
+});
+
+test("prevents duplicate deposit reports while awaiting review", async () => {
+  const api = await readFile(new URL("../app/api/data/route.ts", import.meta.url), "utf8");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  assert.match(api, /a\.paymentStatus==='received' \|\| a\.paymentStatus==='pending_verification'/);
+  assert.match(source, /btn-deposit-pending" disabled aria-disabled="true">ĐANG CHỜ ĐỐI SOÁT/);
+  assert.doesNotMatch(source, /btn-deposit-pending" data-action="ct-deposit-confirmed-proceed"/);
+});
+
+test("creates a server appointment before reporting a deposit when needed", async () => {
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  assert.match(source, /const latest = await api\(\);/);
+  assert.match(source, /action: 'createAppointment'/);
+  assert.match(source, /action:'reportPayment',code:appointment\.code/);
+});
+
+test("starts a fresh booking instead of reusing an old appointment", async () => {
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  assert.match(source, /data-action="start-booking"/);
+  assert.match(source, /state\.booking = structuredClone\(defaultState\.booking\)/);
+  assert.match(source, /const code = state\.booking\.code \|\| \('LK'/);
+});
+
+test("configures production CMS uploads and authenticates the image editor", async () => {
+  const hosting = JSON.parse(await readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"));
+  const editor = await readFile(new URL("../public/image-editor.js", import.meta.url), "utf8");
+  const tools = await readFile(new URL("../public/site-tools.js", import.meta.url), "utf8");
+  const uploads = await readFile(new URL("../app/api/uploads/route.ts", import.meta.url), "utf8");
+  assert.equal(hosting.r2, "BUCKET");
+  assert.match(editor, /headers: uploadHeaders\(\)/);
+  assert.match(tools, /uploadHeaders: adminHeaders/);
+  assert.doesNotMatch(editor, /accept="[^"]*image\/gif/);
+  assert.match(uploads, /Kho ảnh chưa được cấu hình/);
+  assert.match(uploads, /status:503/);
+});
+
+test("runs repeatable local migrations without re-adding refund columns", async () => {
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const migration = await readFile(new URL("../scripts/migrate-local.mjs", import.meta.url), "utf8");
+  assert.equal(pkg.scripts["db:migrate:local"], "node scripts/migrate-local.mjs");
+  assert.match(migration, /PRAGMA table_info\(appointments\)/);
+  assert.match(migration, /columns\.has\(name\)/);
+});

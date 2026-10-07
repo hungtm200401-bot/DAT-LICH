@@ -93,7 +93,7 @@ try {
 
   const toastText = await page.locator('.toast').innerText().catch(() => '');
   console.log('Save toast:', toastText);
-  assert.ok(toastText.includes('Đã lưu'), 'Should confirm save');
+  assert.ok(toastText.includes('Đã đăng'), 'Should confirm publish');
 
   // Reload page to verify persistence
   console.log('Reloading page to verify persistence...');

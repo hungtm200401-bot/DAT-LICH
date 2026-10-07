@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hoan-makeup-v3';
+const CACHE_NAME = 'hoan-makeup-v4';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
@@ -25,13 +25,22 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys => Promise.all(
-      keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))
+      keys.filter(key => key.startsWith('hoan-makeup-') && key !== CACHE_NAME).map(key => caches.delete(key))
     )).then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
+
+  // Vite modules and RSC responses must never come from the PWA cache.
+  if (url.origin !== self.location.origin ||
+      /^\/(?:@|__|node_modules\/|app\/)/.test(url.pathname) ||
+      url.searchParams.has('_rsc') ||
+      event.request.headers.get('rsc') === '1' ||
+      event.request.headers.get('accept')?.includes('text/x-component')) {
+    return;
+  }
 
   // Do not cache API requests or non-GET methods
   if (event.request.method !== 'GET' || url.pathname.startsWith('/api/')) {
@@ -57,7 +66,10 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Cache-first for images, fonts and other static media
+  // Only static media may use cache-first; extensionless runtime modules may not.
+  if (!/\.(?:png|jpe?g|webp|gif|svg|ico|avif|woff2?|ttf|otf)$/i.test(url.pathname)) return;
+
+  // Cache-first for images and fonts
   event.respondWith(
     caches.match(event.request).then(cached => {
       if (cached) return cached;

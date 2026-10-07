@@ -11,7 +11,7 @@ await context.addInitScript(() => localStorage.setItem('hoanAnalyticsConsent', '
 // Keep the user's content intact while exercising save, reload and public rendering.
 const pages = {};
 let saves = 0, rejectSave = false;
-await context.route('**/api/site-content', async route => {
+await context.route('**/api/site-content*', async route => {
   if (route.request().method() === 'POST') {
     if (rejectSave) return route.fulfill({ status: 409, json: { error: 'Nội dung vừa thay đổi. Vui lòng tải lại.' } });
     const { path, fields } = route.request().postDataJSON();
@@ -26,7 +26,6 @@ let preview;
 async function openAdmin() {
   await page.goto(base + '/#/admin/content');
   await page.locator('#cms-real-preview').waitFor();
-  await page.waitForLoadState('networkidle');
   preview = await (await page.locator('#cms-real-preview').elementHandle()).contentFrame();
   await preview.waitForSelector('img[data-cms-key="img-4"]');
   await preview.locator('img[data-cms-key]').evaluateAll(images => Promise.all(images.map(image => image.decode())));
@@ -70,6 +69,7 @@ async function geometry(target) {
 try {
   await openAdmin();
   const originalFourth = await position(img('img-4'));
+  const originalSecond = await position(img('img-2'));
   const before = await openImage('img-4');
   assert.ok(before.frame > 400, 'The regression must edit an image below the fold.');
   const liveGeometry = await geometry(img('img-4'));
@@ -89,7 +89,7 @@ try {
   await page.locator('[data-image-apply]').click();
   await sameScroll(before);
   assert.equal(await position(img('img-4')), moved);
-  assert.equal(await position(img('img-2')), '50% 32%', 'Editing one image must not move another.');
+  assert.equal(await position(img('img-2')), originalSecond, 'Editing one image must not move another.');
   await openImage('img-4');
   await setAxis('y', 90);
   await page.locator('[data-image-close]').last().click();
@@ -130,7 +130,7 @@ try {
   assert.equal(await position(img('img-4')), savedPosition, 'Failed save must keep the draft.');
   rejectSave = false;
   await page.locator('#cms-page-form').evaluate(el => el.requestSubmit());
-  await page.waitForFunction(() => document.querySelector('#cms-status').textContent.includes('Đã lưu lúc'));
+  await page.waitForFunction(() => document.querySelector('#cms-status').textContent.includes('Đã đăng lúc'));
   await sameScroll(directScroll);
   assert.equal(pages['/'].fields['pos-4'], savedPosition);
   const liveWidth = await page.locator('#cms-real-preview').evaluate(el => el.clientWidth);

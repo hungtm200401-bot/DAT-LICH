@@ -97,3 +97,7 @@
   .cms-workspace .cms-inline-select-label { flex-wrap: wrap; width: 100%; }
   .cms-workspace .cms-page-select-modern { width: 100%; }
 }
+
+/* Device preview widths override the legacy full-width iframe rule. */
+.cms-workspace .live-preview-viewport[data-device="tablet"] iframe#cms-real-preview { width:768px !important; max-width:768px !important; }
+.cms-workspace .live-preview-viewport[data-device="mobile"] iframe#cms-real-preview { width:390px !important; max-width:390px !important; }

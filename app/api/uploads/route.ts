@@ -1,9 +1,11 @@
 import { env } from 'cloudflare:workers';
+import { siteAdmin, privateHeaders } from '../../../lib/site-admin';
 export async function POST(request: Request) {
+  if (!await siteAdmin(request)) return Response.json({error:'Cần quyền quản trị để tải ảnh.'},{status:401,headers:privateHeaders});
   try {
     const form=await request.formData();const files=form.getAll('files');
     if(!files.length||files.length>3)return Response.json({error:'Chọn từ 1 đến 3 ảnh.'},{status:400});
-    if(!env.BUCKET)return Response.json({paths:[]});
+    if(!env.BUCKET)return Response.json({error:'Kho ảnh chưa được cấu hình.'},{status:503,headers:privateHeaders});
     const paths:string[]=[];
     for(const value of files){
       if(!(value instanceof File)||!['image/jpeg','image/png','image/webp'].includes(value.type)||value.size>5*1024*1024)return Response.json({error:'Ảnh phải là JPG, PNG hoặc WebP và không quá 5 MB.'},{status:400});

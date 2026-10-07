@@ -1,6 +1,7 @@
 // Shared CMS preview and first-party pseudonymous visit analytics. No Meta pixel,
 // fingerprinting, IP storage, form-field harvesting, or inferred identity.
 import { openImageEditor, bindImagePan, positionValue, setImagePosition } from './image-editor.js';
+import { CONTENT_BLOCK_TEMPLATES, contentSlots, createContentBlock, normalizeContentBlocks, renderContentBlocks } from './content-blocks.js';
 export const publicPages = [
   ['/', 'Trang chủ'], ['/about', 'Về Hoàn'], ['/services', 'Danh sách dịch vụ'],
   ...['personal', 'party', 'photo', 'bridal'].map((id, i) => ['/services/' + id, ['Cá nhân', 'Dự tiệc', 'Chụp ảnh', 'Cô dâu'][i]]),
@@ -15,6 +16,7 @@ export const publicPages = [
 export function createSiteTools(ctx) {
   const { esc, toast, icon } = ctx;
   const q = selector => document.querySelector(selector);
+  const markDraftStatus = () => { const status = q('#cms-status'); if (status) status.textContent = 'Đang có thay đổi · khách chưa thấy'; };
   const currentPath = () => (location.hash.slice(1) || '/').split('?')[0];
   const isPreview = window.parent !== window && new URLSearchParams(location.search).get('cmsPreview') === '1';
   const isAdmin = () => currentPath().startsWith('/admin');
@@ -22,7 +24,9 @@ export function createSiteTools(ctx) {
     get(key) { try { return localStorage.getItem(key); } catch { return null; } },
     set(key, value) { try { localStorage.setItem(key, value); } catch { /* storage may be blocked */ } },
   };
-  let pages = {}, selected = '/', draft = {}, revision = '', dirty = false, descriptors = [], framePath = '', isApplyingPreview = false;
+  let pages = {}, serverDrafts = {}, selected = '/', draft = {}, revision = '', dirty = false, descriptors = [], framePath = '', isApplyingPreview = false;
+  let pageSectionSlots = [], activeBlockId = '', blockInsertSlot = 40, previewDevice = 'desktop', draftTimer = 0, savingDraft = false, cmsHistory = [], draggedBlockId = '';
+  let undoStack = [], redoStack = [];
   let report = null, reportError = '', reportLoading = false, offset = 0, days = '7', source = '', onlyActive = false;
   const VISIT_PAGE_SIZE = 10;
   let detailSession = '', detailOffset = 0;
@@ -42,7 +46,12 @@ export function createSiteTools(ctx) {
     if (!response.ok) throw Object.assign(new Error(result.error || 'Không thể kết nối máy chủ.'), { status: response.status });
     return result;
   }
-  async function loadPages() { pages = (await request('/api/site-content')).pages || {}; }
+  async function loadPages() {
+    const admin = isAdmin();
+    const result = await request('/api/site-content' + (admin ? '?admin=1' : ''), undefined, admin);
+    pages = result.pages || {};
+    if (admin) serverDrafts = result.drafts || {};
+  }
   const previewUrl = path => location.pathname + '?cmsPreview=1#' + path;
   const cleanPath = p => String(p || '/').split('?')[0].replace(/\/+$/, '') || '/';
   const pageName = path => {
@@ -90,6 +99,7 @@ export function createSiteTools(ctx) {
       path: selected, fields: { ...draft, ...overrides },
       ...(frameScrollY !== undefined ? { scrollY: frameScrollY } : {})
     }, location.origin);
+    if (dirty && isAdmin()) queueDraftSave();
   }
 
   const studioMediaCatalog = [
@@ -110,16 +120,7 @@ export function createSiteTools(ctx) {
   function getBlocks(fields = draft) {
     try {
       const raw = fields.blocks ? JSON.parse(fields.blocks) : [];
-      if (!Array.isArray(raw)) return [];
-      return raw.slice(0, 30).map(block => ({
-        id: typeof block.id === 'string' && block.id ? block.id : newBlockId(),
-        type: block.type === 'image' ? 'image' : 'text',
-        title: typeof block.title === 'string' ? block.title : '',
-        text: typeof block.text === 'string' ? block.text : '',
-        image: typeof block.image === 'string' ? block.image : '',
-        alt: typeof block.alt === 'string' ? block.alt : '',
-        caption: typeof block.caption === 'string' ? block.caption : '',
-      }));
+      return normalizeContentBlocks(raw, newBlockId);
     } catch {
       return [];
     }
@@ -127,107 +128,180 @@ export function createSiteTools(ctx) {
   function writeBlocks(blocks, redraw = true) {
     draft.blocks = JSON.stringify(blocks.slice(0, 30));
     dirty = true;
-    if (q('#cms-status')) q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+    if (q('#cms-status')) q('#cms-status').textContent = 'Đang có thay đổi · khách chưa thấy';
     if (redraw) drawBlockManager();
     sendPreview();
+  }
+  function draftSnapshot() { return JSON.stringify(draft); }
+  function recordDraftEdit() {
+    const snapshot = draftSnapshot();
+    if (undoStack[undoStack.length - 1] !== snapshot) undoStack.push(snapshot);
+    if (undoStack.length > 50) undoStack.shift();
+    redoStack = [];
+    updateUndoRedoControls();
+  }
+  function updateUndoRedoControls() {
+    document.querySelectorAll('[data-action="undo-cms"]').forEach(button => { button.disabled = undoStack.length === 0; });
+    document.querySelectorAll('[data-action="redo-cms"]').forEach(button => { button.disabled = redoStack.length === 0; });
+  }
+  function applyDraftSnapshot(snapshot) {
+    draft = JSON.parse(snapshot);
+    dirty = JSON.stringify(draft) !== JSON.stringify(pages[selected]?.fields || {});
+    drawFields();
+    sendPreview();
+    updateUndoRedoControls();
+  }
+  function undoDraft() {
+    if (!undoStack.length) return;
+    redoStack.push(draftSnapshot());
+    applyDraftSnapshot(undoStack.pop());
+    if (q('#cms-status')) q('#cms-status').textContent = 'Đã hoàn tác · khách chưa thấy';
+  }
+  function redoDraft() {
+    if (!redoStack.length) return;
+    undoStack.push(draftSnapshot());
+    applyDraftSnapshot(redoStack.pop());
+    if (q('#cms-status')) q('#cms-status').textContent = 'Đã làm lại · khách chưa thấy';
+  }
+  function openCompare() {
+    const published = pages[selected]?.fields || {};
+    const keys = [...new Set([...Object.keys(published), ...Object.keys(draft)])].filter(key => published[key] !== draft[key]);
+    const fieldName = key => key === 'blocks' ? 'Các phần nội dung đã thêm' : (descriptors.find(item => item.key === key)?.label || 'Nội dung trang');
+    const fieldValue = (key, value) => {
+      if (key !== 'blocks') return String(value || 'Trống');
+      try {
+        const count = JSON.parse(value || '[]').length;
+        return count ? `${count} phần nội dung` : 'Chưa có phần nội dung thêm';
+      } catch { return 'Nội dung không đọc được'; }
+    };
+    const container = blockModalContainer();
+    container.innerHTML = `<div class="cms-modal-overlay cms-section-overlay"><div class="cms-section-dialog cms-history-dialog cms-compare-dialog"><header><div><span class="cms-dialog-kicker">NỘI DUNG ĐÃ SỬA</span><h2>Kiểm tra trước khi đăng</h2><p>Bên trái là nội dung đang có trên website, bên phải là bản nháp mới.</p></div><button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng">&times;</button></header>${keys.length ? `<div class="cms-compare-list">${keys.map(key => `<article><b>${esc(fieldName(key))}</b><div><del>${esc(fieldValue(key, published[key]))}</del><span>${esc(fieldValue(key, draft[key]))}</span></div></article>`).join('')}</div>` : '<p class="cms-history-empty">Bản nháp giống nội dung đang hiển thị trên website.</p>'}</div></div>`;
   }
   function renderExtraBlocks(path, fields = pages[path]?.fields || {}) {
     const main = q('#main');
     if (!main || path.startsWith('/admin')) return;
-    main.querySelector('.cms-extra-blocks')?.remove();
-    const blocks = getBlocks(fields).filter(block => block.type === 'image' ? block.image : (block.title || block.text));
-    if (!blocks.length) return;
-    const section = document.createElement('section');
-    section.className = 'cms-extra-blocks';
-    section.setAttribute('aria-label', 'Nội dung bổ sung');
-    for (const block of blocks) {
-      const article = document.createElement('article');
-      article.className = `cms-extra-block cms-extra-${block.type}`;
-      if (block.title) {
-        const h = document.createElement('h2');
-        h.textContent = block.title;
-        article.append(h);
-      }
-      if (block.type === 'image') {
-        const figure = document.createElement('figure');
-        const image = document.createElement('img');
-        image.src = block.image;
-        image.alt = block.alt || block.title || block.caption || 'Hình ảnh bổ sung';
-        image.loading = 'lazy';
-        figure.append(image);
-        if (block.caption) {
-          const figcaption = document.createElement('figcaption');
-          figcaption.textContent = block.caption;
-          figure.append(figcaption);
-        }
-        article.append(figure);
-      } else if (block.text) {
-        const p = document.createElement('p');
-        p.textContent = block.text;
-        p.style.whiteSpace = 'pre-line';
-        article.append(p);
-      }
-      section.append(article);
-    }
-    main.append(section);
+    renderContentBlocks(main, getBlocks(fields));
   }
   function drawBlockManager() {
     const root = q('#cms-block-manager');
     if (!root) return;
     const blocks = getBlocks();
+    const typeName = type => CONTENT_BLOCK_TEMPLATES.find(item => item.type === type)?.name || 'Khối nội dung';
     root.innerHTML = `
       <div class="cms-block-manager-head">
         <div>
-          <strong>Khối thêm mới của trang này</strong>
-          <span>${blocks.length ? `${blocks.length} khối đang thêm vào cuối trang` : 'Chưa có khối thêm mới'}</span>
+          <strong>Cấu trúc nội dung bổ sung</strong>
+          <span>${blocks.length ? `${blocks.length} phần nội dung · kéo để sắp xếp` : 'Chưa có phần nội dung thêm'}</span>
         </div>
         <div class="cms-block-manager-actions">
-          <button type="button" class="btn btn-sm" data-action="add-cms-block" data-type="text">+ Khối nội dung</button>
-          <button type="button" class="btn btn-sm" data-action="add-cms-block" data-type="image">+ Khối ảnh</button>
+          <button type="button" class="btn btn-sm btn-dark" data-action="open-block-picker" data-slot="${pageSectionSlots.length}">+ Thêm nội dung</button>
         </div>
       </div>
       ${blocks.length ? `<div class="cms-block-list">${blocks.map((block, index) => `
-        <article class="cms-block-card" data-block-id="${esc(block.id)}">
-          <header>
-            <b>${block.type === 'image' ? 'Khối ảnh' : 'Khối nội dung'} ${index + 1}</b>
-            <div>
-              <button type="button" class="btn btn-sm" data-action="move-cms-block" data-dir="-1" data-id="${esc(block.id)}" ${index === 0 ? 'disabled' : ''}>Lên</button>
-              <button type="button" class="btn btn-sm" data-action="move-cms-block" data-dir="1" data-id="${esc(block.id)}" ${index === blocks.length - 1 ? 'disabled' : ''}>Xuống</button>
-              <button type="button" class="btn btn-sm cms-danger-btn" data-action="delete-cms-block" data-id="${esc(block.id)}">Xóa</button>
-            </div>
-          </header>
-          <label class="cms-field">Tiêu đề khối
-            <input data-block-field="title" data-block-id="${esc(block.id)}" value="${esc(block.title)}" placeholder="Ví dụ: Vì sao chọn Hoàn">
-          </label>
-          ${block.type === 'image' ? `
-            <div class="cms-block-image-row">
-              <img src="${esc(block.image || '/assets/campaign.png')}" alt="" onerror="this.src='/assets/campaign.png'">
-              <div>
-                <label class="cms-field">Ảnh
-                  <input data-block-field="image" data-block-id="${esc(block.id)}" value="${esc(block.image)}" placeholder="/assets/... hoặc https://...">
-                </label>
-                <label class="btn btn-sm cms-btn-upload">Tải ảnh từ máy
-                  <input type="file" data-block-upload="${esc(block.id)}" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
-                </label>
-                <div class="cms-block-preset-row">
-                  ${studioMediaCatalog.slice(0, 8).map(media => `<button type="button" class="preset-chip mini" data-action="apply-block-preset-image" data-id="${esc(block.id)}" data-src="${esc(media.src)}"><img src="${esc(media.src)}" alt=""><span>${esc(media.tag)}</span></button>`).join('')}
-                </div>
-              </div>
-            </div>
-            <label class="cms-field">Mô tả ảnh
-              <input data-block-field="alt" data-block-id="${esc(block.id)}" value="${esc(block.alt)}" placeholder="Mô tả ngắn cho SEO và trợ năng">
-            </label>
-            <label class="cms-field">Chú thích dưới ảnh
-              <textarea data-block-field="caption" data-block-id="${esc(block.id)}" rows="2" placeholder="Có thể để trống">${esc(block.caption)}</textarea>
-            </label>
-          ` : `
-            <label class="cms-field">Nội dung
-              <textarea data-block-field="text" data-block-id="${esc(block.id)}" rows="4" placeholder="Nhập đoạn nội dung muốn thêm vào trang">${esc(block.text)}</textarea>
-            </label>
-          `}
+        <article class="cms-block-row ${block.hidden ? 'is-hidden' : ''}" draggable="true" data-block-id="${esc(block.id)}">
+          <span class="cms-block-drag" title="Kéo để sắp xếp">⋮⋮</span>
+          <span class="cms-block-order">${String(index + 1).padStart(2, '0')}</span>
+          <div class="cms-block-summary">
+            <b>${esc(block.title || typeName(block.type))}</b>
+            <span>${esc(typeName(block.type))}${block.hidden ? ' · Đang ẩn' : ''}</span>
+          </div>
+          <div class="cms-block-row-actions">
+            <button type="button" class="btn btn-sm" data-action="edit-cms-block" data-id="${esc(block.id)}">Sửa</button>
+            <button type="button" class="btn btn-sm" data-action="toggle-cms-block" data-id="${esc(block.id)}">${block.hidden ? 'Hiện' : 'Ẩn'}</button>
+            <button type="button" class="btn btn-sm" data-action="duplicate-cms-block" data-id="${esc(block.id)}" title="Nhân bản">Nhân bản</button>
+            <button type="button" class="cms-icon-action" data-action="move-cms-block" data-dir="-1" data-id="${esc(block.id)}" ${index === 0 ? 'disabled' : ''} title="Đưa lên">↑</button>
+            <button type="button" class="cms-icon-action" data-action="move-cms-block" data-dir="1" data-id="${esc(block.id)}" ${index === blocks.length - 1 ? 'disabled' : ''} title="Đưa xuống">↓</button>
+            <button type="button" class="cms-icon-action cms-danger-btn" data-action="delete-cms-block" data-id="${esc(block.id)}" title="Xóa">×</button>
+          </div>
         </article>
-      `).join('')}</div>` : '<p class="cms-block-empty">Bấm “Khối nội dung” hoặc “Khối ảnh” để thêm nội dung vào cuối trang đang chọn.</p>'}
+      `).join('')}</div>` : '<div class="cms-block-empty"><b>Thêm nội dung theo mẫu</b><span>Chọn một mẫu đã được thiết kế sẵn cho website HOÀN.</span></div>'}
     `;
+  }
+
+  const option = (value, label, selectedValue) => `<option value="${esc(value)}" ${value === selectedValue ? 'selected' : ''}>${esc(label)}</option>`;
+  function blockModalContainer() {
+    let container = q('#cms-block-modal-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'cms-block-modal-container';
+    }
+    if (container.parentElement !== document.body) document.body.append(container);
+    return container;
+  }
+  function blockSlotOptions(selectedSlot) {
+    const slots = [{ value: 0, label: 'Trước phần đầu tiên' }];
+    pageSectionSlots.forEach((section, index) => slots.push({ value: index + 1, label: `Sau: ${section.label}` }));
+    if (!pageSectionSlots.length) slots[0].label = 'Cuối nội dung trang';
+    return slots.map(item => option(String(item.value), item.label, String(Math.min(selectedSlot, pageSectionSlots.length)))).join('');
+  }
+
+  function openBlockPicker(slot = pageSectionSlots.length) {
+    blockInsertSlot = Number.isFinite(Number(slot)) ? Number(slot) : pageSectionSlots.length;
+    const container = blockModalContainer();
+    container.innerHTML = `
+      <div class="cms-modal-overlay cms-section-overlay" data-action="close-block-modal">
+        <div class="cms-section-dialog" role="dialog" aria-modal="true" aria-labelledby="cms-block-picker-title">
+          <header><div><span class="cms-dialog-kicker">THƯ VIỆN SECTION</span><h2 id="cms-block-picker-title">Thêm nội dung vào trang</h2><p>Mỗi mẫu tự dùng font, khoảng cách và responsive của website.</p></div><button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng">&times;</button></header>
+          <div class="cms-template-grid">
+            ${CONTENT_BLOCK_TEMPLATES.map(template => `<button type="button" class="cms-template-card" data-action="choose-block-template" data-type="${template.type}"><span class="cms-template-preview">${template.preview}</span><b>${esc(template.name)}</b><small>${esc(template.description)}</small></button>`).join('')}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function blockCommonFields(block) {
+    const showEyebrow = ['split', 'gallery', 'features', 'process', 'testimonial', 'faq', 'cta'].includes(block.type);
+    const showTitle = block.type !== 'testimonial';
+    const showText = block.type !== 'image';
+    const showImage = ['image', 'split'].includes(block.type);
+    const showButton = ['split', 'cta'].includes(block.type);
+    return `
+      ${showEyebrow ? `<label class="cms-field">Dòng dẫn nhỏ<input data-block-field="eyebrow" data-block-id="${esc(block.id)}" value="${esc(block.eyebrow)}" maxlength="80" placeholder="Ví dụ: CÂU CHUYỆN"></label>` : ''}
+      ${showTitle ? `<label class="cms-field">Tiêu đề<input data-block-field="title" data-block-id="${esc(block.id)}" value="${esc(block.title)}" maxlength="140"><small>Tối đa 140 ký tự để bảo toàn bố cục.</small></label>` : ''}
+      ${showText ? `<label class="cms-field">Nội dung<textarea data-block-field="text" data-block-id="${esc(block.id)}" rows="5" maxlength="3000">${esc(block.text)}</textarea></label>` : ''}
+      ${showImage ? `<div class="cms-editor-image"><img src="${esc(block.image || '/assets/campaign.png')}" alt=""><div><label class="cms-field">Đường dẫn ảnh<input data-block-field="image" data-block-id="${esc(block.id)}" value="${esc(block.image)}"></label><label class="btn btn-sm cms-btn-upload">Tải ảnh từ máy<input type="file" data-block-upload="${esc(block.id)}" accept="image/png,image/jpeg,image/webp" hidden></label></div></div><label class="cms-field">Mô tả ảnh<input data-block-field="alt" data-block-id="${esc(block.id)}" value="${esc(block.alt)}" maxlength="300"></label><label class="cms-field">Chú thích<input data-block-field="caption" data-block-id="${esc(block.id)}" value="${esc(block.caption)}" maxlength="300"></label>` : ''}
+      ${block.type === 'testimonial' ? `<label class="cms-field">Tên khách hàng / nguồn<input data-block-field="caption" data-block-id="${esc(block.id)}" value="${esc(block.caption)}" maxlength="120"></label>` : ''}
+      ${showButton ? `<div class="cms-editor-grid two"><label class="cms-field">Nhãn nút<input data-block-field="buttonLabel" data-block-id="${esc(block.id)}" value="${esc(block.buttonLabel)}" maxlength="60"></label><label class="cms-field">Liên kết<input data-block-field="buttonHref" data-block-id="${esc(block.id)}" value="${esc(block.buttonHref)}" placeholder="#/booking/service"></label></div>` : ''}
+    `;
+  }
+
+  function blockCollectionFields(block) {
+    if (block.type === 'gallery') return `
+      <div class="cms-collection-head"><b>Ảnh trong bộ sưu tập</b><button type="button" class="btn btn-sm" data-action="add-block-image" data-id="${esc(block.id)}">+ Thêm ảnh</button></div>
+      <div class="cms-collection-list">${block.images.map((image, index) => `<div class="cms-collection-row image-row"><img src="${esc(image.src || '/assets/campaign.png')}" alt=""><div><input data-block-image-field="src" data-block-id="${esc(block.id)}" data-index="${index}" value="${esc(image.src)}" placeholder="Đường dẫn ảnh"><input data-block-image-field="alt" data-block-id="${esc(block.id)}" data-index="${index}" value="${esc(image.alt)}" placeholder="Mô tả ảnh"></div><label class="cms-icon-action" title="Tải ảnh">↑<input type="file" data-block-gallery-upload="${esc(block.id)}" data-index="${index}" accept="image/png,image/jpeg,image/webp" hidden></label><button type="button" class="cms-icon-action cms-danger-btn" data-action="remove-block-image" data-id="${esc(block.id)}" data-index="${index}">×</button></div>`).join('')}</div>`;
+    if (!['features', 'process', 'faq'].includes(block.type)) return '';
+    return `
+      <div class="cms-collection-head"><b>${block.type === 'faq' ? 'Câu hỏi' : 'Các mục nội dung'}</b><button type="button" class="btn btn-sm" data-action="add-block-item" data-id="${esc(block.id)}">+ Thêm mục</button></div>
+      <div class="cms-collection-list">${block.items.map((item, index) => `<div class="cms-collection-row"><span>${String(index + 1).padStart(2, '0')}</span><div><input data-block-item-field="title" data-block-id="${esc(block.id)}" data-index="${index}" value="${esc(item.title)}" placeholder="${block.type === 'faq' ? 'Câu hỏi' : 'Tiêu đề'}"><textarea data-block-item-field="text" data-block-id="${esc(block.id)}" data-index="${index}" rows="2" placeholder="Nội dung">${esc(item.text)}</textarea></div><button type="button" class="cms-icon-action cms-danger-btn" data-action="remove-block-item" data-id="${esc(block.id)}" data-index="${index}">×</button></div>`).join('')}</div>`;
+  }
+
+  function openBlockEditor(id) {
+    const block = getBlocks().find(item => item.id === id);
+    const container = blockModalContainer();
+    if (!block || !container) return;
+    activeBlockId = id;
+    const template = CONTENT_BLOCK_TEMPLATES.find(item => item.type === block.type);
+    container.innerHTML = `
+      <div class="cms-modal-overlay cms-section-overlay" data-action="close-block-modal">
+        <div class="cms-section-dialog cms-block-editor" role="dialog" aria-modal="true" aria-labelledby="cms-block-editor-title">
+          <header><div><span class="cms-dialog-kicker">${esc(template?.name || 'NỘI DUNG')}</span><h2 id="cms-block-editor-title">Chỉnh sửa phần nội dung</h2><p>Thay đổi hiển thị ngay trong khung xem trước.</p></div><button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng">&times;</button></header>
+          <div class="cms-block-editor-body">
+            <section><h3>Nội dung</h3>${blockCommonFields(block)}${blockCollectionFields(block)}</section>
+            <aside><h3>Trình bày</h3>
+              <label class="cms-field">Vị trí trong trang<select data-block-setting="slot" data-block-id="${esc(block.id)}">${blockSlotOptions(block.slot)}</select></label>
+              <label class="cms-field">Chiều rộng<select data-block-setting="width" data-block-id="${esc(block.id)}">${option('narrow','Hẹp',block.settings.width)}${option('standard','Tiêu chuẩn',block.settings.width)}${option('wide','Rộng',block.settings.width)}${option('full','Toàn màn hình',block.settings.width)}</select></label>
+              <label class="cms-field">Khoảng cách<select data-block-setting="spacing" data-block-id="${esc(block.id)}">${option('compact','Nhỏ',block.settings.spacing)}${option('normal','Vừa',block.settings.spacing)}${option('airy','Lớn',block.settings.spacing)}</select></label>
+              <label class="cms-field">Nền<select data-block-setting="theme" data-block-id="${esc(block.id)}">${option('white','Trắng',block.settings.theme)}${option('soft','Sáng nhẹ',block.settings.theme)}${option('dark','Đen',block.settings.theme)}${option('wine','Đỏ rượu',block.settings.theme)}</select></label>
+              <label class="cms-field">Căn nội dung<select data-block-setting="align" data-block-id="${esc(block.id)}">${option('left','Trái',block.settings.align)}${option('center','Giữa',block.settings.align)}</select></label>
+              ${['image','split','gallery'].includes(block.type) ? `<label class="cms-field">Tỷ lệ ảnh<select data-block-setting="ratio" data-block-id="${esc(block.id)}">${option('auto','Tự nhiên',block.settings.ratio)}${option('landscape','Ngang 16:9',block.settings.ratio)}${option('portrait','Dọc 4:5',block.settings.ratio)}${option('square','Vuông 1:1',block.settings.ratio)}</select></label>` : ''}
+              ${block.type === 'split' ? `<label class="cms-field">Vị trí ảnh<select data-block-setting="imagePosition" data-block-id="${esc(block.id)}">${option('left','Bên trái',block.settings.imagePosition)}${option('right','Bên phải',block.settings.imagePosition)}${option('top','Phía trên trên mobile',block.settings.imagePosition)}</select></label>` : ''}
+              ${['gallery','features','process'].includes(block.type) ? `<label class="cms-field">Số cột<select data-block-setting="columns" data-block-id="${esc(block.id)}">${option('2','2 cột',block.settings.columns)}${option('3','3 cột',block.settings.columns)}${option('4','4 cột',block.settings.columns)}</select></label>` : ''}
+            </aside>
+          </div>
+          <footer><span>Mọi kiểu chữ và kích thước được khóa theo giao diện HOÀN.</span><button type="button" class="btn btn-dark" data-action="close-block-modal">Xong</button></footer>
+        </div>
+      </div>`;
+    container.querySelector('.cms-block-editor input, .cms-block-editor textarea')?.focus();
   }
 
   function detectSection(node, path) {
@@ -274,12 +348,12 @@ export function createSiteTools(ctx) {
 
   const originalNodes = new WeakMap();
   function scanNodes(root, path) {
-    if (!publicPages.some(([p]) => p === path)) return [];
+    if (!publicPages.some(([p]) => p === path) && !path.startsWith('/pages/')) return [];
     const booking = path.startsWith('/booking/') || ['/lookup', '/search'].includes(path);
     const selector = booking ? '#main h1, #main .ct-subtitle' : '#main h1, #main h2, #main h3, #main p, #main li, #main figcaption, #main img';
     const counters = {};
     return [...root.querySelectorAll(selector)].filter(node => {
-      if (node.closest('.cms-extra-blocks')) return false;
+      if (node.closest('.cms-extra-blocks, .cms-content-section')) return false;
       if (node.closest('.ct-service-grid, .ct-service-meta, .ct-price, .ct-select-services, .ct-summary, .booking-summary, form, .breadcrumbs')) return false;
       if (node.matches('img') && (node.getAttribute('aria-hidden') === 'true' || node.classList.contains('fashion-detail'))) return false;
       if (!node.matches('img') && [...node.children].some(child => child.tagName !== 'BR')) return false;
@@ -325,6 +399,10 @@ export function createSiteTools(ctx) {
     }
   }
   function applyContent(path) {
+    if (path.startsWith('/pages/') && pages[path]?.fields?.['page-title']) {
+      const heading = q('.studio-public-intro h1');
+      if (heading) heading.textContent = pages[path].fields['page-title'];
+    }
     const nodes = editableNodes(path);
     const fields = pages[path]?.fields || {};
     for (const item of nodes) {
@@ -384,7 +462,11 @@ export function createSiteTools(ctx) {
       }
     }
     renderExtraBlocks(path, fields);
-    if (isPreview && !isApplyingPreview) window.parent.postMessage({ type: 'hoan:fields', path, fields: nodes.map(({ node, ...item }) => ({ ...item, value: fields[item.key] ?? item.original })) }, location.origin);
+    if (isPreview && !isApplyingPreview) window.parent.postMessage({
+      type: 'hoan:fields', path,
+      fields: nodes.map(({ node, ...item }) => ({ ...item, value: fields[item.key] ?? item.original })),
+      sections: contentSlots(q('#main')),
+    }, location.origin);
   }
   function linkedFields(path) {
     const b = ctx.getState().brand;
@@ -424,58 +506,146 @@ export function createSiteTools(ctx) {
   let activeFilter = 'all', searchQuery = '', activeMediaKey = '', activeTextKey = '', activeFocusKey = '';
   let activeEditorMode = 'all';
 
+  function pageEntries() {
+    const custom = [...new Set([...Object.keys(pages), ...Object.keys(serverDrafts)])]
+      .filter(path => /^\/pages\/[a-z0-9-]+$/.test(path))
+      .map(path => [path, serverDrafts[path]?.fields?.['page-title'] || pages[path]?.fields?.['page-title'] || path]);
+    return [...publicPages, ...custom];
+  }
+  function customPageHtml(path) {
+    const fields = pages[path]?.fields;
+    if (!fields && !isPreview) return '';
+    return `<div class="page">${ctx.publicHeader()}<main id="main"><section class="studio-public-intro"><p>HOÀN MAKEUP ARTIST</p><h1>${esc(fields?.['page-title'] || 'Trang mới')}</h1></section></main>${ctx.publicFooter()}</div>`;
+  }
+  function pageGroup(path) {
+    if (path.startsWith('/pages/')) return 'custom';
+    if (path.startsWith('/booking/')) return 'booking';
+    if (path === '/support' || path.startsWith('/support/') || path === '/lookup' || path === '/search') return 'support';
+    if (path === '/policies' || path.startsWith('/policies/')) return 'policy';
+    if (path.startsWith('/services/') || path === '/gallery' || path.startsWith('/look/')) return 'portfolio';
+    return 'main';
+  }
+  const pageGroups = [
+    ['main', 'Trang chính', 'Các trang khách xem nhiều nhất'],
+    ['portfolio', 'Dịch vụ & hình ảnh', 'Các gói trang điểm và bộ sưu tập'],
+    ['booking', 'Quy trình đặt lịch', 'Các bước khách thực hiện khi đặt lịch'],
+    ['support', 'Hướng dẫn khách hàng', 'Tra cứu và hướng dẫn sử dụng'],
+    ['policy', 'Chính sách', 'Điều khoản và quy định dịch vụ'],
+    ['custom', 'Trang tự tạo', 'Các trang chiến dịch của riêng bạn'],
+  ];
+  function drawStudioNavigation() {
+    const root = q('#studio-page-list');
+    if (!root) return;
+    const term = (q('#studio-page-search')?.value || '').toLocaleLowerCase('vi');
+    const entries = pageEntries();
+    const filtered = entries.filter(([path,name]) => (name + path).toLocaleLowerCase('vi').includes(term));
+    const selectedGroup = pageGroup(selected);
+    root.innerHTML = pageGroups.map(([id, label, description]) => {
+      const groupEntries = filtered.filter(([path]) => pageGroup(path) === id);
+      if (!groupEntries.length) return '';
+      const open = Boolean(term) || id === selectedGroup || id === 'main';
+      return `<details class="studio-page-group" ${open ? 'open' : ''}>
+        <summary><span><b>${label}</b><small>${description}</small></span><em>${groupEntries.length}</em></summary>
+        <div>${groupEntries.map(([path,name]) => {
+          const hasDraft = Boolean(serverDrafts[path]);
+          const status = hasDraft ? 'Có bản nháp chưa đăng' : pages[path] ? 'Đã đăng' : 'Trang có sẵn';
+          return `<button type="button" class="studio-page-item ${selected === path ? 'is-selected' : ''}" data-studio="select-page" data-path="${esc(path)}" aria-current="${selected === path ? 'page' : 'false'}"><span class="studio-page-icon">${path === '/' ? '⌂' : path.startsWith('/pages/') ? '＋' : '▤'}</span><span><b>${esc(name)}</b><small>${status}</small></span><span>›</span></button>`;
+        }).join('')}</div>
+      </details>`;
+    }).join('') || '<p class="studio-sidebar-tip">Không tìm thấy trang phù hợp.</p>';
+    const select = q('#cms-page-select');
+    if (select) select.innerHTML = entries.map(([path,name]) => `<option value="${esc(path)}" ${path === selected ? 'selected' : ''}>${esc(name)}</option>`).join('');
+    const selectedName = pageName(selected);
+    if (q('#studio-path')) q('#studio-path').textContent = selectedName;
+    if (q('#studio-current-page')) q('#studio-current-page').textContent = selectedName;
+    const outline = q('#studio-outline');
+    if (outline) {
+      const editable = descriptors.filter(d => !d.key.startsWith('alt-') && !d.key.startsWith('pos-'));
+      const groups = new Map();
+      editable.forEach(item => {
+        const title = item.section?.title || 'Nội dung chính';
+        if (!groups.has(title)) groups.set(title, []);
+        groups.get(title).push(item);
+      });
+      outline.innerHTML = `${selected.startsWith('/pages/') ? '<button class="studio-outline-item studio-page-settings" type="button" data-studio="page-settings"><span>⚙</span><span>Tên trang và bản sao</span></button>' : ''}${[...groups.entries()].map(([title, items]) => `<section class="studio-outline-group"><b>${esc(title)}</b>${items.map(item => `<button type="button" class="studio-outline-item" data-studio="edit-field" data-key="${esc(item.key)}"><span>${item.key.startsWith('img-') ? 'Ảnh' : 'Chữ'}</span><span>${esc(item.label || item.value || 'Nội dung')}</span></button>`).join('')}</section>`).join('') || '<p class="studio-sidebar-tip">Đang đọc nội dung của trang…</p>'}`;
+    }
+  }
+  async function switchStudioPage(path) {
+    if (path === selected) return;
+    clearTimeout(draftTimer);
+    if (savingDraft) { toast('Đang lưu bản nháp, vui lòng thử lại sau giây lát.'); return; }
+    if (dirty && !await saveDraft(true)) return;
+    q('#cms-block-modal-container')?.replaceChildren();
+    q('#cms-text-modal-container')?.replaceChildren();
+    await selectPage(path);
+  }
+  function openPageDialog(settings = false) {
+    const container = blockModalContainer();
+    container.innerHTML = `<div class="cms-modal-overlay cms-section-overlay"><div class="cms-section-dialog studio-page-dialog" role="dialog" aria-modal="true" aria-labelledby="studio-page-title"><header><div><span class="cms-dialog-kicker">HOÀN STUDIO</span><h2 id="studio-page-title">${settings ? 'Thiết lập trang' : 'Tạo một trang mới'}</h2><p>${settings ? 'Đổi tên hoặc tạo bản sao để thử một ý tưởng khác.' : 'Bắt đầu từ mẫu. Chỉnh theo phong cách của bạn.'}</p></div><button class="cms-modal-close" type="button" data-action="close-block-modal" aria-label="Đóng">×</button></header><form id="studio-page-form" data-settings="${settings}"><label class="cms-field">Tên trang<input name="title" required maxlength="100" placeholder="Ví dụ: Mùa cưới 2026" value="${settings ? esc(draft['page-title'] || '') : ''}"></label>${settings ? `<p class="studio-url">Đường dẫn: #${esc(selected)}</p>` : '<label class="cms-field">Đường dẫn<span class="studio-url">#/pages/<input name="slug" required maxlength="70" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="mua-cuoi-2026"></span><small>Chữ thường không dấu, số và dấu gạch ngang.</small></label><label class="cms-field">Mẫu khởi đầu<select name="template"><option value="story">Câu chuyện thương hiệu</option><option value="campaign">Giới thiệu dịch vụ / chiến dịch</option><option value="gallery">Bộ sưu tập ảnh</option><option value="blank">Trang trống</option></select></label>'}<p class="studio-sidebar-tip">Trang mới được lưu riêng dưới dạng bản nháp. Sau khi xuất bản, bạn có thể gắn đường dẫn vào nút trên website.</p><p id="studio-page-error" role="alert"></p><footer>${settings ? '<button class="btn" type="button" data-studio="duplicate-page">Nhân bản trang</button>' : ''}<button type="submit" class="btn btn-dark">${settings ? 'Lưu tên trang' : 'Tạo trang & chỉnh sửa →'}</button></footer></form></div></div>`;
+    container.querySelector('input')?.focus();
+  }
+  async function createStudioPage(title, slug, template, copiedFields) {
+    const path = '/pages/' + slug;
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 70) throw new Error('Đường dẫn không hợp lệ.');
+    if (pageEntries().some(([p]) => p === path)) throw new Error('Đường dẫn đã tồn tại. Hãy chọn tên khác.');
+    if (savingDraft) throw new Error('Bản nháp đang được lưu. Vui lòng thử lại sau giây lát.');
+    if (dirty && !await saveDraft(true)) throw new Error('Chưa lưu được trang hiện tại. Hãy thử lại.');
+    const types = { story: ['split','testimonial','cta'], campaign: ['image','features','cta'], gallery: ['gallery','cta'], blank: [] };
+    const blocks = (types[template] || []).map(type => createContentBlock(type, newBlockId, 1));
+    const fields = { ...(copiedFields || { blocks: JSON.stringify(blocks) }), 'page-title': title };
+    const result = await request('/api/site-content', { action: 'draft', path, fields, revision: '' }, true);
+    serverDrafts[path] = result.draft;
+    q('#cms-block-modal-container')?.replaceChildren();
+    await selectPage(path);
+    toast('Đã tạo bản nháp. Bấm vào nội dung để bắt đầu chỉnh sửa.');
+  }
+
   function cmsWorkspaceHtml() {
     return `
-      <div class="cms-workspace full-live-mode">
+      <div class="cms-workspace full-live-mode cms-studio">
         <form id="cms-page-form" class="cms-live-main-form">
-          <section class="cms-panel cms-preview-panel full-width-live-preview">
-            <div class="section-head preview-panel-header live-top-controls">
-              <div class="live-controls-left">
-                <label class="cms-inline-select-label">
-                  <span class="inline-select-title">Trang chỉnh sửa:</span>
-                  <select id="cms-page-select" class="cms-page-select-modern">
-                    ${publicPages.map(([path, name]) => `<option value="${path}" ${selected === path ? 'selected' : ''}>${esc(name)}</option>`).join('')}
-                  </select>
-                </label>
-                <div id="cms-status" class="cms-live-status-pill" role="status">Sẵn sàng chỉnh sửa nội dung</div>
-              </div>
-              <div class="live-controls-right">
-                <button class="btn btn-add-media" type="button" data-cms-action="add-media" title="Thêm hoặc tải ảnh mới từ máy tính">
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
-                  <span>Thêm ảnh</span>
-                </button>
-                <button class="btn" type="button" data-action="add-cms-block" data-type="text">+ Khối nội dung</button>
-                <button class="btn" type="button" data-action="add-cms-block" data-type="image">+ Khối ảnh</button>
-                <button class="btn btn-dark btn-save-primary" type="submit">
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
-                  <span>Lưu thay đổi</span>
-                </button>
-                <button class="btn btn-reload-secondary" type="button" data-cms-action="reload">
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
-                  <span>Tải lại</span>
-                </button>
-                <a class="link" id="cms-open-page" href="#${selected}" target="_blank" rel="noopener">Mở trang đã lưu</a>
-              </div>
+          <header class="studio-toolbar">
+            <div class="studio-brand"><span>H</span><div><small>QUẢN TRỊ WEBSITE</small><b>Sửa nội dung</b></div></div>
+            <div class="studio-current-page"><small>Đang sửa trang</small><strong id="studio-current-page">${esc(pageName(selected))}</strong></div>
+            <div id="cms-status" class="cms-live-status-pill" role="status">Đang tải nội dung…</div>
+            <div class="studio-toolbar-actions">
+              <details class="studio-more"><summary class="btn">Công cụ</summary><div>
+                <button class="btn" type="button" data-action="undo-cms">↶ Hoàn tác</button>
+                <button class="btn" type="button" data-action="redo-cms">↷ Làm lại</button>
+                <button class="btn" type="button" data-action="save-cms-draft">Lưu nháp ngay</button>
+                <button class="btn" type="button" data-action="compare-cms">Xem nội dung đã sửa</button>
+                <button class="btn" type="button" data-action="open-cms-history">Lịch sử phiên bản</button>
+                <button class="btn" type="button" data-studio="new-page">Tạo trang mới</button>
+                <button class="btn" type="button" data-cms-action="reload">Tải lại nội dung</button>
+              </div></details>
+              <a class="btn studio-preview-button" id="cms-open-page" href="#${esc(selected)}" target="_blank" rel="noopener">Xem trang khách ↗</a>
+              <button class="btn btn-dark btn-save-primary" type="submit">Đăng lên website</button>
             </div>
-            <div id="cms-block-manager" class="cms-block-manager"></div>
-            <div class="live-preview-viewport">
-              <iframe id="cms-real-preview" title="Xem trước trang website thật" src="${previewUrl(selected)}"></iframe>
-            </div>
-          </section>
-
-          <!-- Hidden sync container for schema fields within viewport bounds -->
-          <div class="cms-sync-fields-hidden" hidden inert>
-            <div id="cms-fields"></div>
+          </header>
+          <div class="studio-layout">
+            <aside class="studio-sidebar" aria-label="Quản lý trang và nội dung">
+              <div class="studio-step-heading"><span>1</span><div><b>Chọn trang cần sửa</b><small>Chọn đúng trang khách sẽ nhìn thấy</small></div></div>
+              <input id="studio-page-search" class="studio-search" type="search" placeholder="Tìm tên trang…" aria-label="Tìm trang">
+              <nav id="studio-page-list" aria-label="Danh sách trang"></nav>
+              <div class="studio-step-heading studio-structure-title"><span>2</span><div><b>Chọn nội dung cần sửa</b><small>Chọn chữ hoặc ảnh trong danh sách</small></div><button type="button" class="btn btn-sm" data-action="open-block-picker" aria-label="Thêm phần nội dung">+ Thêm</button></div>
+              <div id="studio-outline"></div>
+              <div id="cms-block-manager" class="cms-block-manager"></div>
+              <div class="studio-sidebar-tip"><b>Mẹo:</b> Bạn cũng có thể bấm thẳng vào chữ hoặc ảnh trong khung xem trước. Thay đổi được tự động lưu thành bản nháp.</div>
+            </aside>
+            <section class="studio-canvas" aria-label="Trình chỉnh sửa trực quan">
+              <div class="studio-canvas-bar"><span><strong>3</strong><span><b>Bấm vào nội dung để sửa</b><small>Đây là hình ảnh khách sẽ nhìn thấy</small></span></span><button class="btn btn-sm" type="button" data-cms-action="add-media">Đổi ảnh</button></div>
+              <div class="live-preview-viewport" data-device="${previewDevice}"><iframe id="cms-real-preview" title="Xem trước trang website thật" src="${previewUrl(selected)}"></iframe></div>
+              <footer class="studio-canvas-footer"><span id="studio-path">${esc(pageName(selected))}</span><div class="cms-device-switch" role="group" aria-label="Kích thước xem trước">${[['desktop','Máy tính'],['tablet','Máy tính bảng'],['mobile','Điện thoại']].map(([id,label])=>`<button type="button" class="cms-device-btn ${previewDevice === id ? 'active' : ''}" data-cms-device="${id}" aria-pressed="${previewDevice === id}">${label}</button>`).join('')}</div><span>Kiểm tra nội dung rồi bấm “Đăng lên website”</span></footer>
+            </section>
           </div>
+          <div class="cms-sync-fields-hidden" hidden inert><div id="cms-fields"></div></div>
         </form>
       </div>
-      <div id="cms-media-modal-container"></div>
-      <div id="cms-text-modal-container"></div>
-    `;
+      <div id="cms-media-modal-container"></div><div id="cms-text-modal-container"></div><div id="cms-block-modal-container"></div>`;
   }
 
   function contentPage() {
-    return ctx.adminShell('content', cmsWorkspaceHtml(), 'Nội dung website', 'Chỉnh sửa toàn bộ các trang và thiết lập chung.', '<a class="btn" href="#/" target="_blank">Xem website </a>');
+    return ctx.adminShell('content', cmsWorkspaceHtml(), 'Nội dung website', 'Chọn trang, sửa nội dung và đăng thay đổi.', '<a class="btn" href="#/" target="_blank">Xem website </a>');
   }
 
   function updateFilterCounts() {
@@ -539,31 +709,22 @@ export function createSiteTools(ctx) {
           <div class="cms-modal-header">
             <div class="cms-modal-title">
               <span class="cms-role-badge ${role.badgeClass}">${role.tag}</span>
-              <h3>Chỉnh sửa văn bản trực tiếp</h3>
+              <div><small>ĐANG SỬA</small><h3>${esc(item.label || 'Nội dung')}</h3></div>
             </div>
             <button type="button" class="cms-modal-close" data-action="close-text-modal" title="Đóng">&times;</button>
           </div>
           <div class="cms-text-modal-body">
-            <div class="cms-text-modal-meta">
-              <div class="cms-text-target-name">
-                <strong class="cms-target-title">${esc(item.label)}</strong>
-                <span class="cms-target-key">#${esc(targetKey)}</span>
-              </div>
-              <span class="cms-live-sync-badge">Thay đổi hiển thị trực tiếp trên website</span>
-            </div>
-            <label class="cms-text-input-label" for="modal-quick-text">Nội dung văn bản hiển thị:</label>
+            <div class="cms-beginner-note"><b>Thay đổi xuất hiện ngay trong khung xem trước.</b><span>Nội dung chỉ hiển thị với khách sau khi bạn bấm “Đăng lên website”.</span></div>
+            <label class="cms-text-input-label" for="modal-quick-text">Nội dung muốn hiển thị</label>
             <textarea id="modal-quick-text" rows="${item.original.length > 100 ? 6 : 4}" maxlength="6000" placeholder="Nhập nội dung mới...">${esc(currentVal)}</textarea>
             <div class="cms-char-counter"><span id="modal-char-count">${currentVal.length}</span> ký tự</div>
-            <div class="cms-original-hint" style="margin-top:12px;">
-              <span class="hint-tag">Nội dung gốc ban đầu:</span>
-              <span class="hint-text">${esc(item.original)}</span>
-            </div>
+            <details class="cms-original-hint"><summary>Xem nội dung ban đầu</summary><span class="hint-text">${esc(item.original)}</span></details>
           </div>
           <div class="cms-modal-footer">
-            <button type="button" class="btn btn-sm" data-action="modal-reset-text" data-key="${targetKey}" data-orig="${esc(item.original)}">Khôi phục chữ gốc</button>
+            <button type="button" class="btn btn-sm" data-action="modal-reset-text" data-key="${targetKey}" data-orig="${esc(item.original)}">Khôi phục ban đầu</button>
             <div style="display:flex;gap:10px;">
-              <button type="button" class="btn btn-sm" data-action="close-text-modal">Xong (giữ nháp)</button>
-              <button type="button" class="btn btn-sm btn-dark" data-action="modal-save-and-close">Áp dụng & Lưu lên web</button>
+              <button type="button" class="btn btn-sm" data-action="close-text-modal">Lưu bản nháp</button>
+              <button type="button" class="btn btn-sm btn-dark" data-action="modal-save-and-close">Đăng lên website</button>
             </div>
           </div>
         </div>
@@ -593,14 +754,14 @@ export function createSiteTools(ctx) {
     closeImageEditor = openImageEditor({
       container: q('#cms-media-modal-container'), liveImage,
       label: item.label, source: draft[key] ?? item.value ?? item.original,
-      catalog: studioMediaCatalog, esc, icon,
+      catalog: studioMediaCatalog, esc, icon, uploadHeaders: adminHeaders,
       onPreview: state => sendPreview(values(state)),
       onApply: state => {
         Object.assign(draft, values(state));
         dirty = true;
         drawFields();
         sendPreview();
-        q('#cms-status').textContent = 'Có thay đổi chưa lưu';
+        q('#cms-status').textContent = 'Đang có thay đổi · khách chưa thấy';
         closeImageEditor = null;
       },
       onCancel: () => { sendPreview(); closeImageEditor = null; },
@@ -653,7 +814,7 @@ export function createSiteTools(ctx) {
                 <label class="btn btn-sm cms-btn-upload">
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                   <span>Tải từ máy</span>
-                  <input type="file" data-cms-upload="${item.key}" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;">
+                  <input type="file" data-cms-upload="${item.key}" accept="image/png,image/jpeg,image/webp" style="display:none;">
                 </label>
                 <button type="button" class="btn btn-sm cms-btn-reset-img" data-action="reset-img" data-key="${item.key}" data-orig="${esc(item.original)}" title="Khôi phục ảnh gốc">
                   <span>Mặc định</span>
@@ -834,10 +995,20 @@ export function createSiteTools(ctx) {
     }
 
     container.innerHTML = renderedSectionsHtml || '<div class="cms-no-results">Không tìm thấy trường nội dung nào khớp với bộ lọc hoặc từ khóa tìm kiếm.</div>';
-    q('#cms-status').textContent = dirty ? 'Có thay đổi chưa lưu' : pages[selected]?.updatedAt ? 'Đã lưu lúc ' + time(pages[selected].updatedAt) : 'Đã tải nội dung';
+    q('#cms-status').textContent = dirty ? 'Đang có thay đổi · khách chưa thấy' : pages[selected]?.updatedAt ? 'Đã đăng lúc ' + time(pages[selected].updatedAt) : 'Nội dung đã sẵn sàng';
   }
   async function selectPage(path) {
-    selected = path; draft = { ...(pages[path]?.fields || {}) }; revision = pages[path]?.revision || ''; dirty = false; framePath = '';
+    clearTimeout(draftTimer);
+    selected = path;
+    pageSectionSlots = [];
+    revision = pages[path]?.revision || '';
+    const savedDraft = serverDrafts[path];
+    const canRestoreDraft = savedDraft?.fields && savedDraft.baseRevision === revision;
+    draft = { ...(canRestoreDraft ? savedDraft.fields : (pages[path]?.fields || {})) };
+    dirty = Boolean(canRestoreDraft && JSON.stringify(draft) !== JSON.stringify(pages[path]?.fields || {}));
+    undoStack = [];
+    redoStack = [];
+    framePath = '';
     if (q('#cms-page-select')) q('#cms-page-select').value = path;
     if (q('#cms-open-page')) q('#cms-open-page').href = '#' + path;
 
@@ -852,16 +1023,60 @@ export function createSiteTools(ctx) {
 
     if (frame()) frame().src = previewUrl(path);
     drawBlockManager();
+    drawStudioNavigation();
+    updateUndoRedoControls();
+    if (dirty && q('#cms-status')) q('#cms-status').textContent = 'Đã mở bản nháp · khách chưa thấy';
+  }
+  async function saveDraft(silent = false) {
+    if (!dirty) return true;
+    if (savingDraft) return false;
+    savingDraft = true;
+    const path = selected, fields = { ...draft }, baseRevision = revision;
+    if (q('#cms-status')) q('#cms-status').textContent = 'Đang lưu bản nháp…';
+    try {
+      const result = await request('/api/site-content', { action: 'draft', path, fields, revision: baseRevision }, true);
+      serverDrafts[path] = result.draft;
+      drawStudioNavigation();
+      if (q('#cms-status')) q('#cms-status').textContent = 'Bản nháp đã tự lưu · khách chưa thấy';
+      if (!silent) toast('Đã lưu bản nháp. Website công khai chưa thay đổi.');
+      return true;
+    } catch (error) {
+      if (q('#cms-status')) q('#cms-status').textContent = error.message;
+      if (!silent) toast(error.message);
+      return false;
+    } finally { savingDraft = false; }
+  }
+  function queueDraftSave() {
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => void saveDraft(true), 1200);
   }
   async function savePage() {
+    if (savingDraft) { toast('Bản nháp đang được lưu. Vui lòng xuất bản sau giây lát.'); return; }
     const button = q('#cms-page-form button[type="submit"]');
     if (button) button.disabled = true;
     try {
-      const result = await request('/api/site-content', { path: selected, fields: draft, revision }, true);
+      clearTimeout(draftTimer);
+      const result = await request('/api/site-content', { action: 'publish', path: selected, fields: draft, revision }, true);
       pages[selected] = result.page; revision = result.page.revision; dirty = false;
-      contentSaved(); drawFields(); toast('Đã lưu nội dung trang lên website.');
+      undoStack = []; redoStack = [];
+      delete serverDrafts[selected];
+      contentSaved(); drawFields(); drawStudioNavigation(); toast('Đã đăng nội dung mới lên website.');
     } catch (error) { toast(error.message); if (q('#cms-status')) q('#cms-status').textContent = error.message; }
     finally { if (button) button.disabled = false; }
+  }
+  async function openHistory() {
+    const container = blockModalContainer();
+    container.innerHTML = '<div class="cms-modal-overlay cms-section-overlay"><div class="cms-section-dialog cms-history-dialog"><header><div><span class="cms-dialog-kicker">LỊCH SỬ XUẤT BẢN</span><h2>Các phiên bản trước</h2></div><button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng">&times;</button></header><p class="cms-history-loading">Đang tải lịch sử…</p></div></div>';
+    try {
+      const result = await request('/api/site-content?history=' + encodeURIComponent(selected), undefined, true);
+      cmsHistory = Array.isArray(result.history) ? result.history : [];
+      const dialog = container.querySelector('.cms-history-dialog');
+      if (!dialog) return;
+      dialog.querySelector('.cms-history-loading').outerHTML = cmsHistory.length ? `<div class="cms-history-list">${cmsHistory.map((version, index) => `<article><div><b>Phiên bản ${cmsHistory.length - index}</b><span>${esc(time(version.updatedAt || version.archivedAt))}</span></div><button type="button" class="btn btn-sm" data-action="restore-cms-history" data-index="${index}">Khôi phục vào bản nháp</button></article>`).join('')}</div>` : '<p class="cms-history-empty">Chưa có phiên bản cũ. Lịch sử được tạo sau mỗi lần xuất bản.</p>';
+    } catch (error) {
+      const loading = container.querySelector('.cms-history-loading');
+      if (loading) loading.textContent = error.message;
+    }
   }
   function contentSaved() { storage.set('hoanContentRevision', String(Date.now())); }
 
@@ -1933,23 +2148,11 @@ export function createSiteTools(ctx) {
         }
       }
       if (path === '/admin/content' || path === '/admin/content-pages') {
-        const state = ctx.getState();
-        const isPages = path === '/admin/content-pages' || state.contentViewMode === 'pages' || state.contentActiveTab === 'pages' || (path === '/admin/content' && state.contentViewMode !== 'general');
-        if (isPages) {
-          draft = { ...(pages[selected]?.fields || {}), ...(dirty ? draft : {}) }; revision = pages[selected]?.revision || ''; framePath = '';
-          const select = q('#cms-page-select');
-          if (select) {
-            select.value = selected;
-            void selectPage(selected);
-          }
-        } else {
-          const preview = q('.preview-browser');
-          if (preview) {
-            const paths = { home: '/', about: '/about', services: '/services', booking: '/booking/service', policies: '/policies', contact: '/contact' };
-            const p = paths[state.contentPreviewMode || state.contentActiveTab] || '/';
-            preview.innerHTML = `<iframe id="cms-real-preview" title="Xem trước nội dung trên trang thật" src="${previewUrl(p)}"></iframe>`;
-            const caption = q('.content-preview .section-head small'); if (caption) caption.textContent = 'Trang thật · phản hồi bản nháp · chưa lưu lên website';
-          }
+        draft = { ...(pages[selected]?.fields || {}), ...(dirty ? draft : {}) }; revision = pages[selected]?.revision || ''; framePath = '';
+        const select = q('#cms-page-select');
+        if (select) {
+          select.value = selected;
+          void selectPage(selected);
         }
       }
       if (path === '/admin/visitors') { drawReport(); void loadReport(); refreshTimer = setInterval(() => { if (!document.hidden) void loadReport(); }, 10000); }
@@ -1959,8 +2162,11 @@ export function createSiteTools(ctx) {
   }
 
   function start() {
+    if (!document.querySelector('link[href*="content-studio.css"]')) {
+      const style = document.createElement('link'); style.rel = 'stylesheet'; style.href = '/content-studio.css'; document.head.append(style);
+    }
     if (!document.querySelector('link[href*="site-tools.css"]')) {
-      const style = document.createElement('link'); style.rel = 'stylesheet'; style.href = '/site-tools.css?v=146.0'; document.head.append(style);
+      const style = document.createElement('link'); style.rel = 'stylesheet'; style.href = '/site-tools.css?v=147.0'; document.head.append(style);
     }
     if (!document.querySelector('link[href*="admin-refinements.css"]')) {
       const refinements = document.createElement('link'); refinements.rel = 'stylesheet'; refinements.href = '/admin-refinements.css?v=7'; document.head.append(refinements);
@@ -2003,6 +2209,12 @@ export function createSiteTools(ctx) {
       });
       document.addEventListener('click', event => {
         if (consumeDrag()) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+        const contentBlock = event.target.closest('[data-cms-block-id]');
+        if (contentBlock) {
+          event.preventDefault(); event.stopImmediatePropagation();
+          window.parent.postMessage({ type: 'hoan:edit-block', path: currentPath(), id: contentBlock.dataset.cmsBlockId }, location.origin);
+          return;
+        }
         const img = targetImage(event);
         const target = img || event.target.closest('[data-cms-key]');
         if (!target) return;
@@ -2040,7 +2252,7 @@ export function createSiteTools(ctx) {
         dirty = true;
         const posInput = q(`input[data-cms-field="${posKey}"]`);
         if (posInput) posInput.value = value;
-        q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+        markDraftStatus();
         sendPreview({}, scrollY);
         return;
       }
@@ -2055,6 +2267,11 @@ export function createSiteTools(ctx) {
         if (message.path !== selected) return;
         activeFocusKey = message.key;
         openMediaModal(message.key);
+        return;
+      }
+      if (isAdmin() && message?.type === 'hoan:edit-block') {
+        if (message.path !== selected) return;
+        openBlockEditor(message.id);
         return;
       }
       if (isAdmin() && (message?.type === 'hoan:quick-edit-text' || message?.type === 'hoan:select-field')) {
@@ -2088,15 +2305,11 @@ export function createSiteTools(ctx) {
         return;
       }
       if (!isAdmin() || event.source !== frame()?.contentWindow || message?.type !== 'hoan:fields') return;
-      const state = ctx.getState();
-      const isPages = currentPath() === '/admin/content-pages' || (currentPath() === '/admin/content' && (state.contentViewMode === 'pages' || state.contentActiveTab === 'pages' || state.contentViewMode !== 'general'));
-      if (!isPages) {
-        if (framePath !== message.path) { framePath = message.path; sendPreview(); }
-        return;
-      }
-      if (!publicPages.some(([p]) => p === message.path)) return;
+      if (!pageEntries().some(([p]) => p === message.path)) return;
       if (message.path !== selected) { selected = message.path; draft = { ...(pages[selected]?.fields || {}) }; revision = pages[selected]?.revision || ''; dirty = false; if (q('#cms-page-select')) q('#cms-page-select').value = selected; if (q('#cms-open-page')) q('#cms-open-page').href = '#' + selected; }
       descriptors = message.fields;
+      pageSectionSlots = Array.isArray(message.sections) ? message.sections : [];
+      drawStudioNavigation();
       if (!activeFocusKey || !descriptors.some(d => d.key === activeFocusKey)) {
         activeFocusKey = descriptors[0]?.key || '';
       }
@@ -2104,6 +2317,7 @@ export function createSiteTools(ctx) {
         framePath = message.path;
         if (!dirty) drawFields();
       }
+      drawBlockManager();
       if (dirty) sendPreview();
     });
 
@@ -2113,6 +2327,40 @@ export function createSiteTools(ctx) {
     });
     document.addEventListener('focusout', () => {
       if (isAdmin()) clearHighlightInPreview();
+    });
+
+    document.addEventListener('dragstart', event => {
+      const row = event.target.closest('.cms-block-row');
+      if (!row) return;
+      draggedBlockId = row.dataset.blockId;
+      row.classList.add('is-dragging');
+      event.dataTransfer.effectAllowed = 'move';
+    });
+    document.addEventListener('dragover', event => {
+      const row = event.target.closest('.cms-block-row');
+      if (!row || !draggedBlockId || row.dataset.blockId === draggedBlockId) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      document.querySelectorAll('.cms-block-row.is-drop-target').forEach(item => item.classList.remove('is-drop-target'));
+      row.classList.add('is-drop-target');
+    });
+    document.addEventListener('drop', event => {
+      const row = event.target.closest('.cms-block-row');
+      if (!row || !draggedBlockId || row.dataset.blockId === draggedBlockId) return;
+      event.preventDefault();
+      const blocks = getBlocks();
+      const from = blocks.findIndex(block => block.id === draggedBlockId);
+      const to = blocks.findIndex(block => block.id === row.dataset.blockId);
+      if (from >= 0 && to >= 0) {
+        const [moved] = blocks.splice(from, 1);
+        blocks.splice(to, 0, moved);
+        writeBlocks(blocks);
+      }
+      draggedBlockId = '';
+    });
+    document.addEventListener('dragend', () => {
+      draggedBlockId = '';
+      document.querySelectorAll('.cms-block-row.is-dragging, .cms-block-row.is-drop-target').forEach(item => item.classList.remove('is-dragging', 'is-drop-target'));
     });
 
     document.addEventListener('input', event => {
@@ -2131,16 +2379,42 @@ export function createSiteTools(ctx) {
         return;
       }
       if (event.target.id === 'modal-quick-text' && activeTextKey) {
+        recordDraftEdit();
         const val = event.target.value;
         draft[activeTextKey] = val;
         dirty = true;
         const leftInput = q(`[data-cms-field="${activeTextKey}"]`);
         if (leftInput) leftInput.value = val;
-        q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+        markDraftStatus();
         sendPreview();
         return;
       }
+      if (event.target.matches('[data-block-item-field]')) {
+        recordDraftEdit();
+        const blocks = getBlocks();
+        const block = blocks.find(item => item.id === event.target.dataset.blockId);
+        const item = block?.items[Number(event.target.dataset.index)];
+        const field = event.target.dataset.blockItemField;
+        if (!item || !field) return;
+        item[field] = event.target.value;
+        writeBlocks(blocks, false);
+        return;
+      }
+      if (event.target.matches('[data-block-image-field]')) {
+        recordDraftEdit();
+        const blocks = getBlocks();
+        const block = blocks.find(item => item.id === event.target.dataset.blockId);
+        const image = block?.images[Number(event.target.dataset.index)];
+        const field = event.target.dataset.blockImageField;
+        if (!image || !field) return;
+        image[field] = event.target.value;
+        const thumbnail = event.target.closest('.image-row')?.querySelector('img');
+        if (field === 'src' && thumbnail) thumbnail.src = event.target.value || '/assets/campaign.png';
+        writeBlocks(blocks, false);
+        return;
+      }
       if (event.target.matches('[data-block-field]')) {
+        recordDraftEdit();
         const id = event.target.dataset.blockId;
         const field = event.target.dataset.blockField;
         const blocks = getBlocks();
@@ -2149,20 +2423,21 @@ export function createSiteTools(ctx) {
         block[field] = event.target.value;
         draft.blocks = JSON.stringify(blocks);
         dirty = true;
-        if (q('#cms-status')) q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+        markDraftStatus();
         if (field === 'image') {
-          const img = event.target.closest('.cms-block-card')?.querySelector('.cms-block-image-row img');
+          const img = event.target.closest('.cms-block-editor')?.querySelector('.cms-editor-image img');
           if (img) img.src = event.target.value || '/assets/campaign.png';
         }
         sendPreview();
         return;
       }
       if (event.target.matches('[data-cms-field]')) {
+        recordDraftEdit();
         const key = event.target.dataset.cmsField;
         const val = event.target.value;
         draft[key] = val;
         dirty = true;
-        q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+        markDraftStatus();
         if (key.startsWith('img-')) {
           const thumb = q('#thumb-' + key);
           if (thumb) thumb.src = val;
@@ -2172,6 +2447,18 @@ export function createSiteTools(ctx) {
       if (event.target.closest('form[data-form="content"]')) queueMicrotask(sendPreview);
     });
     document.addEventListener('change', async event => {
+      if (event.target.matches('[data-block-setting]')) {
+        recordDraftEdit();
+        const blocks = getBlocks();
+        const block = blocks.find(item => item.id === event.target.dataset.blockId);
+        const setting = event.target.dataset.blockSetting;
+        if (!block || !setting) return;
+        if (setting === 'slot') block.slot = Number(event.target.value);
+        else block.settings[setting] = event.target.value;
+        writeBlocks(blocks, false);
+        drawBlockManager();
+        return;
+      }
       if (event.target.id === 'visit-target-page') {
         const form = q('#visit-share-form');
         const linkInput = q('#visit-share-link');
@@ -2187,15 +2474,15 @@ export function createSiteTools(ctx) {
         return;
       }
       if (event.target.id === 'cms-page-select') {
-        if (dirty && !confirm('Rời trang và bỏ các thay đổi chưa lưu?')) { event.target.value = selected; return; }
-        await selectPage(event.target.value);
+        await switchStudioPage(event.target.value);
+        event.target.value = selected;
       }
       if (event.target.id === 'modal-file-input') {
         const file = event.target.files[0]; if (!file) return;
         if (file.size > 5 * 1024 * 1024) return toast('Ảnh tối đa 5 MB.');
         const data = new FormData(); data.append('files', file);
         try {
-          const response = await fetch('/api/uploads', { method: 'POST', body: data });
+          const response = await fetch('/api/uploads', { method: 'POST', body: data, headers: adminHeaders() });
           const result = await response.json();
           if (!response.ok) throw new Error(result.error);
           const uploadedPath = result.paths[0];
@@ -2206,7 +2493,7 @@ export function createSiteTools(ctx) {
             if (input) input.value = uploadedPath;
             const thumb = q('#thumb-' + activeMediaKey);
             if (thumb) thumb.src = uploadedPath;
-            q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+            markDraftStatus();
             sendPreview();
           }
           const container = q('#cms-media-modal-container');
@@ -2220,7 +2507,7 @@ export function createSiteTools(ctx) {
         const key = event.target.dataset.cmsUpload;
         const data = new FormData(); data.append('files', file);
         try {
-          const response = await fetch('/api/uploads', { method: 'POST', body: data });
+          const response = await fetch('/api/uploads', { method: 'POST', body: data, headers: adminHeaders() });
           const result = await response.json();
           if (!response.ok) throw new Error(result.error);
           draft[key] = result.paths[0];
@@ -2229,7 +2516,7 @@ export function createSiteTools(ctx) {
           if (input) input.value = result.paths[0];
           const thumb = q('#thumb-' + key);
           if (thumb) thumb.src = result.paths[0];
-          q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+          markDraftStatus();
           sendPreview();
           toast('Đã tải ảnh lên thành công.');
         } catch (error) { toast(error.message); }
@@ -2240,7 +2527,7 @@ export function createSiteTools(ctx) {
         const id = event.target.dataset.blockUpload;
         const data = new FormData(); data.append('files', file);
         try {
-          const response = await fetch('/api/uploads', { method: 'POST', body: data });
+          const response = await fetch('/api/uploads', { method: 'POST', body: data, headers: adminHeaders() });
           const result = await response.json();
           if (!response.ok) throw new Error(result.error);
           const blocks = getBlocks();
@@ -2249,6 +2536,25 @@ export function createSiteTools(ctx) {
           block.image = result.paths[0];
           writeBlocks(blocks);
           toast('Đã tải ảnh lên khối ảnh.');
+        } catch (error) { toast(error.message); }
+      }
+      if (event.target.matches('[data-block-gallery-upload]')) {
+        const file = event.target.files[0]; if (!file) return;
+        if (file.size > 5 * 1024 * 1024) return toast('Ảnh tối đa 5 MB.');
+        const id = event.target.dataset.blockGalleryUpload;
+        const index = Number(event.target.dataset.index);
+        const data = new FormData(); data.append('files', file);
+        try {
+          const response = await fetch('/api/uploads', { method: 'POST', body: data, headers: adminHeaders() });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error);
+          const blocks = getBlocks();
+          const block = blocks.find(item => item.id === id);
+          if (!block?.images[index]) return;
+          block.images[index].src = result.paths[0];
+          writeBlocks(blocks, false);
+          openBlockEditor(id);
+          toast('Đã tải ảnh lên bộ sưu tập.');
         } catch (error) { toast(error.message); }
       }
       if (event.target.matches('#visit-days, #visit-source, #visit-active')) { days = q('#visit-days').value; source = q('#visit-source').value; onlyActive = q('#visit-active').checked; offset = 0; await loadReport(); }
@@ -2312,7 +2618,193 @@ export function createSiteTools(ctx) {
         catch (error) { status.textContent = error.message; }
       }
     }, true);
+    document.addEventListener('input', event => {
+      if (event.target.id === 'studio-page-search') drawStudioNavigation();
+      if (event.target.matches('#studio-page-form input[name="title"]')) {
+        const slug = q('#studio-page-form input[name="slug"]');
+        if (slug && !slug.dataset.manual) slug.value = event.target.value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, 'd').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0,70);
+      }
+      if (event.target.matches('#studio-page-form input[name="slug"]')) event.target.dataset.manual = '1';
+    });
+    document.addEventListener('submit', async event => {
+      if (event.target.id !== 'studio-page-form') return;
+      event.preventDefault();
+      const form = event.target, data = new FormData(form), button = form.querySelector('[type="submit"]');
+      const title = String(data.get('title') || '').trim();
+      button.disabled = true;
+      try {
+        if (!title) throw new Error('Vui lòng nhập tên trang.');
+        if (form.dataset.settings === 'true') {
+          recordDraftEdit(); draft['page-title'] = title; dirty = true; sendPreview();
+          if (!await saveDraft(true)) throw new Error('Chưa lưu được tên trang. Hãy thử lại.');
+          q('#cms-block-modal-container')?.replaceChildren(); drawStudioNavigation();
+        } else await createStudioPage(title, String(data.get('slug') || ''), data.get('template'));
+      } catch(error) { const status = q('#studio-page-error'); if(status) status.textContent = error.message; }
+      finally { button.disabled = false; }
+    });
     document.addEventListener('click', async event => {
+      const studio = event.target.closest('[data-studio]');
+      if (studio) {
+        event.preventDefault();
+        const action = studio.dataset.studio;
+        if (action === 'new-page') openPageDialog();
+        if (action === 'page-settings') openPageDialog(true);
+        if (action === 'select-page') await switchStudioPage(studio.dataset.path);
+        if (action === 'edit-field') {
+          highlightNodeInPreview(studio.dataset.key);
+          if (studio.dataset.key.startsWith('img-')) openMediaModal(studio.dataset.key);
+          else openTextModal(studio.dataset.key);
+        }
+        if (action === 'duplicate-page') {
+          studio.disabled = true;
+          try { await createStudioPage((draft['page-title'] || 'Trang') + ' — Bản sao', selected.split('/').pop().slice(0,55) + '-' + Date.now().toString(36), 'blank', {...draft}); }
+          catch(error) { const status=q('#studio-page-error'); if(status) status.textContent=error.message; }
+          finally { studio.disabled = false; }
+        }
+        return;
+      }
+      const deviceBtn = event.target.closest('[data-cms-device]');
+      if (deviceBtn) {
+        event.preventDefault();
+        previewDevice = deviceBtn.dataset.cmsDevice;
+        document.querySelectorAll('[data-cms-device]').forEach(button => button.classList.toggle('active', button === deviceBtn));
+        const viewport = q('.live-preview-viewport');
+        if (viewport) viewport.dataset.device = previewDevice;
+        document.querySelectorAll('[data-cms-device]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.cmsDevice === previewDevice)));
+        return;
+      }
+      const closeBlockButton = event.target.closest('button[data-action="close-block-modal"]');
+      if (closeBlockButton || event.target.classList.contains('cms-section-overlay')) {
+        event.preventDefault();
+        const container = q('#cms-block-modal-container');
+        if (container) container.innerHTML = '';
+        activeBlockId = '';
+        return;
+      }
+      const openPickerButton = event.target.closest('[data-action="open-block-picker"]');
+      if (openPickerButton) {
+        event.preventDefault();
+        openBlockPicker(openPickerButton.dataset.slot ?? pageSectionSlots.length);
+        return;
+      }
+      const chooseTemplateButton = event.target.closest('[data-action="choose-block-template"]');
+      if (chooseTemplateButton) {
+        event.preventDefault();
+        recordDraftEdit();
+        const blocks = getBlocks();
+        const block = createContentBlock(chooseTemplateButton.dataset.type, newBlockId, Math.min(blockInsertSlot, pageSectionSlots.length));
+        blocks.push(block);
+        writeBlocks(blocks);
+        openBlockEditor(block.id);
+        toast('Đã thêm phần nội dung mới vào bản nháp.');
+        return;
+      }
+      const editBlockButton = event.target.closest('[data-action="edit-cms-block"]');
+      if (editBlockButton) {
+        event.preventDefault();
+        openBlockEditor(editBlockButton.dataset.id);
+        return;
+      }
+      const toggleBlockButton = event.target.closest('[data-action="toggle-cms-block"]');
+      if (toggleBlockButton) {
+        event.preventDefault();
+        recordDraftEdit();
+        const blocks = getBlocks();
+        const block = blocks.find(item => item.id === toggleBlockButton.dataset.id);
+        if (block) { block.hidden = !block.hidden; writeBlocks(blocks); }
+        return;
+      }
+      const duplicateBlockButton = event.target.closest('[data-action="duplicate-cms-block"]');
+      if (duplicateBlockButton) {
+        event.preventDefault();
+        recordDraftEdit();
+        const blocks = getBlocks();
+        const index = blocks.findIndex(item => item.id === duplicateBlockButton.dataset.id);
+        if (index >= 0) {
+          const copy = JSON.parse(JSON.stringify(blocks[index]));
+          copy.id = newBlockId();
+          copy.title = copy.title ? copy.title + ' (bản sao)' : 'Section bản sao';
+          blocks.splice(index + 1, 0, copy);
+          writeBlocks(blocks);
+          toast('Đã nhân bản phần nội dung.');
+        }
+        return;
+      }
+      const addItemButton = event.target.closest('[data-action="add-block-item"]');
+      if (addItemButton) {
+        event.preventDefault();
+        recordDraftEdit();
+        const blocks = getBlocks();
+        const block = blocks.find(item => item.id === addItemButton.dataset.id);
+        if (block && block.items.length < 12) { block.items.push({ title: 'Mục mới', text: 'Nhập nội dung.' }); writeBlocks(blocks, false); openBlockEditor(block.id); }
+        return;
+      }
+      const removeItemButton = event.target.closest('[data-action="remove-block-item"]');
+      if (removeItemButton) {
+        event.preventDefault();
+        recordDraftEdit();
+        const blocks = getBlocks();
+        const block = blocks.find(item => item.id === removeItemButton.dataset.id);
+        if (block) { block.items.splice(Number(removeItemButton.dataset.index), 1); writeBlocks(blocks, false); openBlockEditor(block.id); }
+        return;
+      }
+      const addImageButton = event.target.closest('[data-action="add-block-image"]');
+      if (addImageButton) {
+        event.preventDefault();
+        recordDraftEdit();
+        const blocks = getBlocks();
+        const block = blocks.find(item => item.id === addImageButton.dataset.id);
+        if (block && block.images.length < 8) { block.images.push({ src: '/assets/campaign.png', alt: 'Hình ảnh bộ sưu tập', caption: '' }); writeBlocks(blocks, false); openBlockEditor(block.id); }
+        return;
+      }
+      const removeImageButton = event.target.closest('[data-action="remove-block-image"]');
+      if (removeImageButton) {
+        event.preventDefault();
+        recordDraftEdit();
+        const blocks = getBlocks();
+        const block = blocks.find(item => item.id === removeImageButton.dataset.id);
+        if (block) { block.images.splice(Number(removeImageButton.dataset.index), 1); writeBlocks(blocks, false); openBlockEditor(block.id); }
+        return;
+      }
+      if (event.target.closest('[data-action="save-cms-draft"]')) {
+        event.preventDefault();
+        await saveDraft(false);
+        return;
+      }
+      if (event.target.closest('[data-action="undo-cms"]')) {
+        event.preventDefault();
+        undoDraft();
+        return;
+      }
+      if (event.target.closest('[data-action="redo-cms"]')) {
+        event.preventDefault();
+        redoDraft();
+        return;
+      }
+      if (event.target.closest('[data-action="compare-cms"]')) {
+        event.preventDefault();
+        openCompare();
+        return;
+      }
+      if (event.target.closest('[data-action="open-cms-history"]')) {
+        event.preventDefault();
+        await openHistory();
+        return;
+      }
+      const restoreHistoryButton = event.target.closest('[data-action="restore-cms-history"]');
+      if (restoreHistoryButton) {
+        event.preventDefault();
+        recordDraftEdit();
+        const version = cmsHistory[Number(restoreHistoryButton.dataset.index)];
+        if (version?.fields) {
+          draft = { ...version.fields };
+          dirty = true;
+          q('#cms-block-modal-container').innerHTML = '';
+          drawFields(); sendPreview();
+          toast('Đã đưa phiên bản cũ vào bản nháp. Bấm “Đăng lên website” để áp dụng.');
+        }
+        return;
+      }
       const modeBtn = event.target.closest('[data-action="set-editor-mode"]');
       if (modeBtn) {
         event.preventDefault();
@@ -2355,7 +2847,7 @@ export function createSiteTools(ctx) {
           if (modalTextarea) modalTextarea.value = orig;
           const input = q(`[data-cms-field="${key}"]`);
           if (input) input.value = orig;
-          q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+          markDraftStatus();
           sendPreview();
           toast('Đã khôi phục chữ gốc.');
         }
@@ -2405,7 +2897,7 @@ export function createSiteTools(ctx) {
           dirty = true;
           const input = q(`[data-cms-field="${key}"]`);
           if (input) input.value = orig;
-          q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+          markDraftStatus();
           sendPreview();
           toast('Đã khôi phục chữ gốc.');
         }
@@ -2453,20 +2945,13 @@ export function createSiteTools(ctx) {
       const addBlockBtn = event.target.closest('[data-action="add-cms-block"]');
       if (addBlockBtn) {
         event.preventDefault();
-        const type = addBlockBtn.dataset.type === 'image' ? 'image' : 'text';
-        const block = type === 'image'
-          ? { id: newBlockId(), type, title: 'Hình ảnh mới', image: '/assets/campaign.png', alt: 'Hình ảnh bổ sung', caption: '' }
-          : { id: newBlockId(), type, title: 'Tiêu đề mới', text: 'Nhập nội dung mới tại đây.' };
-        const blocks = getBlocks();
-        blocks.push(block);
-        writeBlocks(blocks);
-        q('#cms-block-manager')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        toast(type === 'image' ? 'Đã thêm khối ảnh.' : 'Đã thêm khối nội dung.');
+        openBlockPicker(pageSectionSlots.length);
         return;
       }
       const moveBlockBtn = event.target.closest('[data-action="move-cms-block"]');
       if (moveBlockBtn) {
         event.preventDefault();
+        recordDraftEdit();
         const blocks = getBlocks();
         const index = blocks.findIndex(block => block.id === moveBlockBtn.dataset.id);
         const nextIndex = index + Number(moveBlockBtn.dataset.dir || 0);
@@ -2480,6 +2965,7 @@ export function createSiteTools(ctx) {
       if (deleteBlockBtn) {
         event.preventDefault();
         if (!confirm('Xóa khối này khỏi trang đang chỉnh sửa?')) return;
+        recordDraftEdit();
         writeBlocks(getBlocks().filter(block => block.id !== deleteBlockBtn.dataset.id));
         toast('Đã xóa khối khỏi bản nháp.');
         return;
@@ -2521,6 +3007,7 @@ export function createSiteTools(ctx) {
       const selectMediaItem = event.target.closest('[data-action="select-media-item"]');
       if (selectMediaItem) {
         event.preventDefault();
+        recordDraftEdit();
         const src = selectMediaItem.dataset.src;
         const key = activeMediaKey || descriptors.find(d => d.key.startsWith('img-'))?.key || 'img-1';
         if (src && key) {
@@ -2531,7 +3018,7 @@ export function createSiteTools(ctx) {
           if (input) input.value = src;
           const thumb = q('#thumb-' + key);
           if (thumb) thumb.src = src;
-          q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+          markDraftStatus();
           sendPreview();
           const container = q('#cms-media-modal-container');
           if (container) container.innerHTML = '';
@@ -2541,6 +3028,7 @@ export function createSiteTools(ctx) {
       }
       if (event.target.closest('[data-action="apply-custom-url"]')) {
         event.preventDefault();
+        recordDraftEdit();
         const url = q('#modal-custom-url-input')?.value.trim();
         const key = activeMediaKey || descriptors.find(d => d.key.startsWith('img-'))?.key || 'img-1';
         if (url && key) {
@@ -2551,7 +3039,7 @@ export function createSiteTools(ctx) {
           if (input) input.value = url;
           const thumb = q('#thumb-' + key);
           if (thumb) thumb.src = url;
-          q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+          markDraftStatus();
           sendPreview();
           const container = q('#cms-media-modal-container');
           if (container) container.innerHTML = '';
@@ -2562,6 +3050,7 @@ export function createSiteTools(ctx) {
       const presetBtn = event.target.closest('[data-action="apply-preset-image"]');
       if (presetBtn) {
         event.preventDefault();
+        recordDraftEdit();
         const key = presetBtn.dataset.key;
         const src = presetBtn.dataset.src;
         draft[key] = src;
@@ -2572,7 +3061,7 @@ export function createSiteTools(ctx) {
         if (thumb) thumb.src = src;
         presetBtn.parentElement?.querySelectorAll('.preset-chip').forEach(c => c.classList.remove('active'));
         presetBtn.classList.add('active');
-        q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+        markDraftStatus();
         sendPreview();
         toast('Đã chọn ảnh mẫu.');
         return;
@@ -2591,6 +3080,7 @@ export function createSiteTools(ctx) {
       const quickPosBtn = event.target.closest('[data-action="quick-set-pos"]');
       if (quickPosBtn) {
         event.preventDefault();
+        recordDraftEdit();
         const key = quickPosBtn.dataset.key;
         const val = quickPosBtn.dataset.val;
         if (key && val) {
@@ -2598,7 +3088,7 @@ export function createSiteTools(ctx) {
           dirty = true;
           const input = q(`input[data-cms-field="${key}"]`);
           if (input) input.value = val;
-          q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+          markDraftStatus();
           sendPreview();
           toast('Đã căn góc: ' + val);
         }
@@ -2607,6 +3097,7 @@ export function createSiteTools(ctx) {
       const resetImgBtn = event.target.closest('[data-action="reset-img"]');
       if (resetImgBtn) {
         event.preventDefault();
+        recordDraftEdit();
         const key = resetImgBtn.dataset.key;
         const orig = resetImgBtn.dataset.orig;
         draft[key] = orig;
@@ -2615,7 +3106,7 @@ export function createSiteTools(ctx) {
         if (input) input.value = orig;
         const thumb = q('#thumb-' + key);
         if (thumb) thumb.src = orig;
-        q('#cms-status').textContent = 'Có thay đổi chưa lưu · xem trước bản nháp';
+        markDraftStatus();
         sendPreview();
         toast('Đã khôi phục ảnh gốc.');
         return;
@@ -2708,6 +3199,9 @@ export function createSiteTools(ctx) {
     window.addEventListener('keydown', event => {
       if (event.key === 'Escape') {
         closeDetail();
+        const blockModal = q('#cms-block-modal-container');
+        if (blockModal) blockModal.innerHTML = '';
+        activeBlockId = '';
         const textModal = q('#cms-text-modal-container');
         if (textModal) textModal.innerHTML = '';
         if (closeImageEditor) {
@@ -2741,7 +3235,7 @@ export function createSiteTools(ctx) {
     window.addEventListener('pagehide', () => {
       if (tracking && !isAdmin() && !isPreview && consent === 'yes') navigator.sendBeacon('/api/visits', new Blob([JSON.stringify({ type: 'leave', page: currentPath(), activeSeconds: Math.min(25, Math.floor((Date.now() - lastBeat) / 1000)) })], { type: 'application/json' }));
     });
-    window.addEventListener('beforeunload', event => { if (dirty && currentPath() === '/admin/content-pages') { event.preventDefault(); event.returnValue = ''; } });
+    window.addEventListener('beforeunload', event => { if (dirty && ['/admin/content', '/admin/content-pages'].includes(currentPath())) { event.preventDefault(); event.returnValue = ''; } });
     window.addEventListener('storage', event => {
       if (event.key === 'hoanAnalyticsConsent') { consent = storage.get('hoanAnalyticsConsent'); tracking = false; lastPage = ''; if (!isAdmin()) consentPanel(); }
       if (event.key === 'hoanContentRevision' && !isAdmin() && !isPreview) void syncContent();
@@ -2764,5 +3258,5 @@ export function createSiteTools(ctx) {
     if (previewDraft.brand) ctx.getState().brand = previewDraft.brand;
     if (previewDraft.settings) ctx.getState().settings = previewDraft.settings;
   }
-  return { start, mount, beforeRender, contentPage, cmsWorkspaceHtml, visitorsPage, conversion, contentSaved };
+  return { start, mount, beforeRender, customPageHtml, contentPage, cmsWorkspaceHtml, visitorsPage, conversion, contentSaved };
 }

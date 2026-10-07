@@ -30,6 +30,8 @@ export const appointments = sqliteTable("appointments", {
   total: integer("total").notNull(),
   deposit: integer("deposit").notNull().default(0),
   paymentStatus: text("payment_status").notNull().default("unverified"),
+  refundStatus: text("refund_status").notNull().default("none"),
+  refundNote: text("refund_note").notNull().default(""),
   status: text("status").notNull().default("pending"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),

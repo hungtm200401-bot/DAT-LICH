@@ -75,9 +75,19 @@
     return `${y}-${m}-${day}`;
   };
 
+  const hourlyTimes = (start = '00:00', end = '24:00') => {
+    const toMinutes = value => Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
+    const first = Math.max(0, toMinutes(start));
+    const last = Math.min(24 * 60, toMinutes(end));
+    return Array.from({ length: Math.max(0, Math.ceil((last - first) / 60)) }, (_, index) => {
+      const minutes = first + index * 60;
+      return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+    });
+  };
+
   const defaultBookingTime = (dateIso = localIso()) => {
     const today = localIso();
-    const defaultTimes = ['07:00','08:00','09:30','10:00','13:00','14:00','15:30','16:00','18:00'];
+    const defaultTimes = hourlyTimes();
     if (dateIso > today) return '09:30';
     const now = new Date();
     const curMinutes = now.getHours() * 60 + now.getMinutes();
@@ -85,7 +95,7 @@
       const [h, m] = t.split(':').map(Number);
       return (h * 60 + m) > curMinutes + 15;
     });
-    return nextSlot || '18:00';
+    return nextSlot || defaultTimes.at(-1);
   };
 
   const defaultState = {
@@ -170,6 +180,14 @@
       return s;
     }
   };
+
+  function startNewBooking() {
+    state.booking = structuredClone(defaultState.booking);
+    state.booking.date = localIso();
+    state.booking.time = defaultBookingTime(state.booking.date);
+    saveState();
+    route('/booking/service');
+  }
   let state = loadState();
   let siteTools;
 
@@ -226,6 +244,7 @@
       state.services = data.services || [];
       state.bookingDetails = data.bookingDetails || {};
       state.requests = data.requests || [];
+      state.notifications = data.notifications || [];
       state.appointments = data.appointments || [];
       state.customers = data.customers || [];
       state.scheduleSlots = data.scheduleSlots || [];
@@ -243,13 +262,14 @@
   }
 
   const slotRecord = (date, time) => state.scheduleSlots.find(slot => slot.slotDate === date && slot.slotTime === time);
+  const activeAppointment = appointment => appointment.status === 'pending' || appointment.status === 'confirmed';
   const slotUnavailable = (date, time) => {
     const blocked = slotRecord(date, time)?.status === 'blocked';
     const minutes=t=>Number(t.slice(0,2))*60+Number(t.slice(3));
     const start=minutes(time),duration=service().duration;
-    const booked = state.appointments.some(a => a.date === date && a.status !== 'cancelled' && start<minutes(a.time)+service(a.serviceId).duration && start+duration>minutes(a.time));
+    const booked = state.appointments.some(a => a.date === date && activeAppointment(a) && start<minutes(a.time)+service(a.serviceId).duration && start+duration>minutes(a.time));
     const day=new Date(date+'T'+time+':00+07:00');
-    return blocked || booked || day.getTime()<Date.now();
+    return blocked || booked || day.getTime() < Date.now();
   };
 
   const formatLongDate = (date = new Date()) => new Intl.DateTimeFormat('vi-VN', {
@@ -375,7 +395,7 @@
   }
   function publicHeader(active='') {
     const nav=[['home','/','Trang chủ'],['services','/services','Dịch vụ'],['bridal','/services/bridal','Cô dâu'],['gallery','/gallery','Bộ sưu tập'],['about','/about','Về Hoàn']];
-    return `<a class="skip-link" href="#main">Đến nội dung</a><header class="site-header couture-header" id="site-header"><div class="ct-masthead"><a class="ct-search" href="#/search">${icon('search')}<span>Tìm kiếm…</span></a><button class="icon-btn mobile-menu" data-action="mobile-menu" aria-label="Mở menu" aria-expanded="false">${icon('menu')}</button>${brandMarkup()}<a class="ct-book" href="#/booking/service">${icon('calendar')}<span>Đặt lịch</span></a></div><nav class="main-nav" aria-label="Điều hướng chính">${nav.map(([key,path,label])=>`<div class="nav-entry"><a class="nav-label ${active===key?'active':''}" href="#${path}" ${['services','gallery','about'].includes(key)?`data-nav="${key}" aria-controls="nav-panel-${key}" aria-expanded="false"`:''}>${label}</a>${['services','gallery','about'].includes(key)?`<button class="nav-expand" data-nav-toggle="${key}" aria-label="Mở nhánh ${label}" aria-expanded="false">+</button>${editorialMenu(key)}`:''}</div>`).join('')}</nav></header><div class="nav-veil" hidden></div>`;
+    return `<a class="skip-link" href="#main">Đến nội dung</a><header class="site-header couture-header" id="site-header"><div class="ct-masthead"><a class="ct-search" href="#/search">${icon('search')}<span>Tìm kiếm…</span></a><button class="icon-btn mobile-menu" data-action="mobile-menu" aria-label="Mở menu" aria-expanded="false">${icon('menu')}</button>${brandMarkup()}<a class="ct-book" href="#/booking/service" data-action="start-booking">${icon('calendar')}<span>Đặt lịch</span></a></div><nav class="main-nav" aria-label="Điều hướng chính">${nav.map(([key,path,label])=>`<div class="nav-entry"><a class="nav-label ${active===key?'active':''}" href="#${path}" ${['services','gallery','about'].includes(key)?`data-nav="${key}" aria-controls="nav-panel-${key}" aria-expanded="false"`:''}>${label}</a>${['services','gallery','about'].includes(key)?`<button class="nav-expand" data-nav-toggle="${key}" aria-label="Mở nhánh ${label}" aria-expanded="false">+</button>${editorialMenu(key)}`:''}</div>`).join('')}</nav></header><div class="nav-veil" hidden></div>`;
   }
   function publicFooter() {
     const current=(location.hash.slice(1)||'/').split('?')[0];
@@ -387,7 +407,7 @@
     if (isContact) {
       return `<footer class="public-footer couture-footer ct-contact-footer"><nav aria-label="Thông tin và hỗ trợ">${footerNav.map(([p,t],i)=>`${i>0?'<span class="footer-sep">|</span>':''}<a ${current.startsWith('/'+p)?'aria-current="page" class="active"':''} href="#/${p}">${t}</a>`).join('')}</nav><span class="ct-footer-note">Bản duyệt giao diện — kênh liên hệ sẽ dùng thông tin thật</span></footer>`;
     }
-    return `<footer class="public-footer couture-footer ${isAbout?'ct-about-footer':''}">${brandMarkup()}<nav aria-label="Thông tin và hỗ trợ">${footerNav.map(([p,t],i)=>`${i>0?'<span class="footer-sep">|</span>':''}<a ${current.startsWith('/'+p)?'aria-current="page"':''} href="#/${p}">${t}</a>`).join('')}</nav>${socialLinks}${tagline}</footer>`;
+    return `<footer class="public-footer couture-footer ${isAbout?'ct-about-footer':''}">${brandMarkup()}<nav aria-label="Thông tin và hỗ trợ">${footerNav.map(([p,t],i)=>`${i>0?'<span class="footer-sep">|</span>':''}<a ${current.startsWith('/'+p)?'aria-current="page"':''} href="#/${p}">${t}</a>`).join('')}</nav><button type="button" class="visit-preferences" data-visit-action="preferences">Tùy chọn thống kê</button>${socialLinks}${tagline}</footer>`;
   }
   function ctPage(active,title,body,breadcrumb=title,wide=false) {
     return `<div class="page couture ct-page-${active||'default'}">${publicHeader(active)}<main id="main" class="ct-main ${wide?'ct-wide':''}"><div class="breadcrumbs"><a href="#/">Trang chủ</a><span>›</span>${esc(breadcrumb)}</div>${title?`<h1 class="ct-title">${title}</h1>`:''}${body}</main>${publicFooter()}</div>`;
@@ -650,7 +670,7 @@
     return `<div class="ct-calendar"><header><button class="icon-btn" data-action="ct-month" data-delta="-1" aria-label="Tháng trước">${icon('back')}</button><h3>Tháng ${m+1}, ${y}</h3><button class="icon-btn" data-action="ct-month" data-delta="1" aria-label="Tháng sau">${icon('arrow')}</button></header><div class="ct-calendar-grid">${['T2','T3','T4','T5','T6','T7','CN'].map(t=>`<span>${t}</span>`).join('')}${'<span></span>'.repeat(offset)}${Array.from({length:new Date(y,m+1,0).getDate()},(_,i)=>{const iso=`${y}-${String(m+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`;return `<button class="${iso===state.booking.date?'selected':''}" data-action="ct-date" data-date="${iso}" ${iso<today||iso>localIso(end)?'disabled':''} aria-label="${dateLabel(iso)}" aria-pressed="${iso===state.booking.date}">${i+1}</button>`}).join('')}</div></div>`;
   }
   function availableTimes() {
-    return [...new Set(['07:00','08:00','09:30','10:00','13:00','14:00','15:30','16:00','18:00',...state.scheduleSlots.filter(s=>s.slotDate===state.booking.date).map(s=>s.slotTime)])].sort();
+    return [...new Set([...hourlyTimes('00:00', '24:00'), ...state.scheduleSlots.filter(s=>s.slotDate===state.booking.date).map(s=>s.slotTime)])].sort();
   }
   function pageBookingTime() {
     const today = localIso();
@@ -667,7 +687,7 @@
       state.booking.time = firstAvail || defaultBookingTime(state.booking.date);
       saveState();
     }
-    return bookingShell(2,`<h1 class="ct-title">Chọn ngày và giờ</h1><p class="ct-subtitle">Thời gian hiển thị theo giờ Việt Nam.</p><section class="ct-time-layout">${calendarMarkup()}<div><h2>Giờ bắt đầu · ${dateLabel()}</h2><div class="ct-time-slots">${times.map(t=>{const no=slotUnavailable(state.booking.date,t)||!state.settings.scheduleOpen;return `<button class="btn ${state.booking.time===t&&!no?'btn-dark':''}" data-action="time-select" data-time="${t}" ${no?'disabled':''}>${t}</button>`}).join('')}</div><p>${icon('clock')} Thời lượng: ${service().duration} phút</p><p class="muted">Giờ đã có lịch hoặc được chặn sẽ không thể chọn.</p></div></section>`,'/booking/location','TIẾP TỤC · ĐỊA ĐIỂM');
+    return bookingShell(2,`<h1 class="ct-title">Chọn ngày và giờ</h1><p class="ct-subtitle">Thời gian hiển thị theo giờ Việt Nam.</p><section class="ct-time-layout">${calendarMarkup()}<div><h2>Giờ bắt đầu · ${dateLabel()}</h2><div class="ct-time-slots">${times.map(t=>{const toMinutes=value=>Number(value.slice(0,2))*60+Number(value.slice(3));const start=toMinutes(t),duration=service().duration;const booked=state.appointments.some(a=>a.date===state.booking.date&&activeAppointment(a)&&start<toMinutes(a.time)+(service(a.serviceId)?.duration||90)&&start+duration>toMinutes(a.time));const no=slotUnavailable(state.booking.date,t)||!state.settings.scheduleOpen;return `<button class="btn ${state.booking.time===t&&!no?'btn-dark':''}${no?' time-slot-unavailable':''}" data-action="time-select" data-time="${t}" title="${booked?'Đã có khách đặt khung giờ này':no?'Khung giờ không khả dụng':'Chọn khung giờ '+t}" aria-label="${t}${booked?' - Đã có khách đặt':''}" ${no?'disabled':''}>${t}${booked?'<small>Đã có khách</small>':''}</button>`}).join('')}</div><p>${icon('clock')} Thời lượng: ${service().duration} phút</p><p class="muted">Giờ đã có lịch hoặc được chặn sẽ không thể chọn.</p></div></section>`,'/booking/location','TIẾP TỤC · ĐỊA ĐIỂM');
   }
 
   const VIETNAM_LOCATIONS = {
@@ -1160,18 +1180,15 @@
     const total = servicePrice + travelFee;
     const deposit = Math.min(Number(state.settings.deposit || 200000), currentTotal());
     state.booking.deposit = deposit;
-    const code = state.booking.code || (state.appointments[0]?.code) || ('LK' + Math.floor(1000 + Math.random() * 9000));
+    const code = state.booking.code || ('LK' + Math.floor(1000 + Math.random() * 9000));
     state.booking.code = code;
     const apt = getAppointment(code) || state.appointments.find(x => x.code === code);
-    const isPaid = apt
-      ? (apt.paymentStatus === 'received' || apt.status === 'confirmed')
-      : (!!state.booking.depositPaid || state.booking.depositStatus === 'received');
+    const isPaid = Boolean(apt && apt.paymentStatus === 'received' && Number(apt.deposit) > 0);
     const isPending = !isPaid && (
       (apt && apt.paymentStatus === 'pending_verification') ||
-      !!state.booking.depositReported ||
-      state.booking.depositStatus === 'pending_verification'
+      Boolean(apt && apt.paymentStatus === 'pending_verification')
     );
-    const paid = isPaid ? deposit : (apt?.deposit || 0);
+    const paid = isPaid ? Math.min(Number(apt.deposit), deposit) : 0;
     const remaining = Math.max(0, total - paid);
     const receiptData = state.booking.receiptData || '';
     const receiptName = state.booking.receiptName || '';
@@ -1314,7 +1331,7 @@
               ${isPaid ? `
                 <button type="button" class="btn-deposit-paid btn-deposit-confirmed" data-action="ct-deposit-confirmed-proceed">TIẾP TỤC XÁC NHẬN LỊCH →</button>
               ` : isPending ? `
-                <button type="button" class="btn-deposit-paid btn-deposit-pending" data-action="ct-deposit-confirmed-proceed">ĐANG CHỜ ĐỐI SOÁT · TIẾP TỤC →</button>
+                <button type="button" class="btn-deposit-paid btn-deposit-pending" disabled aria-disabled="true">ĐANG CHỜ ĐỐI SOÁT</button>
               ` : `
                 <button type="button" class="btn-deposit-paid" data-action="ct-report-transfer">TÔI ĐÃ CHUYỂN KHOẢN</button>
               `}
@@ -1415,7 +1432,7 @@
     const b = state.booking;
     const apt = getAppointment(b.code) || state.appointments.find(x => x.code === b.code);
     const isPaid = apt
-      ? (apt.paymentStatus === 'received' || apt.status === 'confirmed')
+      ? apt.paymentStatus === 'received'
       : (!!b.depositPaid || b.depositStatus === 'received');
     const isPending = !isPaid && (
       (apt && apt.paymentStatus === 'pending_verification') ||
@@ -1441,7 +1458,7 @@
     const meta = state.bookingDetails?.[code] || {};
     const s = service(a.serviceId);
     const needed = Number(meta.depositRequired || Math.min(Number(state.settings.deposit), a.total));
-    const isPaid = a.paymentStatus === 'received' || a.deposit >= needed || a.status === 'confirmed';
+    const isPaid = a.paymentStatus === 'received' && Number(a.deposit) >= needed;
     const isPending = !isPaid && a.paymentStatus === 'pending_verification';
     return ctPage('lookup', 'Chi tiết lịch hẹn', `<div class="ct-detail-top"><b>${esc(a.code)}</b><span class="ct-status">${statusLabel(a.status)}</span><span class="ct-status">${isPaid ? 'Đã nhận cọc' : isPending ? 'Chờ đối soát' : 'Chưa thanh toán'}</span></div><section class="ct-two-col"><article><h2>Thông tin buổi hẹn</h2>${[['Dịch vụ',s.name],['Ngày',dateLabel(a.date)],['Giờ bắt đầu',a.time],['Địa điểm',[a.address,a.ward,a.district,meta.city].filter(Boolean).join(', ')],['Khách hàng',a.customer],['Điện thoại',a.phone],['Phong cách',a.style],['Ghi chú',a.note]].map(([t,v])=>`<div class="ct-money-row"><span>${t}</span><b>${esc(v||'—')}</b></div>`).join('')}<div class="ct-upload-previews">${(meta.references||[]).map(r=>`<img src="${r}" alt="Ảnh phong cách tham khảo">`).join('')}</div>${meta.skin?`<p>Tình trạng da: ${esc(meta.skin)} · Dị ứng: ${esc(meta.allergy)} ${esc(meta.allergyNote||'')}</p>`:''}<div class="ct-actions">${a.status!=='cancelled'&&a.status!=='completed'?`<a class="btn" href="#/booking/${code}/reschedule">Yêu cầu đổi lịch</a><a class="btn" href="#/booking/${code}/cancel">Yêu cầu hủy / hoàn cọc</a>`:''}<button class="btn" data-action="ct-calendar-download" data-code="${code}">Thêm vào lịch</button></div><h3>Chuẩn bị cho buổi hẹn</h3><p>Giữ da sạch và dưỡng ẩm nhẹ. Chuẩn bị ảnh trang phục, phong cách nếu có.</p><a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a>${(state.requests||[]).filter(r=>r.code===code).map(r=>`<div class="ct-notice"><b>${esc(r.subject)}</b><p>${esc(r.status==='resolved'?'Đã xử lý':'Chờ xử lý')}</p>${r.reply?`<p>${esc(r.reply)}</p>`:''}</div>`).join('')}</article><aside class="ct-summary"><h2>Thanh toán</h2>${statusTrack(isPaid, isPending)}${paymentRows(a.total,needed,a.deposit,meta.travelFee??Math.max(0,a.total-s.price))}${a.deposit>0?`<a class="btn btn-dark btn-wide" href="#/booking/${code}/receipt">XEM BIÊN NHẬN</a>`:''}${a.deposit<needed&&a.status!=='cancelled'?paymentInstructions(a):''}<button class="btn btn-wide" data-action="ct-refresh">KIỂM TRA TRẠNG THÁI</button></aside></section>`, 'Tra cứu lịch / ' + code);
   }
@@ -1483,7 +1500,9 @@
       ['KHÁCH TRUY CẬP',['visitors']]
     ];
     const headHtml = active === 'schedule' ? '' : `<header class="admin-head"><div>${active==='overview'?'<div class="admin-kicker">TRUNG TÂM VẬN HÀNH</div>':''}<h1>${title}</h1><p>${subtitle}</p></div><div class="admin-head-actions">${actions}</div></header>`;
-    return `<div class="admin-page"><header class="admin-top"><a class="admin-brand" href="#/admin">HOÀN <small>QUẢN TRỊ VẬN HÀNH</small></a><label class="admin-search-wrap">${icon('search')}<input class="admin-search" id="admin-global-search" placeholder="Tìm lịch hẹn, khách hàng hoặc giao dịch..."></label><div class="admin-user"><a class="admin-view-site-btn" href="#/" target="_blank" title="Xem website khách đặt lịch"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg><span>Xem website</span></a><button class="admin-notification" aria-label="Thông báo" data-action="goto-notifications" title="3 thông báo mới">${icon('bell')}<b>3</b></button><span class="system-label"><i class="status-dot"></i> Hệ thống ổn định</span><span class="admin-profile" data-action="goto-profile" title="Hoàn Nguyễn - Quản trị viên"><i>HN</i><span>Hoàn Nguyễn<small>Quản trị viên</small></span></span></div></header><div class="admin-layout"><aside class="admin-sidebar">${groups.map(g=>`<div class="admin-group-title">${g[0]}</div>${g[1].map(key=>{const l=adminLinks.find(x=>x[0]===key);return `<a class="admin-link ${active===key?'active':''}" href="#/admin/${key==='overview'?'':key}">${icon(l[1],l[2])}<span>${l[2]}</span></a>`}).join('')}`).join('')}</aside><main id="main" class="admin-content" data-admin-page="${active}">${headHtml}${body}</main></div></div>`;
+    const unreadNotifications = (state.notifications || []).filter(notification => notification.status === 'unread').length;
+    const notificationBadge = unreadNotifications ? `<b>${unreadNotifications > 99 ? '99+' : unreadNotifications}</b>` : '';
+    return `<div class="admin-page"><header class="admin-top"><a class="admin-brand" href="#/admin">HOÀN <small>QUẢN TRỊ VẬN HÀNH</small></a><label class="admin-search-wrap">${icon('search')}<input class="admin-search" id="admin-global-search" placeholder="Tìm lịch hẹn, khách hàng hoặc giao dịch..."></label><div class="admin-user"><a class="admin-view-site-btn" href="#/" target="_blank" title="Xem website khách đặt lịch"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg><span>Xem website</span></a><button class="admin-notification" aria-label="Thông báo${unreadNotifications ? `, ${unreadNotifications} chưa đọc` : ''}" data-action="goto-notifications" title="${unreadNotifications ? `${unreadNotifications} thông báo chưa đọc` : 'Không có thông báo mới'}">${icon('bell')}${notificationBadge}</button><span class="system-label"><i class="status-dot"></i> Hệ thống ổn định</span><span class="admin-profile" data-action="goto-profile" title="Hoàn Nguyễn - Quản trị viên"><i>HN</i><span>Hoàn Nguyễn<small>Quản trị viên</small></span></span></div></header><div class="admin-layout"><aside class="admin-sidebar">${groups.map(g=>`<div class="admin-group-title">${g[0]}</div>${g[1].map(key=>{const l=adminLinks.find(x=>x[0]===key);return `<a class="admin-link ${active===key?'active':''}" href="#/admin/${key==='overview'?'':key}">${icon(l[1],l[2])}<span>${l[2]}</span></a>`}).join('')}`).join('')}</aside><main id="main" class="admin-content" data-admin-page="${active}">${headHtml}${body}</main></div></div>`;
   }
 
   function adminOverview() {
@@ -1493,9 +1512,10 @@
     const todayRows = appts.filter(a=>a.date===today && a.status!=='cancelled');
     const pending = appts.filter(a=>a.status==='pending').length;
     const paymentPending = appts.filter(a=>a.paymentStatus==='pending_verification').length;
-    const deposits = appts.reduce((n,a)=>n+Number(a.deposit||0),0);
+    const deposits = appts.filter(a=>a.paymentStatus==='received').reduce((n,a)=>n+Number(a.deposit||0),0);
+    const rescheduleRequests = (state.requests || []).filter(r => r.code && /đổi lịch|đổi ngày|reschedule/i.test(String(r.subject || '')) && ['pending','in_progress'].includes(r.status || 'pending')).length;
     const revenue = appts.filter(a=>a.date.startsWith(currentMonth)&&a.status!=='cancelled').reduce((n,a)=>n+Number(a.total||0),0);
-    const body = `${state.backendError?`<div class="data-alert">Không thể tải dữ liệu: ${state.backendError}</div>`:''}<section class="stat-grid"><div class="stat-card"><small>Lịch hôm nay</small><strong class="numeric">${String(todayRows.length).padStart(2,'0')}</strong><span>Dữ liệu cập nhật trực tiếp</span></div><div class="stat-card"><small>Chờ xác nhận</small><strong class="numeric">${String(pending).padStart(2,'0')}</strong><span>${pending?'Cần kiểm tra lịch mới':'Không có lịch chờ'}</span></div><div class="stat-card"><small>Tiền cọc đã nhận</small><strong class="numeric">${money(deposits)}</strong><span>${paymentPending} giao dịch chờ đối soát</span></div><div class="stat-card"><small>Doanh thu tháng</small><strong class="numeric">${money(revenue)}</strong><span>Không gồm lịch đã hủy</span></div></section><section class="admin-grid"><div class="admin-section"><div class="section-head"><h2>Dòng lịch hôm nay</h2><a class="link wine" href="#/admin/appointments">Xem toàn bộ lịch hẹn →</a></div>${appointmentsTable(todayRows)}</div><aside class="admin-section"><h2>Cần xử lý</h2><div class="task-item"><span class="task-num numeric">${String(pending).padStart(2,'0')}</span><div><b>Lịch chờ xác nhận</b><small class="muted">Cập nhật theo dữ liệu thật</small></div>→</div><div class="task-item"><span class="task-num numeric">${String(paymentPending).padStart(2,'0')}</span><div><b>Giao dịch cần đối soát</b><small class="muted">Chưa ghi nhận tiền cọc</small></div>→</div><div class="task-item"><span class="task-num numeric">00</span><div><b>Yêu cầu đổi lịch</b><small class="muted">Không có yêu cầu mới</small></div>→</div></aside></section><section class="admin-grid rule"><div class="admin-section"><h2>Doanh thu 7 ngày</h2>${lineChart()}</div><div class="admin-section"><h2>Hiệu suất dịch vụ</h2>${barChart()}</div></section>`;
+    const body = `${state.backendError?`<div class="data-alert">Không thể tải dữ liệu: ${state.backendError}</div>`:''}<section class="stat-grid"><div class="stat-card"><small>Lịch hôm nay</small><strong class="numeric">${String(todayRows.length).padStart(2,'0')}</strong><span>Dữ liệu cập nhật trực tiếp</span></div><div class="stat-card"><small>Chờ xác nhận</small><strong class="numeric">${String(pending).padStart(2,'0')}</strong><span>${pending?'Cần kiểm tra lịch mới':'Không có lịch chờ'}</span></div><div class="stat-card"><small>Tiền cọc đã nhận</small><strong class="numeric">${money(deposits)}</strong><span>${paymentPending} giao dịch chờ đối soát</span></div><div class="stat-card"><small>Doanh thu tháng</small><strong class="numeric">${money(revenue)}</strong><span>Không gồm lịch đã hủy</span></div></section><section class="admin-grid"><div class="admin-section"><div class="section-head"><h2>Dòng lịch hôm nay</h2><a class="link wine" href="#/admin/appointments">Xem toàn bộ lịch hẹn →</a></div>${appointmentsTable(todayRows)}</div><aside class="admin-section"><h2>Cần xử lý</h2><div class="task-item"><span class="task-num numeric">${String(pending).padStart(2,'0')}</span><div><b>Lịch chờ xác nhận</b><small class="muted">Cập nhật theo dữ liệu thật</small></div>→</div><div class="task-item"><span class="task-num numeric">${String(paymentPending).padStart(2,'0')}</span><div><b>Giao dịch cần đối soát</b><small class="muted">Chưa ghi nhận tiền cọc</small></div>→</div><div class="task-item"><span class="task-num numeric">${String(rescheduleRequests).padStart(2,'0')}</span><div><b>Yêu cầu đổi lịch</b><small class="muted">${rescheduleRequests?'Cần kiểm tra lịch mới':'Không có yêu cầu mới'}</small></div>→</div></aside></section><section class="admin-grid rule"><div class="admin-section"><h2>Doanh thu 7 ngày</h2>${lineChart()}</div><div class="admin-section"><h2>Hiệu suất dịch vụ</h2>${barChart()}</div></section>`;
     return adminShell('overview',body,'Tổng quan hôm nay',formatLongDate(new Date()),`<button class="btn" data-action="export-report">${icon('download')} Xuất báo cáo</button><button class="btn btn-dark" data-action="new-appointment">${icon('plus')} Tạo lịch hẹn</button>`);
   }
 
@@ -1533,27 +1553,11 @@
     if (!state.scheduleSlots) state.scheduleSlots = [];
     if (!state.customers) state.customers = [];
 
-    const mockNames = [
-      'Nguyễn Minh Anh', 'Trần Ngọc Hà', 'Lê Thu Trang', 'Phạm Mai Linh', 'Hà Vy',
-      'Đỗ Quỳnh Chi', 'Bùi Thảo Nguyên', 'Nguyễn Thùy Dung', 'Vũ Hoàng Yến',
-      'Cầu Giấy', 'Tây Hồ', 'Nam Từ Liêm', 'Đặng Thu Trang', 'Đinh Mai Anh',
-      'Hoàng Phương Linh', 'Thanh Xuân', 'Mai Anh', 'Lưu Gia Hân', 'Phương Thảo',
-      'Hải Yến', 'Kim Ngân', 'Thu Phương', 'Ngọc Anh', 'Khánh Linh', 'Ngọc Diệp',
-      'Hương Giang', 'Bảo Trâm', 'Quỳnh Anh'
-    ];
-
-    // Purge only legacy mock/seed appointments
+    // Purge only explicitly known legacy test appointments.
     const staleCodes = ['HMA-090926-BQ0', 'HMA-090926-MQ3', 'HMA-100926-MS7', 'HMA-090926-BIQ', 'HMA-180926-6W2'];
     state.appointments = (state.appointments || []).filter(a =>
-      !mockNames.includes(a.customer) &&
       !staleCodes.includes(a.code)
     );
-    // Purge mock schedule slots
-    state.scheduleSlots = (state.scheduleSlots || []).filter(s =>
-      s.note !== 'Di chuyển' && s.note !== 'Nghỉ giữa lịch' && s.note !== 'Không khả dụng' && s.note
-    );
-    // Purge mock customers
-    state.customers = (state.customers || []).filter(c => !mockNames.includes(c.name));
   }
 
   function modalEditAppointment(code) {
@@ -1604,6 +1608,16 @@
         <div class="field">
           <label>Tiền cọc (VNĐ)</label>
           <input id="modal-edit-deposit" type="number" step="10000" value="${a.deposit || 0}">
+        </div>
+        <div class="field">
+          <label>Trạng thái hoàn cọc</label>
+          <select id="modal-edit-refund-status">
+            <option value="none" ${(!a.refundStatus || a.refundStatus === 'none') ? 'selected' : ''}>Không áp dụng</option>
+            <option value="pending" ${a.refundStatus === 'pending' ? 'selected' : ''}>Chờ hoàn</option>
+            <option value="approved" ${a.refundStatus === 'approved' ? 'selected' : ''}>Đã duyệt hoàn</option>
+            <option value="paid" ${a.refundStatus === 'paid' ? 'selected' : ''}>Đã hoàn tiền</option>
+            <option value="rejected" ${a.refundStatus === 'rejected' ? 'selected' : ''}>Từ chối hoàn</option>
+          </select>
         </div>
         <div class="field">
           <label>Tổng chi phí (VNĐ)</label>
@@ -1724,7 +1738,7 @@
   }
 
   function adminSchedule() {
-    const ALL_HOURS = ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00','21:00'];
+    const ALL_HOURS = hourlyTimes();
     const monday = mondayForOffset(state.adminWeekOffset);
     const dayDates = Array.from({length:7}, (_,i) => { const d = new Date(monday); d.setDate(monday.getDate()+i); return d; });
     const dayNames = ['T2','T3','T4','T5','T6','T7','CN'];
@@ -1752,7 +1766,7 @@
     };
 
     const HOUR_HEIGHT = 68; // px per hour
-    const START_MIN = 420;  // 07:00 in minutes
+    const START_MIN = 0;
 
     // Render day column with continuous timeline events
     const renderDayColumn = (dateObj, dayIdx) => {
@@ -1761,7 +1775,7 @@
 
       // 1. Clickable background slots for each hour
       const bgSlots = ALL_HOURS.map(h => {
-        const isOff = !isOpen || h >= '20:00';
+        const isOff = !isOpen;
         if (isOff) {
           return `<div class="schv2-day-bg-slot schv2-slot-off" data-action="add-slot-at" data-date="${iso}" data-hour="${h}" title="Ngoài giờ làm việc"></div>`;
         }
@@ -1773,7 +1787,7 @@
 
       if (isOpen) {
         // Appointments
-        const dayApts = state.appointments.filter(a => a.date === iso && a.status !== 'cancelled' && !staleCodes.includes(a.code));
+        const dayApts = state.appointments.filter(a => a.date === iso && a.status === 'confirmed' && !staleCodes.includes(a.code));
         for (const a of dayApts) {
           const startMin = timeToMin(a.time);
           const endLabel = a.endTime || addMinutes(a.time, 75);
@@ -1832,7 +1846,7 @@
       }
 
       return `
-        <div class="schv2-day-col ${!isOpen ? 'schv2-off-col' : ''}" data-date="${iso}">
+        <div class="schv2-day-col ${!isOpen ? 'schv2-off-col' : ''}" data-date="${iso}" style="height: ${ALL_HOURS.length * HOUR_HEIGHT}px;">
           ${bgSlots.join('')}
           ${eventCards.join('')}
         </div>
@@ -1876,7 +1890,7 @@
     }).join('');
 
     // Compute real conflicts between appointments
-    const activeAppts = (state.appointments || []).filter(a => a.status !== 'cancelled');
+    const activeAppts = (state.appointments || []).filter(activeAppointment);
     const conflicts = [];
     for (let i = 0; i < activeAppts.length; i++) {
       for (let j = i + 1; j < activeAppts.length; j++) {
@@ -2037,7 +2051,8 @@
 
   function adminPayments() {
     const rows = state.appointments;
-    const received=rows.filter(r=>r.paymentStatus==='received').reduce((n,r)=>n+Number(r.deposit||0),0);
+    const currentMonth = localIso(new Date()).slice(0,7);
+    const received=rows.filter(r=>r.paymentStatus==='received' && String(r.updatedAt || r.createdAt || '').startsWith(currentMonth)).reduce((n,r)=>n+Number(r.deposit||0),0);
     const pending=rows.filter(r=>r.paymentStatus==='pending_verification').length;
     const refund=rows.filter(r=>r.status==='cancelled'&&r.deposit>0).reduce((n,r)=>n+Number(r.deposit),0);
     const due=rows.filter(r=>r.status!=='cancelled').reduce((n,r)=>n+Math.max(0,Number(r.total)-Number(r.deposit||0)),0);
@@ -2056,6 +2071,19 @@
   }
 
   function adminContent() {
+    const body = siteTools
+      ? siteTools.cmsWorkspaceHtml()
+      : '<div class="cms-workspace"><p>Đang tải CMS…</p></div>';
+    return adminShell(
+      'content',
+      body,
+      'Nội dung website',
+      'Chỉnh sửa thông tin và hình ảnh theo từng trang.',
+      ''
+    );
+  }
+
+  function legacyAdminContent() {
     const b = state.brand || {};
     const s = state.settings || {};
     const viewMode = state.contentViewMode || (state.contentActiveTab === 'pages' ? 'pages' : 'pages');
@@ -2691,28 +2719,11 @@
       { id: 'contact', label: 'Liên hệ' }
     ];
 
-    const isPagesMode = viewMode === 'pages' || curTab === 'pages';
-
-    const modeSwitcher = `
-      <div class="content-header-modes">
-        <div class="mode-switch-pills">
-          <button type="button" class="mode-pill ${isPagesMode ? 'active' : ''}" data-action="switch-content-view" data-view="pages">
-            <svg class="ui-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-            <span>Nội dung từng trang (CMS 42 trang)</span>
-          </button>
-          <button type="button" class="mode-pill ${!isPagesMode ? 'active' : ''}" data-action="switch-content-view" data-view="general">
-            <svg class="ui-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-            <span>Cấu hình chung & Thương hiệu</span>
-          </button>
-        </div>
-      </div>
-    `;
-
-    const body = `
-      ${modeSwitcher}
-      ${isPagesMode
-        ? (siteTools ? siteTools.cmsWorkspaceHtml() : '<div class="cms-workspace"><p>Đang tải CMS…</p></div>')
-        : `
+    const body = siteTools
+      ? siteTools.cmsWorkspaceHtml()
+      : '<div class="cms-workspace"><p>Đang tải CMS…</p></div>';
+    /* Legacy general-content editor retained only for data compatibility. */
+    void `
       <section class="content-editor">
         <nav class="content-tabs">
           ${tabs.filter(t => t.id !== 'pages').map((t) => `
@@ -2755,24 +2766,26 @@
           </div>
         </div>
       </section>
-      `}
-    `;
+      `;
 
     return adminShell(
       'content',
       body,
       'Nội dung website',
       'Chỉnh sửa thông tin, hình ảnh và chính sách hiển thị cho khách hàng.',
-      `<a class="btn" href="#/" target="_blank">${icon('eye')} Xem trước website</a>
-       <button class="btn btn-dark" data-action="publish-content">${icon('check')} Đăng thay đổi</button>`
+      ''
     );
   }
 
   function adminNotifications() {
-    const sent=state.notifications.filter(n=>n.status==='Đã gửi').length;
-    const waiting=state.notifications.filter(n=>n.status!=='Đã gửi').length;
-    const body = `<section class="stat-grid"><div class="stat-card"><small>Đã gửi hôm nay</small><strong class="numeric">${String(sent).padStart(2,'0')}</strong></div><div class="stat-card"><small>Chờ gửi</small><strong class="numeric">${String(waiting).padStart(2,'0')}</strong></div><div class="stat-card"><small>Tỷ lệ nhận</small><strong class="numeric">${sent?'100%':'0%'}</strong></div><div class="stat-card"><small>Cần kiểm tra</small><strong class="numeric">00</strong></div></section><div class="toolbar"><select><option>Tất cả kênh</option><option>Zalo</option><option>Email</option></select><select><option>Tất cả trạng thái</option><option>Đã gửi</option><option>Chờ gửi</option></select></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Nội dung</th><th>Kênh</th><th>Người nhận</th><th>Thời gian</th><th>Trạng thái</th><th></th></tr></thead><tbody>${state.notifications.length?state.notifications.map((n,i)=>`<tr><td><b>${n.title}</b></td><td>${n.channel}</td><td>${n.audience}</td><td>${n.sent}</td><td><span class="badge ${n.status==='Đã gửi'?'success':'warning'}">${n.status}</span></td><td><button class="mini-action" data-action="resend-notification" data-index="${i}">Gửi lại</button></td></tr>`).join(''):'<tr><td colspan="6"><div class="empty-table">Chưa có thông báo nào được gửi.</div></td></tr>'}</tbody></table></div>`;
-    return adminShell('notifications',body,'Thông báo','Theo dõi nhắc lịch và gửi thông tin đến khách hàng.',`<button class="btn btn-dark" data-action="new-notification">${icon('plus')} Soạn thông báo</button>`);
+    const notifications = (state.notifications || []).slice().sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    const unread = notifications.filter(n => n.status === 'unread').length;
+    const appointments = notifications.filter(n => String(n.type || '').startsWith('appointment.')).length;
+    const consultations = notifications.filter(n => n.type === 'consultation.created').length;
+    const href = n => n.entityType === 'appointment' ? `#/admin/appointments?code=${encodeURIComponent(n.entityId || '')}` : '#/admin/requests';
+    const typeLabel = n => n.type === 'payment.reported' || n.type === 'payment.refund' ? 'Tiền cọc' : n.type === 'consultation.created' ? 'Tư vấn' : n.type === 'appointment.request' ? 'Yêu cầu lịch' : 'Lịch đặt';
+    const body = `<section class="stat-grid"><div class="stat-card"><small>Chưa đọc</small><strong class="numeric">${String(unread).padStart(2,'0')}</strong><span>Cần xử lý</span></div><div class="stat-card"><small>Lịch đặt</small><strong class="numeric">${String(appointments).padStart(2,'0')}</strong><span>Lịch mới hoặc tiền cọc</span></div><div class="stat-card"><small>Yêu cầu tư vấn</small><strong class="numeric">${String(consultations).padStart(2,'0')}</strong><span>Tách khỏi lịch đã đặt</span></div><div class="stat-card"><small>Tổng sự kiện</small><strong class="numeric">${String(notifications.length).padStart(2,'0')}</strong><span>Dữ liệu thật từ hệ thống</span></div></section><div class="table-wrap"><table class="data-table"><thead><tr><th>Loại</th><th>Thông báo</th><th>Chi tiết</th><th>Thời gian</th><th>Trạng thái</th></tr></thead><tbody>${notifications.length ? notifications.map(n => `<tr><td><span class="badge ${n.status === 'unread' ? 'warning' : ''}">${esc(typeLabel(n))}</span></td><td><b>${esc(n.title || 'Thông báo')}</b><div class="muted">${esc(n.message || '')}</div></td><td><a class="link" href="${href(n)}">${n.entityType === 'appointment' ? 'Mở lịch hẹn' : 'Mở yêu cầu'}</a></td><td class="numeric">${formatReqTime(n.createdAt)}</td><td>${n.status === 'unread' ? 'Chưa đọc' : 'Đã xem'}</td></tr>`).join('') : '<tr><td colspan="5"><div class="empty-table">Chưa có sự kiện cần thông báo.</div></td></tr>'}</tbody></table></div>`;
+    return adminShell('notifications',body,'Thông báo','Theo dõi đúng sự kiện lịch đặt, tiền cọc và yêu cầu tư vấn.', `<button class="btn" data-action="mark-all-notifications-read" ${unread ? '' : 'disabled'}>${icon('check')} Đánh dấu đã đọc</button>`);
   }
 
   function adminReports() {
@@ -2908,6 +2921,7 @@
     const [path, queryString=''] = raw.split('?');
     const query = new URLSearchParams(queryString);
     const parts = path.split('/').filter(Boolean);
+    if (path.startsWith('/pages/')) return siteTools?.customPageHtml(path) || '';
     if (path === '/') return pageHome();
     if (path === '/services') return pageServices();
     if (parts[0] === 'services' && parts[1]) return pageServiceDetail(parts[1]);
@@ -2941,7 +2955,8 @@
     const [path, queryString=''] = raw.split('?');
     const query = new URLSearchParams(queryString);
     const parts = path.split('/').filter(Boolean);
-    let html = path.startsWith('/admin') && window.HoanMobileAdmin?.matches()
+    const needsFullContentEditor = path === '/admin/content' || path === '/admin/content-pages';
+    let html = path.startsWith('/admin') && !needsFullContentEditor && window.HoanMobileAdmin?.matches()
       ? window.HoanMobileAdmin.render(raw, state)
       : renderPathHtml(raw);
     if (!html) {
@@ -2955,12 +2970,8 @@
       else if (path === '/admin/promotions') html = adminPromotions();
       else if (path === '/admin/gallery') html = adminGallery();
       else if (path === '/admin/content' || path === '/admin/content-pages') {
-        if (!state.contentViewMode) state.contentViewMode = 'pages';
-        if (!state.contentActiveTab) state.contentActiveTab = 'pages';
-        if (path === '/admin/content-pages') {
-          state.contentViewMode = 'pages';
-          state.contentActiveTab = 'pages';
-        }
+        state.contentViewMode = 'pages';
+        state.contentActiveTab = 'pages';
         html = adminContent();
       }
       else if (path === '/admin/visitors') html = siteTools?.visitorsPage() || adminShell('visitors','<p>Đang tải thống kê…</p>','Khách truy cập','');
@@ -2973,6 +2984,9 @@
     }
     $('#app').innerHTML = html;
     siteTools?.mount(path);
+    if (path === '/admin/appointments' && query.get('code')) {
+      setTimeout(() => document.querySelector(`[data-action="admin-view-appointment"][data-code="${CSS.escape(query.get('code'))}"]`)?.click(), 0);
+    }
     window.scrollTo(0,0);
     mountCoutureMotion(path);
     if (path === '/booking/deposit') {
@@ -3012,25 +3026,16 @@
         return;
       }
       try {
-        const raw = localStorage.getItem('hoanMakeupDraft');
-        if (raw) {
-          const draft = JSON.parse(raw);
-          if (draft.booking && !!draft.booking.depositPaid !== !!state.booking.depositPaid) {
-            state.booking.depositPaid = draft.booking.depositPaid;
-            state.booking.depositStatus = draft.booking.depositStatus;
-            render();
-            return;
-          }
-        }
         const data = await api();
         if (data && data.appointments) {
           state.appointments = data.appointments;
           const code = state.booking.code || (state.appointments[0]?.code);
           const apt = state.appointments.find(a => a.code === code);
-          const isPaidNow = !!state.booking.depositPaid || state.booking.depositStatus === 'received' || (apt && (apt.paymentStatus === 'received' || apt.status === 'confirmed'));
-          if (isPaidNow !== !!state.booking.depositPaid) {
+          const isPaidNow = Boolean(apt && apt.paymentStatus === 'received' && Number(apt.deposit) > 0);
+          const isPendingNow = Boolean(apt && apt.paymentStatus === 'pending_verification');
+          if (isPaidNow !== !!state.booking.depositPaid || isPendingNow !== (state.booking.depositStatus === 'pending_verification')) {
             state.booking.depositPaid = isPaidNow;
-            if (isPaidNow) state.booking.depositStatus = 'received';
+            state.booking.depositStatus = isPaidNow ? 'received' : isPendingNow ? 'pending_verification' : null;
             saveState();
             render();
           }
@@ -3039,7 +3044,7 @@
     }, 1200);
   }
 
-  let requestFilterState = { status: 'all', search: '' };
+  let requestFilterState = { status: 'all', kind: 'all', search: '' };
 
   function getInitials(name) {
     if (!name) return 'KH';
@@ -3198,6 +3203,8 @@
     const filtered = all.filter(r => {
       const st = r.status || 'pending';
       if (filter.status !== 'all' && st !== filter.status) return false;
+      const kind = r.kind || (r.code ? 'appointment' : 'consultation');
+      if (filter.kind !== 'all' && kind !== filter.kind) return false;
       if (filter.search) {
         const q = filter.search.toLowerCase();
         const str = `${r.name || ''} ${r.phone || ''} ${r.email || ''} ${r.id || ''} ${r.code || ''} ${r.subject || ''} ${r.message || ''}`.toLowerCase();
@@ -3238,6 +3245,11 @@
           <option value="in_progress" ${filter.status === 'in_progress' ? 'selected' : ''}>Đang xử lý (${countInProgress})</option>
           <option value="resolved" ${filter.status === 'resolved' ? 'selected' : ''}>Đã hoàn thành (${countResolved})</option>
           <option value="cancelled" ${filter.status === 'cancelled' ? 'selected' : ''}>Đã hủy (${countCancelled})</option>
+        </select>
+        <select id="req-kind-filter">
+          <option value="all" ${filter.kind === 'all' ? 'selected' : ''}>Tất cả loại yêu cầu</option>
+          <option value="consultation" ${filter.kind === 'consultation' ? 'selected' : ''}>Chỉ tư vấn</option>
+          <option value="appointment" ${filter.kind === 'appointment' ? 'selected' : ''}>Theo lịch hẹn</option>
         </select>
         <button class="btn btn-sm" data-action="reset-req-filter">Đặt lại bộ lọc</button>
       </div>
@@ -3421,11 +3433,13 @@
   document.addEventListener('click',async event=>{
     const el=event.target.closest('[data-action]');if(!el)return;
     const _a=el.dataset.action;
-    const _handledInThisListener = _a.startsWith('ct-') || _a.startsWith('req-') || _a==='reset-req-filter' || _a==='admin-confirm-deposit' || _a==='admin-reset-deposit' || _a==='look-book';
+    const _handledInThisListener = _a === 'start-booking' || _a.startsWith('ct-') || _a.startsWith('req-') || _a==='reset-req-filter' || _a==='admin-confirm-deposit' || _a==='admin-reset-deposit' || _a==='look-book';
     if(!_handledInThisListener) return;
     const action=el.dataset.action;event.preventDefault();event.stopImmediatePropagation();
     try{
-      if(action==='admin-confirm-deposit'||action==='ct-admin-confirm-deposit'){
+      if(action==='start-booking'){
+        startNewBooking();
+      }else if(action==='admin-confirm-deposit'||action==='ct-admin-confirm-deposit'){
         const c=el.dataset.code||bookingCode||'HOAN-MAU-001';
         el.disabled=true;
         try{
@@ -3560,7 +3574,34 @@
       else if(action==='look-book'){state.booking.serviceId=el.dataset.id;state.booking.style=el.dataset.style;saveState();route(service().contact?'/contact':'/booking/time');}
       else if(action==='ct-copy'){await navigator.clipboard.writeText(el.dataset.value);toast('Đã sao chép');}
       else if(action==='ct-refresh'){await hydrateBackend();toast('Đã cập nhật trạng thái');}
-      else if(action==='ct-payment-report'){el.disabled=true;const r=await api({action:'reportPayment',code:el.dataset.code});Object.assign(getAppointment(el.dataset.code),r.appointment);render();toast('Đã thông báo, đang chờ đối soát');}
+      else if(action==='ct-payment-report'){
+        el.disabled=true;
+        try {
+          const requestedCode = el.dataset.code;
+          const latest = await api();
+          state.appointments = latest.appointments || [];
+          let appointment = state.appointments.find(item => item.code === requestedCode);
+          if (!appointment) {
+            const b = state.booking;
+            if (!b.name?.trim() || !b.phone?.trim() || !b.date || !b.time || !b.serviceId) throw new Error('Vui lòng hoàn tất thông tin đặt lịch trước khi báo chuyển khoản.');
+            const created = await api({ action: 'createAppointment', ...b, customer: b.name, paymentStatus: 'unverified' });
+            appointment = created.appointment;
+            state.appointments.unshift(appointment);
+            state.booking.code = appointment.code;
+          }
+          const result = await api({action:'reportPayment',code:appointment.code});
+          if (!result.appointment) throw new Error('Không thể gửi yêu cầu đối soát.');
+          Object.assign(appointment, result.appointment);
+          state.booking.depositReported = true;
+          state.booking.depositStatus = 'pending_verification';
+          saveState();
+          render();
+          toast('Đã gửi thông báo chuyển khoản cho Hoàn. Đang chờ đối soát.');
+        } catch (error) {
+          el.disabled = false;
+          toast(error.message || 'Không thể gửi thông báo chuyển khoản.');
+        }
+      }
       else if(action==='ct-calendar-download'){const c=el.dataset.code||'HOAN-MAU-001';const a=getAppointment(c)||{code:c,date:localIso(),time:'10:00',serviceId:'party',status:'confirmed'};const sObj=service(a.serviceId)||{name:'Trang điểm dự tiệc',duration:90};const d=new Date((a.date||localIso())+'T'+(a.time||'10:00')+':00+07:00'),end=new Date(d.getTime()+(sObj.duration||90)*60000),fmt=d=>d.toISOString().replace(/[-:]/g,'').replace('.000','');downloadText('lich-'+a.code+'.ics',['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//HOAN//Booking//VI','BEGIN:VEVENT','UID:'+a.code+'@hoan','DTSTAMP:'+fmt(new Date()),'DTSTART:'+fmt(d),'DTEND:'+fmt(end),'SUMMARY:'+sObj.name+' - HOÀN','STATUS:'+(a.status==='confirmed'?'CONFIRMED':'TENTATIVE'),'END:VEVENT','END:VCALENDAR'].join('\r\n'));toast('Đã tải lịch hẹn vào máy');}
       else if(action==='ct-resolve' || action==='req-open-modal'){
         modalViewRequest(el.dataset.id);
@@ -3575,7 +3616,7 @@
         modalDeleteRequest(el.dataset.id);
       }
       else if(action==='reset-req-filter'){
-        requestFilterState = { status: 'all', search: '' };
+        requestFilterState = { status: 'all', kind: 'all', search: '' };
         render();
       }
     }catch(error){toast(error.message);el.disabled=false;}
@@ -3598,6 +3639,10 @@
       requestFilterState.status = event.target.value;
       render();
     }
+    if (event.target && event.target.id === 'req-kind-filter') {
+      requestFilterState.kind = event.target.value;
+      render();
+    }
   });
 
   document.addEventListener('submit', async (event) => {
@@ -3613,8 +3658,17 @@
       Object.assign(state.booking, data);
       saveState('Đã lưu thông tin của bạn');
     } else if (form.dataset.form === 'lookup') {
-      const a = state.appointments.find(x=>x.code.toLowerCase()===String(data.code).toLowerCase() && x.phone.replaceAll(' ','')===String(data.phone).replaceAll(' ',''));
-      if (a) route('/booking/'+a.code); else {const status=form.querySelector('[role=status]');if(status)status.textContent='Chưa tìm thấy lịch phù hợp. Kiểm tra lại mã lịch và số điện thoại.';}
+      try {
+        const response = await fetch('/api/data?code=' + encodeURIComponent(String(data.code || '')) + '&phone=' + encodeURIComponent(String(data.phone || '')));
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Chưa tìm thấy lịch phù hợp.');
+        state.appointments = [result.appointment, ...state.appointments.filter(item => item.code !== result.appointment.code)];
+        state.bookingDetails = { ...state.bookingDetails, [result.appointment.code]: result.bookingDetails || {} };
+        route('/booking/' + result.appointment.code);
+      } catch (error) {
+        const status = form.querySelector('[role=status]');
+        if (status) status.textContent = error.message;
+      }
     } else if (form.dataset.form === 'help-search') {
       const q = String(data.q || '').toLowerCase();
       $$('.accordion-item').forEach((item,i)=>item.style.display = faqItems[i].join(' ').toLowerCase().includes(q) ? '' : 'none');
@@ -3808,7 +3862,13 @@
       }
     }
     else if (action === 'date-select') { const m = (state.calendarMonth || state.booking.date || localIso()).slice(0,7); state.booking.date = `${m}-${String(el.dataset.day).padStart(2,'0')}`; saveState(); render(); }
-    else if (action === 'time-select') { state.booking.time = el.dataset.time; saveState(); render(); }
+    else if (action === 'time-select') {
+      if (el.disabled || slotUnavailable(state.booking.date, el.dataset.time)) {
+        toast('Khung giờ này đã có khách hoặc không còn khả dụng. Vui lòng chọn giờ khác.');
+        return;
+      }
+      state.booking.time = el.dataset.time; saveState(); render();
+    }
     else if (action === 'location-type') { state.booking.locationType = el.dataset.type; state.booking.travelFee = el.dataset.type==='artist'?0:50000; saveState(); render(); }
     else if (action === 'detect-location') {
       if (state.booking.isDetectingLocation) return;
@@ -3953,7 +4013,15 @@
     else if (action === 'confirm-reschedule') { try{const a=getAppointment(el.dataset.code);const result=await api({action:'updateAppointment',code:a.code,date:'2026-09-19',time:'10:00'});Object.assign(a,result.appointment);toast('Đổi lịch thành công');route('/booking/'+a.code);}catch(error){toast(error.message)} }
     else if (action === 'confirm-cancel') { if (!$('#cancel-confirm')?.checked) return toast('Vui lòng xác nhận điều kiện hủy lịch'); try{const a=getAppointment(el.dataset.code);const result=await api({action:'updateAppointment',code:a.code,status:'cancelled'});Object.assign(a,result.appointment);toast('Đã hủy lịch hẹn');route('/booking/'+a.code);}catch(error){toast(error.message)} }
     else if (action === 'new-appointment') { modal('Tạo lịch hẹn mới',`<div class="form-grid"><div class="field full"><label>Khách hàng</label><input id="modal-customer" placeholder="Họ và tên"></div><div class="field"><label>Dịch vụ</label><select id="modal-service">${state.services.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select></div><div class="field"><label>Ngày</label><input id="modal-date" type="date" value="${localIso()}"></div><div class="field"><label>Giờ</label><input id="modal-time" type="time" value="09:30"></div><div class="field"><label>Số điện thoại</label><input id="modal-phone" placeholder="Số điện thoại"></div></div>`,'Tạo lịch','create-appointment'); }
-    else if (action === 'admin-status') { const a=getAppointment(el.dataset.code); modal('Cập nhật trạng thái',`<div class="field"><label>Trạng thái mới</label><select id="modal-status"><option value="confirmed">Đã xác nhận</option><option value="pending">Chờ xác nhận</option><option value="completed">Đã hoàn thành</option><option value="cancelled">Đã hủy</option></select></div><div class="form-grid"><div class="field"><label>Ngày hẹn</label><input id="modal-appointment-date" type="date" value="${a.date}"></div><div class="field"><label>Giờ bắt đầu</label><input id="modal-appointment-time" type="time" value="${a.time}"></div></div>`,'Cập nhật','update-status:'+a.code); }
+    else if (action === 'admin-status') {
+      const a=getAppointment(el.dataset.code);
+      if (!a) return toast('Không tìm thấy lịch hẹn');
+      const transitions = { pending: ['confirmed','cancelled'], confirmed: ['pending','completed','cancelled'], completed: ['completed'], cancelled: ['cancelled'] };
+      const statusNames = { pending:'Chờ xác nhận', confirmed:'Đã xác nhận', completed:'Đã hoàn thành', cancelled:'Đã hủy' };
+      const options = [a.status, ...(transitions[a.status] || [])].filter((status, index, list) => list.indexOf(status) === index).map(status => `<option value="${status}" ${status === a.status ? 'selected' : ''}>${statusNames[status]}</option>`).join('');
+      const paymentLabel = a.paymentStatus === 'received' ? 'Đã nhận' : a.paymentStatus === 'pending_verification' ? 'Chờ đối soát' : 'Chưa thanh toán';
+      modal('Cập nhật trạng thái',`<div class="field"><label>Trạng thái lịch</label><select id="modal-status">${options}</select><small style="display:block;margin-top:8px;color:#6b7280;">Chỉ thay đổi trạng thái phục vụ. Tiền cọc hiện tại: <b>${paymentLabel}</b>.</small></div><div class="form-grid"><div class="field"><label>Ngày hẹn</label><input id="modal-appointment-date" type="date" value="${a.date}"></div><div class="field"><label>Giờ bắt đầu</label><input id="modal-appointment-time" type="time" value="${a.time}"></div></div>`,'Cập nhật','update-status:'+a.code);
+    }
     else if (action === 'admin-edit-appointment') {
       modalEditAppointment(el.dataset.code);
     }
@@ -4027,27 +4095,6 @@
         render();
       } catch(error) { toast(error.message); }
     }
-    else if (action === 'switch-content-view') {
-      state.contentViewMode = el.dataset.view;
-      if (el.dataset.view === 'pages') {
-        state.contentActiveTab = 'pages';
-      } else {
-        if (state.contentActiveTab === 'pages') state.contentActiveTab = 'home';
-      }
-      render();
-    }
-    else if (action === 'content-tab') {
-      state.contentActiveTab = el.dataset.tab;
-      if (el.dataset.tab === 'pages') {
-        state.contentViewMode = 'pages';
-      } else {
-        state.contentViewMode = 'general';
-        if (['home','about','services','booking','policies','contact'].includes(el.dataset.tab)) {
-          state.contentPreviewMode = el.dataset.tab;
-        }
-      }
-      render();
-    }
     else if (action === 'set-preview-mode') {
       state.contentPreviewMode = el.dataset.mode;
       render();
@@ -4083,6 +4130,18 @@
     }
     else if (action === 'goto-notifications') {
       route('/admin/notifications');
+    }
+    else if (action === 'mark-all-notifications-read') {
+      const unread = (state.notifications || []).filter(notification => notification.status === 'unread');
+      if (!unread.length) return;
+      try {
+        await api({ action: 'markNotificationsRead' });
+        state.notifications = state.notifications.map(notification => notification.status === 'unread' ? { ...notification, status: 'read', readAt: new Date().toISOString() } : notification);
+        render();
+        toast('Đã đánh dấu toàn bộ thông báo là đã đọc.');
+      } catch (error) {
+        toast(error.message || 'Không thể cập nhật thông báo.');
+      }
     }
     else if (action === 'goto-profile') {
       route('/admin/permissions');
@@ -4120,7 +4179,7 @@
     else if (action === 'add-slot') modalAddSlot(localIso(), '09:00', '10:15');
     else if (action === 'add-slot-at') modalAddSlot(el.dataset.date, el.dataset.hour, addMinutes(el.dataset.hour, 75));
     else if (action === 'view-conflicts') {
-      const activeAppts = (state.appointments || []).filter(a => a.status !== 'cancelled');
+      const activeAppts = (state.appointments || []).filter(activeAppointment);
       const conflicts = [];
       for (let i = 0; i < activeAppts.length; i++) {
         for (let j = i + 1; j < activeAppts.length; j++) {
@@ -4227,6 +4286,7 @@
       const time = $('#modal-edit-time')?.value;
       const status = $('#modal-edit-status')?.value;
       const paymentStatus = $('#modal-edit-payment')?.value;
+      const refundStatus = $('#modal-edit-refund-status')?.value;
       const deposit = Number($('#modal-edit-deposit')?.value || 0);
       const total = Number($('#modal-edit-total')?.value || 0);
       const address = $('#modal-edit-address')?.value?.trim();
@@ -4246,16 +4306,14 @@
           time,
           status,
           paymentStatus,
+          refundStatus,
           deposit,
           total,
           address,
           note
         });
         const a = getAppointment(code);
-        if (a) {
-          Object.assign(a, result.appointment);
-          if (status === 'confirmed') a.paymentStatus = 'received';
-        }
+        if (a) Object.assign(a, result.appointment);
         saveState();
         toast('✓ Đã cập nhật thông tin lịch hẹn');
       } catch (err) {
@@ -4353,12 +4411,7 @@
         const newStatus=$('#modal-status').value;
         const result=await api({action:'updateAppointment',code,status:newStatus,date:$('#modal-appointment-date')?.value,time:$('#modal-appointment-time')?.value});
         const appt = getAppointment(code);
-        if (appt) {
-          Object.assign(appt, result.appointment);
-          if (newStatus === 'confirmed') {
-            appt.paymentStatus = 'received';
-          }
-        }
+        if (appt) Object.assign(appt, result.appointment);
         if (newStatus === 'confirmed') {
           if (state.booking.code === code || bookingCode === code) {
             state.booking.statusMode = 'confirmed';
@@ -4453,7 +4506,7 @@
   if (!location.hash) location.hash = '#/';
   if (typeof document.createElement === 'function' && location.origin) {
     import('/site-tools.js?v=146.0').then(({ createSiteTools }) => {
-      siteTools = createSiteTools({ getState: () => state, render, renderPathHtml, hydrateBackend, adminShell, esc, toast, icon });
+      siteTools = createSiteTools({ getState: () => state, render, renderPathHtml, hydrateBackend, adminShell, publicHeader, publicFooter, esc, toast, icon });
       siteTools.start();
     }).catch(error => console.error('Không tải được công cụ website:', error));
     import('/scroll-enhancements.js?v=1.0').then(() => {

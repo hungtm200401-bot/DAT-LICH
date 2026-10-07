@@ -96,9 +96,9 @@
     const todayRows = (s.appointments || []).filter(a => a.date === today && a.status !== 'cancelled');
     const pending = (s.appointments || []).filter(a => a.status === 'pending').length;
     const paymentPending = (s.appointments || []).filter(a => a.paymentStatus === 'pending_verification').length;
-    const deposits = (s.appointments || []).reduce((sum,a) => sum + Number(a.deposit || 0), 0);
+    const deposits = (s.appointments || []).filter(a => a.paymentStatus === 'received').reduce((sum,a) => sum + Number(a.deposit || 0), 0);
     const revenue = (s.appointments || []).filter(a => a.date?.startsWith(today.slice(0,7)) && a.status !== 'cancelled').reduce((sum,a) => sum + Number(a.total || 0), 0);
-    const openRequests = (s.requests || []).filter(r => r.status !== 'resolved').length;
+    const openRequests = (s.requests || []).filter(r => ['pending','in_progress'].includes(r.status || 'pending')).length;
     return shell(`
       <div class="ma-date">${esc(longDate()).toUpperCase()}</div>
       <div class="ma-title-row"><h1>Tổng quan hôm nay</h1><a class="ma-circle-add" href="#/admin/appointments/new" aria-label="Thêm lịch hẹn">+</a></div>
@@ -116,7 +116,7 @@
         ${taskRow('calendar',pending,'Lịch chờ xác nhận','Cập nhật theo dữ liệu thật','/admin/appointments?status=pending')}
         ${taskRow('card',paymentPending,'Cọc chờ đối soát','Chưa ghi nhận tiền cọc','/admin/payments?status=pending')}
         ${taskRow('mail',openRequests,'Hỗ trợ mới','Yêu cầu của khách hàng','/admin/requests')}
-        ${taskRow('user',(s.customers || []).length,'Khách tiềm năng','Từ website và Facebook','/admin/customers?tab=leads')}
+        ${taskRow('bell',(s.notifications || []).filter(n => n.status === 'unread').length,'Thông báo chưa đọc','Sự kiện cần xử lý','/admin/notifications?tab=unread')}
       </div>
       <div class="ma-section-title"><b>Hoạt động gần đây</b><a class="ma-link" href="#/admin/audit">Xem tất cả →</a></div>
       <div class="ma-recent-empty">${icon('file')}<span>Hoạt động mới sẽ xuất hiện tại đây.</span></div>
@@ -253,27 +253,33 @@
   }
 
   function notificationEntries() {
-    const s = state();
-    const appt = (s.appointments || []).find(a => a.status === 'pending');
-    const dep = (s.appointments || []).find(a => a.paymentStatus === 'pending_verification');
-    const req = (s.requests || []).find(r => r.status !== 'resolved');
-    return [
-      { id:appt?.code || 'appointment', icon:'calendar', title:'Lịch hẹn mới', text:appt ? `${appt.customer} · ${service(appt.serviceId).name}` : 'Chưa có lịch hẹn mới', action:'Mở lịch hẹn', href:appt ? `/admin/appointments/${appt.code}`:'/admin/appointments', unread:!!appt && !ui.notificationRead },
-      { id:dep?.code || 'deposit', icon:'card', title:'Báo cáo cọc mới', text:dep ? `${dep.customer} · ${money(dep.total)}` : 'Chưa có báo cáo cọc mới', action:'Kiểm tra khoản cọc', href:dep ? `/admin/payments/${dep.code}`:'/admin/payments', unread:!!dep && !ui.notificationRead },
-      { id:req?.id || 'support', icon:'help', title:'Yêu cầu hỗ trợ', text:req ? req.subject : 'Chưa có yêu cầu mới', action:'Xem yêu cầu', href:req ? `/admin/requests/${req.id}`:'/admin/requests', unread:!!req && !ui.notificationRead },
-      { id:'lead', icon:'user', title:'Khách tiềm năng mới', text:'Từ website hoặc nguồn truy cập', action:'Xem khách', href:'/admin/customers?tab=leads', unread:false }
-    ];
+    const entries = (state().notifications || []).slice().sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    return entries.map(notification => {
+      const isPayment = notification.type === 'payment.reported';
+      const isAppointment = notification.entityType === 'appointment';
+      return {
+        id: notification.id,
+        icon: isPayment ? 'card' : isAppointment ? 'calendar' : 'help',
+        title: notification.title || 'Thông báo',
+        text: notification.message || '',
+        action: isAppointment ? 'Mở lịch hẹn' : 'Xem yêu cầu',
+        href: isAppointment ? `/admin/appointments/${notification.entityId}` : `/admin/requests`,
+        unread: notification.status === 'unread',
+        createdAt: notification.createdAt,
+      };
+    });
   }
 
   function notificationItem(n) {
-    return `<a class="ma-notification ${n.unread ? 'unread':''}" href="#${n.href}"><span class="ma-notification-icon">${icon(n.icon)}</span><span class="ma-notification-copy"><b>${n.title}</b><p>${esc(n.text)}</p><small>Thời gian sự kiện</small><span>${n.action} →</span></span>${n.unread ? '<i class="ma-unread-dot"></i>' : icon('chevron')}</a>`;
+    const eventTime = n.createdAt ? new Intl.DateTimeFormat('vi-VN', { dateStyle:'short', timeStyle:'short' }).format(new Date(n.createdAt)) : 'Không rõ thời gian';
+    return `<a class="ma-notification ${n.unread ? 'unread':''}" href="#${n.href}"><span class="ma-notification-icon">${icon(n.icon)}</span><span class="ma-notification-copy"><b>${esc(n.title)}</b><p>${esc(n.text)}</p><small>${esc(eventTime)}</small><span>${n.action} →</span></span>${n.unread ? '<i class="ma-unread-dot"></i>' : icon('chevron')}</a>`;
   }
 
   function notificationSettings() {
     return shell(`<a class="ma-link" href="#/admin/notifications">← Thông báo</a><h1 style="margin-top:12px">Tùy chọn nhận tin</h1>
       ${!ui.pushEnabled ? `<div class="ma-alert">${icon('bell')}<span><b>Thông báo đẩy chưa bật</b><br>Bạn chưa cho phép nhận thông báo từ trình duyệt trên thiết bị này.</span></div><button class="ma-btn primary" data-ma-action="enable-push">Bật thông báo trên thiết bị</button><p style="text-align:center;color:#758093;font-size:10px">Bạn có thể thay đổi lựa chọn bất cứ lúc nào.</p>` : '<div class="ma-alert success">'+icon('check')+'<span>Thông báo đẩy đã được bật trên thiết bị này.</span></div>'}
       <div class="ma-section-title"><b>Thông báo trong app</b></div>
-      ${toggleRow('calendar','Lịch hẹn mới',true)}${toggleRow('card','Báo cáo cọc',true)}${toggleRow('mail','Yêu cầu hỗ trợ',true)}${toggleRow('user','Khách tiềm năng',true)}
+      ${toggleRow('calendar','Lịch hẹn mới',true)}${toggleRow('card','Báo cáo cọc',true)}${toggleRow('mail','Yêu cầu hỗ trợ',true)}
       <div class="ma-section-title"><b>Thông báo đẩy</b></div>
       <a class="ma-settings-link" href="#/admin/push">${icon('globe')}<span>Quyền trình duyệt</span><small>${ui.pushEnabled ? 'Đã cấp':'Chưa cấp'}</small>${icon('chevron')}</a>
       <div class="ma-settings-link">${icon('device')}<span>Thiết bị này</span><small>${ui.pushEnabled ? 'Đã đăng ký':'Chưa đăng ký'}</small>${icon('chevron')}</div>
@@ -285,11 +291,13 @@
 
   function payments(raw) {
     const q = queryOf(raw), filter = q.get('status') || 'received';
-    const rows = (state().appointments || []).filter(a => filter === 'pending' ? a.paymentStatus === 'pending_verification' : filter === 'unpaid' ? !a.deposit : Number(a.deposit || 0) > 0);
-    const received = (state().appointments || []).reduce((sum,a) => sum + Number(a.deposit || 0),0);
+    const rows = (state().appointments || []).filter(a => filter === 'pending' ? a.paymentStatus === 'pending_verification' : filter === 'unpaid' ? a.paymentStatus === 'unverified' : a.paymentStatus === 'received');
+    const received = (state().appointments || []).filter(a => a.paymentStatus === 'received').reduce((sum,a) => sum + Number(a.deposit || 0),0);
+    const today = iso();
+    const receivedToday = (state().appointments || []).filter(a => a.paymentStatus === 'received' && String(a.updatedAt || a.createdAt || '').startsWith(today)).reduce((sum,a) => sum + Number(a.deposit || 0),0);
     const pending = (state().appointments || []).filter(a => a.paymentStatus === 'pending_verification').length;
     return shell(`<div class="ma-title-row"><h1>Tiền cọc</h1><button class="ma-circle-add" aria-label="Tìm kiếm">${icon('search')}</button></div>
-      <div class="ma-deposit-summary"><div><span>Cọc đã nhận</span><strong>${money(received)}</strong><small>Tổng tiền cọc đã xác nhận</small></div><div><span>Cọc hôm nay</span><strong>—</strong><small>Tiền cọc nhận trong ngày</small></div></div>
+      <div class="ma-deposit-summary"><div><span>Cọc đã nhận</span><strong>${money(received)}</strong><small>Tổng tiền cọc đã xác nhận</small></div><div><span>Cọc hôm nay</span><strong>${money(receivedToday)}</strong><small>Tiền cọc xác nhận trong ngày</small></div></div>
       <a class="ma-settings-link" href="#/admin/payments?status=pending"><span></span><span>Chờ đối soát</span><b class="ma-row-count">${String(pending).padStart(2,'0')}</b>${icon('chevron')}</a>
       <div class="ma-tabs"><a class="ma-tab ${filter === 'pending'?'active':''}" href="#/admin/payments?status=pending">Chờ xác nhận</a><a class="ma-tab ${filter === 'received'?'active':''}" href="#/admin/payments?status=received">Đã nhận</a><a class="ma-tab ${filter === 'unpaid'?'active':''}" href="#/admin/payments?status=unpaid">Chưa nhận</a></div>
       ${rows.length ? rows.map(paymentCard).join('') : '<div class="ma-empty"><h2>Chưa có giao dịch</h2><p>Khoản cọc phù hợp sẽ xuất hiện tại đây.</p></div>'}
@@ -297,13 +305,14 @@
   }
 
   function paymentCard(a) {
-    return `<a class="ma-booking-card" href="#/admin/payments/${encodeURIComponent(a.code)}"><div class="ma-booking-info" style="grid-column:1/3"><b>${esc(a.customer)}</b><small>${esc(service(a.serviceId).name)}</small><small>${dateVi(a.date)} · ${esc(a.time)}</small></div><div class="ma-booking-meta"><strong>${a.deposit ? money(a.deposit) : money(a.total)}</strong><span class="ma-badge ${a.deposit ? 'green':''}">${a.deposit ? 'Đã nhận':'Chờ đối soát'}</span></div>${icon('chevron')}</a>`;
+    const status = a.paymentStatus === 'received' ? 'Đã nhận' : a.paymentStatus === 'pending_verification' ? 'Chờ đối soát' : 'Chưa thanh toán';
+    return `<a class="ma-booking-card" href="#/admin/payments/${encodeURIComponent(a.code)}"><div class="ma-booking-info" style="grid-column:1/3"><b>${esc(a.customer)}</b><small>${esc(service(a.serviceId).name)}</small><small>${dateVi(a.date)} · ${esc(a.time)}</small></div><div class="ma-booking-meta"><strong>${a.paymentStatus === 'received' ? money(a.deposit) : money(a.total)}</strong><span class="ma-badge ${a.paymentStatus === 'received' ? 'green':''}">${status}</span></div>${icon('chevron')}</a>`;
   }
 
   function paymentDetail(code) {
     const a = appointment(code);
     if (!a) return notFound('Không tìm thấy khoản cọc','/admin/payments');
-    const paid = Number(a.deposit || 0) > 0;
+    const paid = a.paymentStatus === 'received';
     return shell(`<div class="ma-title-row"><h1>Chi tiết tiền cọc</h1><span class="ma-badge ${paid ? 'green':''}">${paid ? 'Đã nhận':'Chờ đối soát'}</span></div>
       ${paid ? '<div class="ma-alert success">'+icon('check')+'<span>Đã cập nhật tiền cọc</span></div>' : ''}
       <div class="ma-info-head"><div class="ma-person"><span class="ma-avatar">${icon('user')}</span><div><b>${esc(a.customer)}</b><small>${esc(a.phone)}</small></div></div></div>
@@ -340,7 +349,7 @@
 
   function daySchedule(dates) {
     const current = dates[2], dayIso = iso(current);
-    const dayAppts = (state().appointments || []).filter(a => a.date === dayIso && a.status !== 'cancelled');
+    const dayAppts = (state().appointments || []).filter(a => a.date === dayIso && a.status === 'confirmed');
     return `<div class="ma-week-days">${dates.map((d,i) => `<button class="ma-day ${i === 2 ? 'active':''}"><b>${['CN','T2','T3','T4','T5','T6','T7'][d.getDay()]}</b>${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}</button>`).join('')}</div>
       <div class="ma-title-row" style="margin-top:14px"><h2>${esc(longDate(current))}</h2><span class="ma-badge green">Ngày làm việc</span></div>
       ${!dayAppts.length ? '<div class="ma-note">'+icon('info')+'<span>Chưa có lịch hẹn trong ngày</span></div>' : ''}
@@ -550,7 +559,11 @@
         return;
       }
       if(action==='copy'){ await navigator.clipboard.writeText(el.dataset.value || ''); toast('Đã sao chép'); return; }
-      if(action==='read-all'){ ui.notificationRead=true; refresh(); return; }
+      if(action==='read-all'){
+        await api({action:'markNotificationsRead'});
+        (state().notifications || []).forEach(notification => { notification.status = 'read'; });
+        ui.notificationRead=true; refresh(); toast('Đã đánh dấu các thông báo là đã đọc'); return;
+      }
       if(action==='cancel-sheet'){ cancelSheet(el.dataset.code); return; }
       if(action==='close-sheet'){ $('#modal-root').innerHTML=''; return; }
       if(action==='confirm-cancel'){
