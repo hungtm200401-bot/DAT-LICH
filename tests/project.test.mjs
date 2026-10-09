@@ -133,3 +133,39 @@ test("runs repeatable local migrations without re-adding refund columns", async 
   assert.match(migration, /PRAGMA table_info\(appointments\)/);
   assert.match(migration, /columns\.has\(name\)/);
 });
+
+test("handles GPS permission and address confirmation without inaccurate IP fallback", async () => {
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const api = await readFile(new URL("../app/api/data/route.ts", import.meta.url), "utf8");
+  assert.match(source, /Quyền định vị đang bị chặn/);
+  assert.match(source, /resetLocationConfirmation/);
+  assert.match(source, /enableHighAccuracy: false/);
+  assert.doesNotMatch(source, /api\(\{ action: 'reverseGeocode' \}\)/);
+  assert.match(api, /Tọa độ GPS không hợp lệ/);
+  assert.doesNotMatch(api, /reverse-geocode-client\?localityLanguage=vi/);
+});
+
+test("uses the complete two-level Vietnam administrative directory with searchable legacy districts", async () => {
+  const current = JSON.parse(await readFile(new URL("../public/data/vietnam-administrative-latest.json", import.meta.url), "utf8"));
+  const legacy = JSON.parse(await readFile(new URL("../public/data/vietnam-legacy-districts.json", import.meta.url), "utf8"));
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const wards = current.flatMap(province => province.wards || []);
+  const districts = legacy.flatMap(province => province.districts || []);
+
+  assert.equal(current.length, 34);
+  assert.equal(wards.length, 3321);
+  assert.equal(districts.length, 696);
+  assert.ok(wards.every(ward => /^(Phường|Xã|Đặc khu)\s/.test(ward.name)));
+  assert.match(source, /data-location-search="\$\{field\}"/);
+  assert.match(source, /locationSearchKey/);
+  assert.match(source, /Quận \/ huyện cũ \(nếu có\)/);
+  assert.match(source, /Phường \/ xã \/ đặc khu hiện hành/);
+});
+
+test("preserves form focus and scroll when background data re-renders the same page", async () => {
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  assert.match(source, /const routeChanged = path !== lastRenderedPath/);
+  assert.match(source, /field\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(source, /window\.scrollTo\(previousScroll\.x, previousScroll\.y\)/);
+  assert.match(source, /if \(routeChanged\) \{\s*window\.scrollTo\(0, 0\)/s);
+});

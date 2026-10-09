@@ -122,10 +122,11 @@
       time: defaultBookingTime(),
       locationType: 'client',
       address: '',
-      city: 'Hà Nội',
+      city: 'Thành phố Hà Nội',
       district: '',
       ward: '',
       detectedAddress: '',
+      locationError: '',
       isDetectingLocation: false,
       travelFee: 50000,
       name: '',
@@ -198,6 +199,18 @@
       localStorage.setItem('hoanDepositSyncTrigger', String(Date.now()));
     } catch { /* storage may be blocked in iframe / test sandbox */ }
     if (message) toast(message);
+  };
+  const resetLocationConfirmation = () => {
+    state.booking.detectedAddress = '';
+    state.booking.locationError = '';
+    const card = document.querySelector('[data-action="detect-location"]');
+    if (card) {
+      card.classList.remove('is-detected', 'has-error');
+      const tag = card.querySelector('.mockup-gps-tag');
+      if (tag) { tag.className = 'mockup-gps-tag'; tag.textContent = 'NHẬP THỦ CÔNG'; }
+      const description = card.querySelector('.mockup-option-desc');
+      if (description) description.textContent = 'Địa chỉ đã được chỉnh sửa thủ công. Bạn có thể bấm lại để định vị bằng GPS.';
+    }
   };
   const currentToday = localIso();
   if (!state.booking.date || state.booking.date < currentToday) {
@@ -690,223 +703,197 @@
     return bookingShell(2,`<h1 class="ct-title">Chọn ngày và giờ</h1><p class="ct-subtitle">Thời gian hiển thị theo giờ Việt Nam.</p><section class="ct-time-layout">${calendarMarkup()}<div><h2>Giờ bắt đầu · ${dateLabel()}</h2><div class="ct-time-slots">${times.map(t=>{const toMinutes=value=>Number(value.slice(0,2))*60+Number(value.slice(3));const start=toMinutes(t),duration=service().duration;const booked=state.appointments.some(a=>a.date===state.booking.date&&activeAppointment(a)&&start<toMinutes(a.time)+(service(a.serviceId)?.duration||90)&&start+duration>toMinutes(a.time));const no=slotUnavailable(state.booking.date,t)||!state.settings.scheduleOpen;return `<button class="btn ${state.booking.time===t&&!no?'btn-dark':''}${no?' time-slot-unavailable':''}" data-action="time-select" data-time="${t}" title="${booked?'Đã có khách đặt khung giờ này':no?'Khung giờ không khả dụng':'Chọn khung giờ '+t}" aria-label="${t}${booked?' - Đã có khách đặt':''}" ${no?'disabled':''}>${t}${booked?'<small>Đã có khách</small>':''}</button>`}).join('')}</div><p>${icon('clock')} Thời lượng: ${service().duration} phút</p><p class="muted">Giờ đã có lịch hoặc được chặn sẽ không thể chọn.</p></div></section>`,'/booking/location','TIẾP TỤC · ĐỊA ĐIỂM');
   }
 
-  const VIETNAM_LOCATIONS = {
-    provinces: [
-      'Hà Nội', 'TP. Hồ Chí Minh', 'Đà Nẵng', 'Hải Phòng', 'Cần Thơ',
-      'An Giang', 'Bà Rịa - Vũng Tàu', 'Bắc Giang', 'Bắc Kạn', 'Bạc Liêu',
-      'Bắc Ninh', 'Bến Tre', 'Bình Định', 'Bình Dương', 'Bình Phước',
-      'Bình Thuận', 'Cà Mau', 'Cao Bằng', 'Đắk Lắk', 'Đắk Nông',
-      'Điện Biên', 'Đồng Nai', 'Đồng Tháp', 'Gia Lai', 'Hà Giang',
-      'Hà Nam', 'Hà Tĩnh', 'Hải Dương', 'Hậu Giang', 'Hòa Bình',
-      'Hưng Yên', 'Khánh Hòa', 'Kiên Giang', 'Kon Tum', 'Lai Châu',
-      'Lâm Đồng', 'Lạng Sơn', 'Lào Cai', 'Long An', 'Nam Định',
-      'Nghệ An', 'Ninh Bình', 'Ninh Thuận', 'Phú Thọ', 'Phú Yên',
-      'Quảng Bình', 'Quảng Nam', 'Quảng Ngãi', 'Quảng Ninh', 'Quảng Trị',
-      'Sóc Trăng', 'Sơn La', 'Tây Ninh', 'Thái Bình', 'Thái Nguyên',
-      'Thanh Hóa', 'Thừa Thiên Huế', 'Tiền Giang', 'Trà Vinh', 'Tuyên Quang',
-      'Vĩnh Long', 'Vĩnh Phúc', 'Yên Bái'
-    ],
-    districts: {
-      'Hà Nội': [
-        'Nam Từ Liêm', 'Ba Đình', 'Hoàn Kiếm', 'Cầu Giấy', 'Đống Đa', 'Hai Bà Trưng',
-        'Tây Hồ', 'Thanh Xuân', 'Bắc Từ Liêm', 'Hà Đông', 'Long Biên', 'Hoàng Mai',
-        'Thị xã Sơn Tây', 'Huyện Ba Vì', 'Huyện Chương Mỹ', 'Huyện Đan Phượng', 'Huyện Đông Anh',
-        'Huyện Gia Lâm', 'Huyện Hoài Đức', 'Huyện Mê Linh', 'Huyện Mỹ Đức', 'Huyện Phú Xuyên',
-        'Huyện Phúc Thọ', 'Huyện Quốc Oai', 'Huyện Sóc Sơn', 'Huyện Thạch Thất', 'Huyện Thanh Oai',
-        'Huyện Thanh Trì', 'Huyện Thường Tín', 'Huyện Ứng Hòa'
-      ],
-      'TP. Hồ Chí Minh': [
-        'Quận 1', 'Quận 3', 'Quận 4', 'Quận 5', 'Quận 6', 'Quận 7', 'Quận 8',
-        'Quận 10', 'Quận 11', 'Quận 12', 'TP. Thủ Đức', 'Quận Bình Thạnh', 'Quận Gò Vấp',
-        'Quận Phú Nhuận', 'Quận Tân Bình', 'Quận Tân Phú', 'Quận Bình Tân',
-        'Huyện Bình Chánh', 'Huyện Hóc Môn', 'Huyện Nhà Bè', 'Huyện Củ Chi', 'Huyện Cần Giờ'
-      ],
-      'Đà Nẵng': [
-        'Quận Hải Châu', 'Quận Thanh Khê', 'Quận Sơn Trà', 'Quận Ngũ Hành Sơn',
-        'Quận Liên Chiểu', 'Quận Cẩm Lệ', 'Huyện Hòa Vang', 'Huyện Hoàng Sa'
-      ],
-      'Hải Phòng': [
-        'Quận Hồng Bàng', 'Quận Ngô Quyền', 'Quận Lê Chân', 'Quận Hải An',
-        'Quận Kiến An', 'Quận Đồ Sơn', 'Quận Dương Kinh', 'Huyện Thủy Nguyên',
-        'Huyện An Dương', 'Huyện An Lão', 'Huyện Kiến Thụy', 'Huyện Tiên Lãng',
-        'Huyện Vĩnh Bảo', 'Huyện Cát Hải', 'Huyện Bạch Long Vĩ'
-      ],
-      'Cần Thơ': [
-        'Quận Ninh Kiều', 'Quận Bình Thủy', 'Quận Cái Răng', 'Quận Ô Môn',
-        'Quận Thốt Nốt', 'Huyện Phong Điền', 'Huyện Cờ Đỏ', 'Huyện Thới Lai', 'Huyện Vĩnh Thạnh'
-      ],
-      'Bình Dương': ['TP. Thủ Dầu Một', 'TP. Thuận An', 'TP. Dĩ An', 'TP. Tân Uyên', 'TP. Bến Cát', 'Huyện Bàu Bàng', 'Huyện Bắc Tân Uyên', 'Huyện Dầu Tiếng', 'Huyện Phú Giáo'],
-      'Đồng Nai': ['TP. Biên Hòa', 'TP. Long Khánh', 'Huyện Long Thành', 'Huyện Nhơn Trạch', 'Huyện Trảng Bom', 'Huyện Thống Nhất', 'Huyện Cẩm Mỹ', 'Huyện Vĩnh Cửu', 'Huyện Định Quán', 'Huyện Tân Phú', 'Huyện Xuân Lộc'],
-      'Quảng Ninh': ['TP. Hạ Long', 'TP. Cẩm Phả', 'TP. Uông Bí', 'TP. Móng Cái', 'Thị xã Đông Triều', 'Thị xã Quảng Yên', 'Huyện Vân Đồn', 'Huyện Tiên Yên', 'Huyện Hải Hà', 'Huyện Đầm Hà', 'Huyện Ba Chẽ', 'Huyện Bình Liêu', 'Huyện Cô Tô'],
-      'Khánh Hòa': ['TP. Nha Trang', 'TP. Cam Ranh', 'Thị xã Ninh Hòa', 'Huyện Cam Lâm', 'Huyện Diên Khánh', 'Huyện Vạn Ninh', 'Huyện Khánh Vĩnh', 'Huyện Khánh Sơn', 'Huyện Trường Sa'],
-      'Bà Rịa - Vũng Tàu': ['TP. Vũng Tàu', 'TP. Bà Rịa', 'Thị xã Phú Mỹ', 'Huyện Châu Đức', 'Huyện Xuyên Mộc', 'Huyện Long Điền', 'Huyện Đất Đỏ', 'Huyện Côn Đảo'],
-      'Lâm Đồng': ['TP. Đà Lạt', 'TP. Bảo Lộc', 'Huyện Đức Trọng', 'Huyện Đơn Dương', 'Huyện Lạc Dương', 'Huyện Di Linh', 'Huyện Bảo Lâm', 'Huyện Lâm Hà', 'Huyện Đạ Huoai', 'Huyện Đạ Tẻh', 'Huyện Đam Rông'],
-      'Thừa Thiên Huế': ['TP. Huế', 'Thị xã Hương Thủy', 'Thị xã Hương Trà', 'Huyện Phong Điền', 'Huyện Quảng Điền', 'Huyện Phú Vang', 'Huyện Phú Lộc', 'Huyện A Lưới', 'Huyện Nam Đông'],
-      'Bắc Ninh': ['TP. Bắc Ninh', 'TP. Từ Sơn', 'Thị xã Quế Võ', 'Thị xã Thuận Thành', 'Huyện Tiên Du', 'Huyện Yên Phong', 'Huyện Gia Bình', 'Huyện Lương Tài'],
-      'Hải Dương': ['TP. Hải Dương', 'TP. Chí Linh', 'Thị xã Kinh Môn', 'Huyện Bình Giang', 'Huyện Cẩm Giàng', 'Huyện Gia Lộc', 'Huyện Kim Thành', 'Huyện Nam Sách', 'Huyện Ninh Giang', 'Huyện Thanh Hà', 'Huyện Thanh Miện', 'Huyện Tứ Kỳ'],
-      'Hưng Yên': ['TP. Hưng Yên', 'Thị xã Mỹ Hào', 'Huyện Văn Giang', 'Huyện Văn Lâm', 'Huyện Yên Mỹ', 'Huyện Khoái Châu', 'Huyện Kim Động', 'Huyện Ân Thi', 'Huyện Phù Cừ', 'Huyện Tiên Lữ'],
-      'Vĩnh Phúc': ['TP. Vĩnh Yên', 'TP. Phúc Yên', 'Huyện Bình Xuyên', 'Huyện Vĩnh Tường', 'Huyện Yên Lạc', 'Huyện Tam Dương', 'Huyện Tam Đảo', 'Huyện Lập Thạch', 'Huyện Sông Lô'],
-      'Nam Định': ['TP. Nam Định', 'Huyện Giao Thủy', 'Huyện Hải Hậu', 'Huyện Mỹ Lộc', 'Huyện Nam Trực', 'Huyện Nghĩa Hưng', 'Huyện Trực Ninh', 'Huyện Vụ Bản', 'Huyện Xuân Trường', 'Huyện Ý Yên'],
-      'Thái Bình': ['TP. Thái Bình', 'Huyện Đông Hưng', 'Huyện Hưng Hà', 'Huyện Kiến Xương', 'Huyện Quỳnh Phụ', 'Huyện Thái Thụy', 'Huyện Tiền Hải', 'Huyện Vũ Thư'],
-      'Ninh Bình': ['TP. Ninh Bình', 'TP. Tam Điệp', 'Huyện Gia Viễn', 'Huyện Hoa Lư', 'Huyện Kim Sơn', 'Huyện Nho Quan', 'Huyện Yên Khánh', 'Huyện Yên Mô'],
-      'Thanh Hóa': ['TP. Thanh Hóa', 'TP. Sầm Sơn', 'Thị xã Bỉm Sơn', 'Thị xã Nghi Sơn', 'Huyện Đông Sơn', 'Huyện Hoằng Hóa', 'Huyện Hậu Lộc', 'Huyện Nga Sơn', 'Huyện Quảng Xương', 'Huyện Thọ Xuân', 'Huyện Triệu Sơn', 'Huyện Tĩnh Gia', 'Huyện Yên Định'],
-      'Nghệ An': ['TP. Vinh', 'Thị xã Cửa Lò', 'Thị xã Hoàng Mai', 'Thị xã Thái Hòa', 'Huyện Diễn Châu', 'Huyện Đô Lương', 'Huyện Hưng Nguyên', 'Huyện Nam Đàn', 'Huyện Nghi Lộc', 'Huyện Quỳnh Lưu', 'Huyện Thanh Chương', 'Huyện Yên Thành'],
-      'Hà Tĩnh': ['TP. Hà Tĩnh', 'Thị xã Hồng Lĩnh', 'Thị xã Kỳ Anh', 'Huyện Cẩm Xuyên', 'Huyện Can Lộc', 'Huyện Đức Thọ', 'Huyện Hương Khê', 'Huyện Hương Sơn', 'Huyện Nghi Xuân', 'Huyện Thạch Hà'],
-      'Quảng Bình': ['TP. Đồng Hới', 'Thị xã Ba Đồn', 'Huyện Bố Trạch', 'Huyện Lệ Thủy', 'Huyện Quảng Ninh', 'Huyện Quảng Trạch', 'Huyện Tuyên Hóa'],
-      'Quảng Trị': ['TP. Đông Hà', 'Thị xã Quảng Trị', 'Huyện Cam Lộ', 'Huyện Gio Linh', 'Huyện Hải Lăng', 'Huyện Hướng Hóa', 'Huyện Triệu Phong', 'Huyện Vĩnh Linh'],
-      'Quảng Nam': ['TP. Tam Kỳ', 'TP. Hội An', 'Thị xã Điện Bàn', 'Huyện Đại Lộc', 'Huyện Duy Xuyên', 'Huyện Núi Thành', 'Huyện Thăng Bình', 'Huyện Quế Sơn'],
-      'Quảng Ngãi': ['TP. Quảng Ngãi', 'Thị xã Đức Phổ', 'Huyện Bình Sơn', 'Huyện Lý Sơn', 'Huyện Mộ Đức', 'Huyện Tư Nghĩa'],
-      'Bình Định': ['TP. Quy Nhơn', 'Thị xã An Nhơn', 'Thị xã Hoài Nhơn', 'Huyện Phù Cát', 'Huyện Phù Mỹ', 'Huyện Tây Sơn', 'Huyện Tuy Phước'],
-      'Phú Yên': ['TP. Tuy Hòa', 'Thị xã Sông Cầu', 'Thị xã Đông Hòa', 'Huyện Tuy An', 'Huyện Tây Hòa', 'Huyện Phú Hòa'],
-      'Ninh Thuận': ['TP. Phan Rang - Tháp Chàm', 'Huyện Ninh Hải', 'Huyện Ninh Phước', 'Huyện Ninh Sơn', 'Huyện Thuận Bắc', 'Huyện Thuận Nam'],
-      'Bình Thuận': ['TP. Phan Thiết', 'Thị xã La Gi', 'Huyện Hàm Thuận Bắc', 'Huyện Hàm Thuận Nam', 'Huyện Tuy Phong', 'Huyện Bắc Bình', 'Huyện Phú Quý'],
-      'Tây Ninh': ['TP. Tây Ninh', 'Thị xã Hòa Thành', 'Thị xã Trảng Bàng', 'Huyện Gò Dầu', 'Huyện Bến Cầu', 'Huyện Châu Thành', 'Huyện Dương Minh Châu'],
-      'Bình Phước': ['TP. Đồng Xoài', 'Thị xã Bình Long', 'Thị xã Phước Long', 'Thị xã Chơn Thành', 'Huyện Đồng Phú', 'Huyện Hớn Quản', 'Huyện Lộc Ninh'],
-      'Long An': ['TP. Tân An', 'Thị xã Kiến Tường', 'Huyện Bến Lức', 'Huyện Cần Đước', 'Huyện Cần Giuộc', 'Huyện Đức Hòa', 'Huyện Châu Thành', 'Huyện Thủ Thừa'],
-      'Tiền Giang': ['TP. Mỹ Tho', 'Thị xã Gò Công', 'Thị xã Cai Lậy', 'Huyện Châu Thành', 'Huyện Chợ Gạo', 'Huyện Cái Bè', 'Huyện Gò Công Đông'],
-      'Bến Tre': ['TP. Bến Tre', 'Huyện Châu Thành', 'Huyện Ba Tri', 'Huyện Bình Đại', 'Huyện Giồng Trôm', 'Huyện Mỏ Cày Nam', 'Huyện Thạnh Phú'],
-      'Trà Vinh': ['TP. Trà Vinh', 'Thị xã Duyên Hải', 'Huyện Châu Thành', 'Huyện Càng Long', 'Huyện Cầu Kè', 'Huyện Tiểu Cần'],
-      'Vĩnh Long': ['TP. Vĩnh Long', 'Thị xã Bình Minh', 'Huyện Long Hồ', 'Huyện Mang Thít', 'Huyện Tam Bình', 'Huyện Trà Ôn'],
-      'Đồng Tháp': ['TP. Cao Lãnh', 'TP. Sa Đéc', 'TP. Hồng Ngự', 'Huyện Cao Lãnh', 'Huyện Châu Thành', 'Huyện Lấp Vò', 'Huyện Lai Vung', 'Huyện Tháp Mười'],
-      'An Giang': ['TP. Long Xuyên', 'TP. Châu Đốc', 'Thị xã Tân Châu', 'Thị xã Tịnh Biên', 'Huyện Châu Phú', 'Huyện Châu Thành', 'Huyện Chợ Mới', 'Huyện Phú Tân', 'Huyện Thoại Sơn'],
-      'Kiên Giang': ['TP. Rạch Giá', 'TP. Hà Tiên', 'TP. Phú Quốc', 'Huyện Châu Thành', 'Huyện Kiên Lương', 'Huyện Hòn Đất', 'Huyện Tân Hiệp', 'Huyện Giồng Riềng'],
-      'Hậu Giang': ['TP. Vị Thanh', 'TP. Ngã Bảy', 'Thị xã Long Mỹ', 'Huyện Châu Thành', 'Huyện Phụng Hiệp', 'Huyện Vị Thủy'],
-      'Sóc Trăng': ['TP. Sóc Trăng', 'Thị xã Ngã Năm', 'Thị xã Vĩnh Châu', 'Huyện Châu Thành', 'Huyện Kế Sách', 'Huyện Mỹ Xuyên', 'Huyện Trần Đề'],
-      'Bạc Liêu': ['TP. Bạc Liêu', 'Thị xã Giá Rai', 'Huyện Vĩnh Lợi', 'Huyện Hòa Bình', 'Huyện Phước Long', 'Huyện Đông Hải'],
-      'Cà Mau': ['TP. Cà Mau', 'Huyện Năm Căn', 'Huyện Đầm Dơi', 'Huyện Trần Văn Thời', 'Huyện Cái Nước', 'Huyện U Minh', 'Huyện Phú Tân'],
-      'Gia Lai': ['TP. Pleiku', 'Thị xã An Khê', 'Thị xã Ayun Pa', 'Huyện Chư Sê', 'Huyện Đak Đoa', 'Huyện Ia Grai', 'Huyện Mang Yang'],
-      'Kon Tum': ['TP. Kon Tum', 'Huyện Đắk Hà', 'Huyện Ngọc Hồi', 'Huyện Kon Plông', 'Huyện Sa Thầy'],
-      'Đắk Lắk': ['TP. Buôn Ma Thuột', 'Thị xã Buôn Hồ', 'Huyện Cư M\'gar', 'Huyện Krông Pắc', 'Huyện Ea Kar', 'Huyện Buôn Đôn'],
-      'Đắk Nông': ['TP. Gia Nghĩa', 'Huyện Cư Jút', 'Huyện Đắk Mil', 'Huyện Đắk R\'lấp', 'Huyện Krông Nô'],
-      'Thái Nguyên': ['TP. Thái Nguyên', 'TP. Sông Công', 'TP. Phổ Yên', 'Huyện Đại Từ', 'Huyện Đồng Hỷ', 'Huyện Phú Bình'],
-      'Phú Thọ': ['TP. Việt Trì', 'Thị xã Phú Thọ', 'Huyện Lâm Thao', 'Huyện Phù Ninh', 'Huyện Thanh Ba', 'Huyện Tam Nông'],
-      'Bắc Giang': ['TP. Bắc Giang', 'Thị xã Việt Yên', 'Huyện Hiệp Hòa', 'Huyện Lạng Giang', 'Huyện Lục Nam', 'Huyện Tân Yên', 'Huyện Yên Dũng'],
-      'Hòa Bình': ['TP. Hòa Bình', 'Huyện Lương Sơn', 'Huyện Kim Bôi', 'Huyện Mai Châu', 'Huyện Cao Phong', 'Huyện Tân Lạc'],
-      'Sơn La': ['TP. Sơn La', 'Huyện Mộc Châu', 'Huyện Mai Sơn', 'Huyện Thuận Châu', 'Huyện Mường La', 'Huyện Yên Châu'],
-      'Điện Biên': ['TP. Điện Biên Phủ', 'Thị xã Mường Lay', 'Huyện Điện Biên', 'Huyện Tuần Giáo', 'Huyện Mường Ảng'],
-      'Lai Châu': ['TP. Lai Châu', 'Huyện Tam Đường', 'Huyện Phong Thổ', 'Huyện Tân Uyên', 'Huyện Than Uyên'],
-      'Lào Cai': ['TP. Lào Cai', 'Thị xã Sa Pa', 'Huyện Bát Xát', 'Huyện Bảo Thắng', 'Huyện Bắc Hà', 'Huyện Văn Bàn'],
-      'Yên Bái': ['TP. Yên Bái', 'Thị xã Nghĩa Lộ', 'Huyện Trấn Yên', 'Huyện Văn Yên', 'Huyện Lục Yên', 'Huyện Yên Bình'],
-      'Hà Giang': ['TP. Hà Giang', 'Huyện Vị Xuyên', 'Huyện Bắc Quang', 'Huyện Đồng Văn', 'Huyện Mèo Vạc', 'Huyện Hoàng Su Phì'],
-      'Cao Bằng': ['TP. Cao Bằng', 'Huyện Trùng Khánh', 'Huyện Quảng Hòa', 'Huyện Hòa An', 'Huyện Hà Quảng'],
-      'Bắc Kạn': ['TP. Bắc Kạn', 'Huyện Ba Bể', 'Huyện Chợ Đồn', 'Huyện Bạch Thông', 'Huyện Chợ Mới'],
-      'Lạng Sơn': ['TP. Lạng Sơn', 'Huyện Cao Lộc', 'Huyện Chi Lăng', 'Huyện Hữu Lũng', 'Huyện Lộc Bình'],
-      'Tuyên Quang': ['TP. Tuyên Quang', 'Huyện Yên Sơn', 'Huyện Sơn Dương', 'Huyện Hàm Yên', 'Huyện Chiêm Hóa'],
-      'Hà Nam': ['TP. Phủ Lý', 'Thị xã Duy Tiên', 'Huyện Kim Bảng', 'Huyện Thanh Liêm', 'Huyện Lý Nhân', 'Huyện Bình Lục']
-    },
-    wards: {
-      'Nam Từ Liêm': ['Phường Phú Đô', 'Phường Mễ Trì', 'Phường Mỹ Đình 1', 'Phường Mỹ Đình 2', 'Phường Cầu Diễn', 'Phường Trung Văn', 'Phường Đại Mỗ', 'Phường Tây Mỗ', 'Phường Xuân Phương', 'Phường Phương Canh'],
-      'Bắc Từ Liêm': ['Phường Cổ Nhuế 1', 'Phường Cổ Nhuế 2', 'Phường Đông Ngạc', 'Phường Đức Thắng', 'Phường Liên Mạc', 'Phường Minh Khai', 'Phường Phú Diễn', 'Phường Phúc Diễn', 'Phường Tây Tựu', 'Phường Thượng Cát', 'Phường Thụy Phương', 'Phường Xuân Đỉnh', 'Phường Xuân Tảo'],
-      'Cầu Giấy': ['Phường Dịch Vọng', 'Phường Dịch Vọng Hậu', 'Phường Mai Dịch', 'Phường Nghĩa Đô', 'Phường Nghĩa Tân', 'Phường Quan Hoa', 'Phường Trung Hòa', 'Phường Yên Hòa'],
-      'Ba Đình': ['Phường Cống Vị', 'Phường Điện Biên', 'Phường Đội Cấn', 'Phường Giảng Võ', 'Phường Kim Mã', 'Phường Liễu Giai', 'Phường Ngọc Hà', 'Phường Ngọc Khánh', 'Phường Nguyễn Trung Trực', 'Phường Phúc Xá', 'Phường Quán Thánh', 'Phường Thành Công', 'Phường Trúc Bạch', 'Phường Vĩnh Phúc'],
-      'Hoàn Kiếm': ['Phường Hàng Bạc', 'Phường Hàng Đào', 'Phường Hàng Bông', 'Phường Hàng Gai', 'Phường Hàng Mã', 'Phường Tràng Tiền', 'Phường Lý Thái Tổ', 'Phường Cửa Đông', 'Phường Cửa Nam', 'Phường Đồng Xuân', 'Phường Phan Chu Trinh', 'Phường Phúc Tân', 'Phường Trần Hưng Đạo', 'Phường Hàng Trống', 'Phường Hàng Buồm', 'Phường Hàng Bồ', 'Phường Chương Dương'],
-      'Đống Đa': ['Phường Cát Linh', 'Phường Hàng Bột', 'Phường Khâm Thiên', 'Phường Khương Thượng', 'Phường Kim Liên', 'Phường Láng Hạ', 'Phường Láng Thượng', 'Phường Nam Đồng', 'Phường Ngã Tư Sở', 'Phường Ô Chợ Dừa', 'Phường Phương Mai', 'Phường Quang Trung', 'Phường Quốc Tử Giám', 'Phường Thịnh Quang', 'Phường Trung Liệt', 'Phường Trung Tự', 'Phường Văn Miếu', 'Phường Phương Liên', 'Phường Thổ Quan', 'Phường Văn Chương'],
-      'Hai Bà Trưng': ['Phường Bạch Đằng', 'Phường Bách Khoa', 'Phường Bạch Mai', 'Phường Cầu Dền', 'Phường Đống Mác', 'Phường Đồng Nhân', 'Phường Đồng Tâm', 'Phường Lê Đại Hành', 'Phường Minh Khai', 'Phường Nguyễn Du', 'Phường Phạm Đình Hổ', 'Phường Phố Huế', 'Phường Quỳnh Lôi', 'Phường Quỳnh Mai', 'Phường Thanh Lương', 'Phường Thanh Nhàn', 'Phường Trương Định', 'Phường Vĩnh Tuy'],
-      'Thanh Xuân': ['Phường Hạ Đình', 'Phường Khương Đình', 'Phường Khương Mai', 'Phường Khương Trung', 'Phường Kim Giang', 'Phường Nhân Chính', 'Phường Phương Liệt', 'Phường Thanh Xuân Bắc', 'Phường Thanh Xuân Nam', 'Phường Thanh Xuân Trung', 'Phường Thượng Đình'],
-      'Tây Hồ': ['Phường Bưởi', 'Phường Nhật Tân', 'Phường Phú Thượng', 'Phường Quảng An', 'Phường Thụy Khuê', 'Phường Tứ Liên', 'Phường Xuân La', 'Phường Yên Phụ'],
-      'Hoàng Mai': ['Phường Đại Kim', 'Phường Định Công', 'Phường Giáp Bát', 'Phường Hoàng Liệt', 'Phường Hoàng Văn Thụ', 'Phường Lĩnh Nam', 'Phường Mai Động', 'Phường Tân Mai', 'Phường Thanh Trì', 'Phường Thịnh Liệt', 'Phường Trần Phú', 'Phường Tương Mai', 'Phường Vĩnh Hưng', 'Phường Yên Sở'],
-      'Hà Đông': ['Phường Biên Giang', 'Phường Đồng Mai', 'Phường Dương Nội', 'Phường Hà Cầu', 'Phường Kiến Hưng', 'Phường La Khê', 'Phường Mộ Lao', 'Phường Nguyễn Trãi', 'Phường Phú La', 'Phường Phúc La', 'Phường Quang Trung', 'Phường Vạn Phúc', 'Phường Văn Quán', 'Phường Yên Nghĩa', 'Phường Yết Kiêu'],
-      'Long Biên': ['Phường Bồ Đề', 'Phường Cự Khối', 'Phường Đức Giang', 'Phường Gia Thụy', 'Phường Giang Biên', 'Phường Long Biên', 'Phường Ngọc Lâm', 'Phường Ngọc Thụy', 'Phường Phúc Đồng', 'Phường Phúc Lợi', 'Phường Sài Đồng', 'Phường Thạch Bàn', 'Phường Thượng Thanh', 'Phường Việt Hưng'],
-      'Thị xã Sơn Tây': ['Phường Lê Lợi', 'Phường Ngô Quyền', 'Phường Phú Thịnh', 'Phường Quang Trung', 'Phường Sơn Lộc', 'Phường Trung Hưng', 'Phường Trung Sơn Trầm', 'Phường Viên Sơn', 'Phường Xuân Khanh', 'Xã Đường Lâm', 'Xã Sơn Đông', 'Xã Cổ Đông'],
-      'Huyện Thanh Trì': ['Thị trấn Văn Điển', 'Xã Tân Triều', 'Xã Thanh Liệt', 'Xã Tả Thanh Oai', 'Xã Vĩnh Quỳnh', 'Xã Tam Hiệp', 'Xã Tứ Hiệp', 'Xã Ngũ Hiệp', 'Xã Ngọc Hồi', 'Xã Đại Áng'],
-      'Huyện Gia Lâm': ['Thị trấn Trâu Quỳ', 'Thị trấn Yên Viên', 'Xã Bát Tràng', 'Xã Đa Tốn', 'Xã Kiêu Kỵ', 'Xã Ninh Hiệp', 'Xã Phù Đổng', 'Xã Cổ Bi', 'Xã Đặng Xá'],
-      'Huyện Đông Anh': ['Thị trấn Đông Anh', 'Xã Kim Chung', 'Xã Hải Bối', 'Xã Vĩnh Ngọc', 'Xã Cổ Loa', 'Xã Tiên Dương', 'Xã Uy Nỗ', 'Xã Bắc Hồng', 'Xã Nam Hồng'],
-      'Huyện Hoài Đức': ['Thị trấn Trạm Trôi', 'Xã An Khánh', 'Xã An Thượng', 'Xã Vân Canh', 'Xã Di Trạch', 'Xã Kim Chung', 'Xã La Phù', 'Xã Đức Giang', 'Xã Lại Yên'],
-      'Huyện Đan Phượng': ['Thị trấn Phùng', 'Xã Tân Lập', 'Xã Tân Hội', 'Xã Đan Phượng', 'Xã Song Phượng', 'Xã Đồng Tháp'],
-      'Quận 1': ['Phường Bến Nghé', 'Phường Bến Thành', 'Phường Cầu Kho', 'Phường Cầu Ông Lãnh', 'Phường Cô Giang', 'Phường Đa Kao', 'Phường Nguyễn Cư Trinh', 'Phường Nguyễn Thái Bình', 'Phường Phạm Ngũ Lão', 'Phường Tân Định'],
-      'Quận 3': ['Phường Võ Thị Sáu', 'Phường 1', 'Phường 2', 'Phường 3', 'Phường 4', 'Phường 5', 'Phường 9', 'Phường 10', 'Phường 11', 'Phường 12', 'Phường 14'],
-      'Quận 4': ['Phường 1', 'Phường 2', 'Phường 3', 'Phường 4', 'Phường 6', 'Phường 8', 'Phường 9', 'Phường 10', 'Phường 13', 'Phường 14', 'Phường 15', 'Phường 16', 'Phường 18'],
-      'Quận 5': ['Phường 1', 'Phường 2', 'Phường 3', 'Phường 4', 'Phường 5', 'Phường 6', 'Phường 7', 'Phường 8', 'Phường 9', 'Phường 10', 'Phường 11', 'Phường 12', 'Phường 13', 'Phường 14'],
-      'Quận 6': ['Phường 1', 'Phường 2', 'Phường 3', 'Phường 4', 'Phường 5', 'Phường 6', 'Phường 7', 'Phường 8', 'Phường 9', 'Phường 10', 'Phường 11', 'Phường 12', 'Phường 13', 'Phường 14'],
-      'Quận 7': ['Phường Tân Phong', 'Phường Tân Phú', 'Phường Tân Thuận Đông', 'Phường Tân Thuận Tây', 'Phường Tân Kiểng', 'Phường Tân Quy', 'Phường Bình Thuận', 'Phường Phú Thuận', 'Phường Phú Mỹ'],
-      'Quận 8': ['Phường 1', 'Phường 2', 'Phường 3', 'Phường 4', 'Phường 5', 'Phường 6', 'Phường 7', 'Phường 8', 'Phường 9', 'Phường 10', 'Phường 11', 'Phường 12', 'Phường 13', 'Phường 14', 'Phường 15', 'Phường 16'],
-      'Quận 10': ['Phường 1', 'Phường 2', 'Phường 4', 'Phường 5', 'Phường 6', 'Phường 7', 'Phường 8', 'Phường 9', 'Phường 10', 'Phường 11', 'Phường 12', 'Phường 13', 'Phường 14', 'Phường 15'],
-      'Quận 11': ['Phường 1', 'Phường 2', 'Phường 3', 'Phường 4', 'Phường 5', 'Phường 6', 'Phường 7', 'Phường 8', 'Phường 9', 'Phường 10', 'Phường 11', 'Phường 12', 'Phường 13', 'Phường 14', 'Phường 15', 'Phường 16'],
-      'Quận 12': ['Phường An Phú Đông', 'Phường Đông Hưng Thuận', 'Phường Hiệp Thành', 'Phường Tân Chánh Hiệp', 'Phường Tân Hưng Thuận', 'Phường Tân Thới Hiệp', 'Phường Tân Thới Nhất', 'Phường Thạnh Lộc', 'Phường Thạnh Xuân', 'Phường Thới An', 'Phường Trung Mỹ Tây'],
-      'TP. Thủ Đức': ['Phường Thảo Điền', 'Phường An Phú', 'Phường Thủ Thiêm', 'Phường An Khánh', 'Phường Bình Trưng Đông', 'Phường Bình Trưng Tây', 'Phường Hiệp Phú', 'Phường Tăng Nhơn Phú A', 'Phường Phước Long B', 'Phường Linh Trung', 'Phường Linh Chiểu', 'Phường Hiệp Bình Chánh', 'Phường Hiệp Bình Phước', 'Phường Tam Bình', 'Phường Tam Phú', 'Phường Trường Thọ'],
-      'Quận Bình Thạnh': ['Phường 1', 'Phường 2', 'Phường 3', 'Phường 5', 'Phường 6', 'Phường 7', 'Phường 11', 'Phường 12', 'Phường 13', 'Phường 14', 'Phường 15', 'Phường 17', 'Phường 19', 'Phường 21', 'Phường 22', 'Phường 24', 'Phường 25', 'Phường 26', 'Phường 27', 'Phường 28'],
-      'Quận Gò Vấp': ['Phường 1', 'Phường 3', 'Phường 4', 'Phường 5', 'Phường 6', 'Phường 7', 'Phường 8', 'Phường 9', 'Phường 10', 'Phường 11', 'Phường 12', 'Phường 13', 'Phường 14', 'Phường 15', 'Phường 16', 'Phường 17'],
-      'Quận Phú Nhuận': ['Phường 1', 'Phường 2', 'Phường 3', 'Phường 4', 'Phường 5', 'Phường 7', 'Phường 8', 'Phường 9', 'Phường 10', 'Phường 11', 'Phường 13', 'Phường 15', 'Phường 17'],
-      'Quận Tân Bình': ['Phường 1', 'Phường 2', 'Phường 3', 'Phường 4', 'Phường 5', 'Phường 6', 'Phường 7', 'Phường 8', 'Phường 9', 'Phường 10', 'Phường 11', 'Phường 12', 'Phường 13', 'Phường 14', 'Phường 15'],
-      'Quận Tân Phú': ['Phường Hiệp Tân', 'Phường Hòa Thạnh', 'Phường Phú Thạnh', 'Phường Phú Thọ Hòa', 'Phường Phú Trung', 'Phường Sơn Kỳ', 'Phường Tân Quý', 'Phường Tân Sơn Nhì', 'Phường Tân Thành', 'Phường Tân Thới Hòa', 'Phường Tây Thạnh'],
-      'Quận Bình Tân': ['Phường An Lạc', 'Phường An Lạc A', 'Phường Bình Hưng Hòa', 'Phường Bình Hưng Hòa A', 'Phường Bình Hưng Hòa B', 'Phường Bình Trị Đông', 'Phường Bình Trị Đông A', 'Phường Bình Trị Đông B', 'Phường Tân Tạo', 'Phường Tân Tạo A'],
-      'Huyện Bình Chánh': ['Thị trấn Tân Túc', 'Xã An Phú Tây', 'Xã Bình Chánh', 'Xã Bình Hưng', 'Xã Bình Lợi', 'Xã Đa Phước', 'Xã Hưng Long', 'Xã Lê Minh Xuân', 'Xã Phong Phú', 'Xã Vĩnh Lộc A', 'Xã Vĩnh Lộc B'],
-      'Huyện Hóc Môn': ['Thị trấn Hóc Môn', 'Xã Bà Điểm', 'Xã Đông Thạnh', 'Xã Nhị Bình', 'Xã Tân Hiệp', 'Xã Tân Thới Nhì', 'Xã Tân Xuân', 'Xã Thới Tam Thôn', 'Xã Trung Chánh', 'Xã Xuân Thới Thượng'],
-      'Huyện Nhà Bè': ['Thị trấn Nhà Bè', 'Xã Hiệp Phước', 'Xã Long Thới', 'Xã Nhơn Đức', 'Xã Phú Xuân', 'Xã Phước Kiển', 'Xã Phước Lộc'],
-      'Quận Hải Châu': ['Phường Hải Châu 1', 'Phường Hải Châu 2', 'Phường Thạch Thang', 'Phường Thanh Bình', 'Phường Thuận Phước', 'Phường Hòa Thuận Đông', 'Phường Hòa Thuận Tây', 'Phường Nam Dương', 'Phường Phước Ninh', 'Phường Bình Thuận', 'Phường Bình Hiên', 'Phường Hòa Cường Bắc', 'Phường Hòa Cường Nam'],
-      'Quận Thanh Khê': ['Phường Vĩnh Trung', 'Phường Tân Chính', 'Phường Thạc Gián', 'Phường Chính Gián', 'Phường Tam Thuận', 'Phường Xuân Hà', 'Phường An Khê', 'Phường Hòa Khê', 'Phường Thanh Khê Đông', 'Phường Thanh Khê Tây'],
-      'Quận Sơn Trà': ['Phường An Hải Bắc', 'Phường An Hải Đông', 'Phường An Hải Tây', 'Phường Mân Thái', 'Phường Nại Hiên Đông', 'Phường Phước Mỹ', 'Phường Thọ Quang'],
-      'Quận Ngũ Hành Sơn': ['Phường Mỹ An', 'Phường Khuê Mỹ', 'Phường Hòa Hải', 'Phường Hòa Quý'],
-      'Quận Liên Chiểu': ['Phường Hòa Hiệp Bắc', 'Phường Hòa Hiệp Nam', 'Phường Hòa Khánh Bắc', 'Phường Hòa Khánh Nam', 'Phường Hòa Minh'],
-      'Quận Cẩm Lệ': ['Phường Khuê Trung', 'Phường Hòa Thọ Đông', 'Phường Hòa Thọ Tây', 'Phường Hòa An', 'Phường Hòa Phát', 'Phường Hòa Xuân'],
-      'Quận Hồng Bàng': ['Phường Hạ Lý', 'Phường Hoàng Văn Thụ', 'Phường Minh Khai', 'Phường Phan Bội Châu', 'Phường Quán Toan', 'Phường Sở Dầu', 'Phường Thượng Lý', 'Phường Trại Chuối'],
-      'Quận Lê Chân': ['Phường An Biên', 'Phường An Dương', 'Phường Cát Dài', 'Phường Dư Hàng', 'Phường Dư Hàng Kênh', 'Phường Hàng Kênh', 'Phường Kênh Dương', 'Phường Lam Sơn', 'Phường Niệm Nghĩa', 'Phường Nghĩa Xá', 'Phường Trại Cau', 'Phường Trần Nguyên Hãn', 'Phường Vĩnh Niệm'],
-      'Quận Ngô Quyền': ['Phường Cầu Đất', 'Phường Cầu Tre', 'Phường Đằng Giang', 'Phường Đông Khê', 'Phường Gia Viên', 'Phường Lạc Viên', 'Phường Lạch Tray', 'Phường Lê Lợi', 'Phường Máy Chai', 'Phường Máy Tơ', 'Phường Vạn Mỹ'],
-      'Quận Hải An': ['Phường Cát Bi', 'Phường Đằng Hải', 'Phường Đằng Lâm', 'Phường Đông Hải 1', 'Phường Đông Hải 2', 'Phường Nam Hải', 'Phường Thành Tô', 'Phường Tràng Cát'],
-      'Quận Ninh Kiều': ['Phường An Bình', 'Phường An Cư', 'Phường An Hòa', 'Phường An Khánh', 'Phường An Nghiệp', 'Phường Cái Khế', 'Phường Hưng Lợi', 'Phường Tân An', 'Phường Thới Bình', 'Phường Xuân Khánh'],
-      'Quận Bình Thủy': ['Phường An Thới', 'Phường Bình Thủy', 'Phường Bùi Hữu Nghĩa', 'Phường Long Hòa', 'Phường Long Tuyền', 'Phường Thới An Đông', 'Phường Trà An', 'Phường Trà Nóc'],
-      'Quận Cái Răng': ['Phường Ba Láng', 'Phường Hưng Phú', 'Phường Hưng Thạnh', 'Phường Lê Bình', 'Phường Phú Thứ', 'Phường Tân Phú', 'Phường Yên Đỗ'],
-      'TP. Nha Trang': ['Phường Lộc Thọ', 'Phường Phước Hải', 'Phường Phước Hòa', 'Phường Phước Tân', 'Phường Phước Tiến', 'Phường Phương Sài', 'Phường Phương Sơn', 'Phường Tân Lập', 'Phường Vạn Thắng', 'Phường Vạn Thạnh', 'Phường Vĩnh Hải', 'Phường Vĩnh Hòa', 'Phường Vĩnh Phước', 'Phường Vĩnh Thọ', 'Phường Vĩnh Nguyên', 'Phường Vĩnh Trường', 'Xã Phước Đồng', 'Xã Vĩnh Ngọc', 'Xã Vĩnh Thạnh'],
-      'TP. Thủ Dầu Một': ['Phường Chánh Mỹ', 'Phường Chánh Nghĩa', 'Phường Định Hòa', 'Phường Hiệp An', 'Phường Hiệp Thành', 'Phường Hòa Phú', 'Phường Phú Cường', 'Phường Phú Hòa', 'Phường Phú Lợi', 'Phường Phú Mỹ', 'Phường Phú Tân', 'Phường Phú Thọ', 'Phường Tân An', 'Phường Tương Bình Hiệp'],
-      'TP. Biên Hòa': ['Phường An Bình', 'Phường An Hòa', 'Phường Bửu Long', 'Phường Hiệp Hòa', 'Phường Hố Nai', 'Phường Long Bình', 'Phường Quang Vinh', 'Phường Quyết Thắng', 'Phường Tam Hiệp', 'Phường Tam Hòa', 'Phường Tân Biên', 'Phường Tân Hiệp', 'Phường Tân Mai', 'Phường Tân Phong', 'Phường Tân Tiến', 'Phường Thống Nhất', 'Phường Trảng Dài', 'Phường Trung Dũng'],
-      'TP. Hạ Long': ['Phường Bạch Đằng', 'Phường Bãi Cháy', 'Phường Cao Thắng', 'Phường Cao Xanh', 'Phường Giếng Đáy', 'Phường Hà Khánh', 'Phường Hà Khẩu', 'Phường Hà Lầm', 'Phường Hà Phong', 'Phường Hồng Gai', 'Phường Hồng Hà', 'Phường Hồng Hải', 'Phường Hùng Thắng', 'Phường Tuần Châu', 'Phường Việt Hưng', 'Phường Yết Kiêu'],
-      'TP. Huế': ['Phường An Cựu', 'Phường An Đông', 'Phường An Hòa', 'Phường Đông Ba', 'Phường Gia Hội', 'Phường Kim Long', 'Phường Phú Hậu', 'Phường Phú Hội', 'Phường Phú Nhuận', 'Phường Phước Vĩnh', 'Phường Thuận Hòa', 'Phường Thuận Lộc', 'Phường Thủy Biều', 'Phường Thủy Xuân', 'Phường Vĩnh Ninh', 'Phường Vỹ Dạ', 'Phường Xuân Phú'],
-      'TP. Đà Lạt': ['Phường 1', 'Phường 2', 'Phường 3', 'Phường 4', 'Phường 5', 'Phường 6', 'Phường 7', 'Phường 8', 'Phường 9', 'Phường 10', 'Phường 11', 'Phường 12', 'Xã Tà Nung', 'Xã Trạm Hành', 'Xã Xuân Thọ', 'Xã Xuân Trường'],
-      'TP. Vũng Tàu': ['Phường 1', 'Phường 2', 'Phường 3', 'Phường 4', 'Phường 5', 'Phường 7', 'Phường 8', 'Phường 9', 'Phường 10', 'Phường 11', 'Phường 12', 'Phường Thắng Nhất', 'Phường Thắng Nhì', 'Phường Thắng Tam', 'Phường Nguyễn An Ninh', 'Phường Rạch Dừa'],
-      'TP. Bắc Ninh': ['Phường Đại Phúc', 'Phường Đáp Cầu', 'Phường Hạp Lĩnh', 'Phường Khắc Niệm', 'Phường Kinh Bắc', 'Phường Ninh Xá', 'Phường Suối Hoa', 'Phường Tiền An', 'Phường Thị Cầu', 'Phường Vệ An', 'Phường Võ Cường', 'Phường Vũ Ninh'],
-      'TP. Hải Dương': ['Phường Bình Hàn', 'Phường Cẩm Thượng', 'Phường Hải Tân', 'Phường Lê Thanh Nghị', 'Phường Ngọc Châu', 'Phường Nguyễn Trãi', 'Phường Quang Trung', 'Phường Tân Bình', 'Phường Thanh Bình', 'Phường Trần Hưng Đạo', 'Phường Trần Phú', 'Phường Tứ Minh', 'Phường Việt Hòa']
-    }
+  let vietnamAdministrativeData = [];
+  let vietnamLegacyDistrictData = [];
+  let vietnamLocationDataStatus = 'loading';
+
+  const CURRENT_TO_LEGACY_PROVINCES = {
+    'Hà Nội': ['Hà Nội'],
+    'Cao Bằng': ['Cao Bằng'],
+    'Tuyên Quang': ['Tuyên Quang', 'Hà Giang'],
+    'Điện Biên': ['Điện Biên'],
+    'Lai Châu': ['Lai Châu'],
+    'Sơn La': ['Sơn La'],
+    'Lào Cai': ['Lào Cai', 'Yên Bái'],
+    'Thái Nguyên': ['Thái Nguyên', 'Bắc Kạn'],
+    'Lạng Sơn': ['Lạng Sơn'],
+    'Quảng Ninh': ['Quảng Ninh'],
+    'Bắc Ninh': ['Bắc Ninh', 'Bắc Giang'],
+    'Phú Thọ': ['Phú Thọ', 'Vĩnh Phúc', 'Hòa Bình'],
+    'Hải Phòng': ['Hải Phòng', 'Hải Dương'],
+    'Hưng Yên': ['Hưng Yên', 'Thái Bình'],
+    'Ninh Bình': ['Ninh Bình', 'Hà Nam', 'Nam Định'],
+    'Thanh Hóa': ['Thanh Hóa'],
+    'Nghệ An': ['Nghệ An'],
+    'Hà Tĩnh': ['Hà Tĩnh'],
+    'Quảng Trị': ['Quảng Trị', 'Quảng Bình'],
+    'Huế': ['Huế', 'Thừa Thiên Huế'],
+    'Đà Nẵng': ['Đà Nẵng', 'Quảng Nam'],
+    'Quảng Ngãi': ['Quảng Ngãi', 'Kon Tum'],
+    'Gia Lai': ['Gia Lai', 'Bình Định'],
+    'Khánh Hòa': ['Khánh Hòa', 'Ninh Thuận'],
+    'Đắk Lắk': ['Đắk Lắk', 'Phú Yên'],
+    'Lâm Đồng': ['Lâm Đồng', 'Đắk Nông', 'Bình Thuận'],
+    'Đồng Nai': ['Đồng Nai', 'Bình Phước'],
+    'Hồ Chí Minh': ['Hồ Chí Minh', 'Bình Dương', 'Bà Rịa - Vũng Tàu'],
+    'Tây Ninh': ['Tây Ninh', 'Long An'],
+    'Đồng Tháp': ['Đồng Tháp', 'Tiền Giang'],
+    'Vĩnh Long': ['Vĩnh Long', 'Bến Tre', 'Trà Vinh'],
+    'An Giang': ['An Giang', 'Kiên Giang'],
+    'Cần Thơ': ['Cần Thơ', 'Sóc Trăng', 'Hậu Giang'],
+    'Cà Mau': ['Cà Mau', 'Bạc Liêu']
   };
 
-  function getDistricts(cityName) {
-    if (!cityName || cityName === 'Khác') return ['Khác'];
-    const list = VIETNAM_LOCATIONS.districts[cityName];
-    if (list && list.length) return [...list, 'Khác'];
-    return ['Thành phố trung tâm', 'Thị xã', 'Huyện trung tâm', 'Khác'];
+  function locationSearchKey(value) {
+    return String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/Đ/g, 'D')
+      .replace(/^(tinh|thanh pho|tp\.?|quan|huyen|thi xa|phuong|xa|thi tran|dac khu)\s+/i, '')
+      .replace(/[^a-z0-9]+/gi, ' ')
+      .trim()
+      .toLowerCase();
   }
 
-  function getWards(cityName, districtName) {
-    if (!districtName || districtName === 'Khác') return ['Khác'];
-    const normalizedKey = districtName.replace(/^(Quận|Huyện|Thị xã|TP\.)\s+/i, '').trim();
-    const list = VIETNAM_LOCATIONS.wards[districtName]
-      || VIETNAM_LOCATIONS.wards[normalizedKey]
-      || VIETNAM_LOCATIONS.wards['Quận ' + normalizedKey]
-      || VIETNAM_LOCATIONS.wards['Huyện ' + normalizedKey]
-      || VIETNAM_LOCATIONS.wards['TP. ' + normalizedKey];
-    if (list && list.length) return [...list, 'Khác'];
-    if (districtName.startsWith('Huyện')) {
-      return ['Thị trấn Trung tâm', 'Xã Trung tâm', 'Xã 1', 'Xã 2', 'Khác'];
-    }
-    return ['Phường 1', 'Phường 2', 'Phường 3', 'Phường Trung tâm', 'Xã Trung tâm', 'Khác'];
+  function provinceShortName(value) {
+    return String(value || '').replace(/^(Tỉnh|Thành phố)\s+/i, '').trim();
   }
+
+  function findCurrentProvince(value) {
+    const key = locationSearchKey(value);
+    if (!key) return null;
+    return vietnamAdministrativeData.find(item =>
+      locationSearchKey(item.name) === key || locationSearchKey(provinceShortName(item.name)) === key
+    ) || null;
+  }
+
+  function mapLegacyProvince(value) {
+    const legacyKey = locationSearchKey(value);
+    if (!legacyKey) return null;
+    for (const [currentName, formerNames] of Object.entries(CURRENT_TO_LEGACY_PROVINCES)) {
+      if (formerNames.some(name => locationSearchKey(name) === legacyKey)) {
+        return vietnamAdministrativeData.find(item => locationSearchKey(provinceShortName(item.name)) === locationSearchKey(currentName)) || null;
+      }
+    }
+    return null;
+  }
+
+  function currentWards(cityName) {
+    const province = findCurrentProvince(cityName) || mapLegacyProvince(cityName);
+    return province?.wards?.map(item => item.name) || [];
+  }
+
+  function legacyDistricts(cityName) {
+    const province = findCurrentProvince(cityName) || mapLegacyProvince(cityName);
+    const currentName = provinceShortName(province?.name || cityName);
+    const formerNames = CURRENT_TO_LEGACY_PROVINCES[currentName] || [];
+    const allowed = new Set(formerNames.map(locationSearchKey));
+    const source = allowed.size
+      ? vietnamLegacyDistrictData.filter(item => allowed.has(locationSearchKey(provinceShortName(item.name))))
+      : vietnamLegacyDistrictData;
+    return source.flatMap(item => item.districts || []).map(item => item.name);
+  }
+
+  function exactLocationCandidate(field, value, cityName = state.booking.city) {
+    const key = locationSearchKey(value);
+    if (!key) return '';
+    const candidates = field === 'city'
+      ? vietnamAdministrativeData.map(item => item.name)
+      : field === 'ward'
+        ? currentWards(cityName)
+        : legacyDistricts(cityName);
+    return candidates.find(item => locationSearchKey(item) === key) || '';
+  }
+
+  function locationSearchOptions(field, cityName = state.booking.city) {
+    if (field === 'city') return vietnamAdministrativeData.map(item => item.name);
+    if (field === 'ward') return currentWards(cityName);
+    return legacyDistricts(cityName);
+  }
+
+  function refreshLocationDatalist(input) {
+    if (!input?.dataset?.locationSearch) return;
+    const field = input.dataset.locationSearch;
+    const list = document.getElementById(input.getAttribute('list'));
+    if (!list) return;
+    const query = locationSearchKey(input.value);
+    const options = locationSearchOptions(field).filter(item => !query || locationSearchKey(item).includes(query));
+    list.replaceChildren(...options.slice(0, 80).map(value => {
+      const option = document.createElement('option');
+      option.value = value;
+      return option;
+    }));
+  }
+
+  function validateLocationSearchInput(input) {
+    if (!input?.dataset?.locationSearch || vietnamLocationDataStatus !== 'ready') return true;
+    const field = input.dataset.locationSearch;
+    if (field === 'district' && !input.value.trim()) {
+      input.setCustomValidity('');
+      return true;
+    }
+    const matched = exactLocationCandidate(field, input.value);
+    const valid = Boolean(matched);
+    input.setCustomValidity(valid ? '' : field === 'city'
+      ? 'Vui lòng chọn một tỉnh hoặc thành phố trong danh sách.'
+      : field === 'ward'
+        ? 'Vui lòng chọn một phường, xã hoặc đặc khu thuộc tỉnh/thành đã chọn.'
+        : 'Vui lòng chọn quận/huyện cũ trong danh sách hoặc để trống.');
+    return valid;
+  }
+
+  function locationSearchField({ field, label, value, placeholder, required = false, hint = '' }) {
+    const options = locationSearchOptions(field);
+    const listId = `location-${field}-options`;
+    const countLabel = vietnamLocationDataStatus === 'ready'
+      ? `${options.length.toLocaleString('vi-VN')} mục`
+      : vietnamLocationDataStatus === 'error' ? 'Nhập thủ công' : 'Đang tải...';
+    return `<label class="mockup-field location-search-field">
+      <span class="mockup-label">${label}${required ? ' <span class="mockup-req">*</span>' : ''}</span>
+      <div class="mockup-location-search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>
+        <input class="mockup-input" type="search" name="${field}" value="${esc(value || '')}" placeholder="${placeholder}" list="${listId}" data-location-search="${field}" autocomplete="off" ${required ? 'required' : ''}>
+        <span class="mockup-location-count">${countLabel}</span>
+        <datalist id="${listId}">${options.slice(0, 80).map(item => `<option value="${esc(item)}"></option>`).join('')}</datalist>
+      </div>
+      ${hint ? `<small class="mockup-location-hint">${hint}</small>` : ''}
+    </label>`;
+  }
+
+  Promise.all([
+    fetch('/data/vietnam-administrative-latest.json').then(response => {
+      if (!response.ok) throw new Error('Không tải được danh mục tỉnh/phường');
+      return response.json();
+    }),
+    fetch('/data/vietnam-legacy-districts.json').then(response => {
+      if (!response.ok) throw new Error('Không tải được danh mục quận/huyện cũ');
+      return response.json();
+    })
+  ]).then(([currentData, legacyData]) => {
+    vietnamAdministrativeData = Array.isArray(currentData) ? currentData : [];
+    vietnamLegacyDistrictData = Array.isArray(legacyData) ? legacyData : [];
+    vietnamLocationDataStatus = vietnamAdministrativeData.length === 34 ? 'ready' : 'error';
+    const matchedProvince = findCurrentProvince(state.booking.city) || mapLegacyProvince(state.booking.city);
+    if (matchedProvince) state.booking.city = matchedProvince.name;
+    saveState();
+    if (location.hash.includes('/booking/location')) render();
+  }).catch(error => {
+    console.error('Không tải được dữ liệu hành chính Việt Nam:', error);
+    vietnamLocationDataStatus = 'error';
+    if (location.hash.includes('/booking/location')) render();
+  });
 
   function pageBookingLocation() {
     const s = service();
     const servicePrice = s.price || 650000;
     const travelFee = Number(state.settings.travelFee || 50000);
     const totalIllustrated = servicePrice + travelFee;
-    const chevronSvg = `<svg class="mockup-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
     const carSvg = `<svg class="mockup-car-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 10.5 L6.8 5 A2 2 0 0 1 8.7 3.8 h6.6 a2 2 0 0 1 1.9 1.2 l2.3 5.5"></path><rect x="3" y="10" width="18" height="7" rx="1.5"></rect><circle cx="6.8" cy="13.5" r="1.1" fill="currentColor" stroke="none"></circle><circle cx="17.2" cy="13.5" r="1.1" fill="currentColor" stroke="none"></circle><path d="M5.5 17 v2.2" stroke-width="2.2"></path><path d="M18.5 17 v2.2" stroke-width="2.2"></path></svg>`;
 
-    const curCity = state.booking.city || 'Hà Nội';
-    const cities = [...VIETNAM_LOCATIONS.provinces, 'Khác'];
-    if (state.booking.city && !cities.includes(state.booking.city)) {
-      cities.unshift(state.booking.city);
-    }
-
-    const districts = getDistricts(curCity);
-    let curDistrict = state.booking.district;
-    if (!curDistrict || (!districts.includes(curDistrict) && curDistrict !== 'Khác')) {
-      curDistrict = districts[0] !== 'Khác' ? districts[0] : '';
-      state.booking.district = curDistrict;
-    }
-
-    const wards = getWards(curCity, curDistrict);
-    let curWard = state.booking.ward;
-    if (!curWard || (!wards.includes(curWard) && curWard !== 'Khác')) {
-      curWard = wards[0] !== 'Khác' ? wards[0] : '';
-      state.booking.ward = curWard;
-    }
+    const matchedProvince = findCurrentProvince(state.booking.city) || mapLegacyProvince(state.booking.city);
+    const curCity = matchedProvince?.name || state.booking.city || 'Thành phố Hà Nội';
+    if (matchedProvince && state.booking.city !== matchedProvince.name) state.booking.city = matchedProvince.name;
 
     const ggMapPinSvg = `<svg class="mockup-map-pin" viewBox="0 0 24 24" width="15" height="15" fill="#111" style="vertical-align:-2.5px;margin-right:6px;display:inline-block;flex-shrink:0;" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>`;
     const ggMapPinSmallSvg = `<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="vertical-align:-1.5px;margin-right:4px;display:inline-block;" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>`;
@@ -916,7 +903,7 @@
     <p class="ct-subtitle">Vui lòng cung cấp địa chỉ để Hoàn có thể di chuyển đến bạn.</p>
     <div class="mockup-container">
       <form class="ct-form" data-form="location">
-        <div class="mockup-option-card ${state.booking.detectedAddress ? 'is-detected' : ''}" data-action="detect-location" role="button" tabindex="0" title="Nhấp để tự động xác định vị trí của bạn">
+        <button type="button" class="mockup-option-card ${state.booking.detectedAddress ? 'is-detected' : ''} ${state.booking.locationError ? 'has-error' : ''}" data-action="detect-location" ${state.booking.isDetectingLocation ? 'disabled aria-busy="true"' : ''} title="Nhấp để tự động xác định vị trí của bạn">
           <div class="mockup-radio-indicator">
             <div class="mockup-radio-dot"></div>
           </div>
@@ -925,17 +912,19 @@
               <span>Vị trí của bạn</span>
               ${state.booking.isDetectingLocation 
                 ? '<span class="mockup-gps-tag loading">⏳ ĐANG XÁC ĐỊNH...</span>' 
-                : (state.booking.detectedAddress ? `<span class="mockup-gps-tag detected">${ggMapPinSmallSvg} ĐÃ XÁC ĐỊNH</span>` : `<span class="mockup-gps-tag">${ggMapPinSmallSvg} ĐỊNH VỊ</span>`)}
+                : (state.booking.locationError ? '<span class="mockup-gps-tag error">CẦN KIỂM TRA</span>' : state.booking.detectedAddress ? `<span class="mockup-gps-tag detected">${ggMapPinSmallSvg} ĐÃ XÁC ĐỊNH</span>` : `<span class="mockup-gps-tag">${ggMapPinSmallSvg} ĐỊNH VỊ</span>`)}
             </div>
             <div class="mockup-option-desc">
               ${state.booking.isDetectingLocation
                 ? '<span style="color:#6b7280;font-weight:500;">Đang xác định tọa độ GPS và địa chỉ của bạn, vui lòng đợi trong giây lát...</span>'
-                : (state.booking.detectedAddress 
+                : (state.booking.locationError
+                    ? `<span class="mockup-location-error">${esc(state.booking.locationError)}</span>`
+                    : state.booking.detectedAddress
                     ? `<span style="color:#111;font-weight:600;display:inline-flex;align-items:center;">${ggMapPinSvg}<span>${esc(state.booking.detectedAddress)}</span></span> <span style="font-size:12px;color:#7A1832;text-decoration:underline;margin-left:6px;cursor:pointer;">(Cập nhật lại)</span>`
                     : 'Nhấn vào đây để tự động xác định vị trí của bạn và điền vào bảng thông tin bên dưới.')}
             </div>
           </div>
-        </div>
+        </button>
 
         <div class="mockup-grid-2">
           <label class="mockup-field">
@@ -943,40 +932,33 @@
             <input class="mockup-input" type="text" name="address" placeholder="Nhập số nhà, tên đường..." value="${esc(state.booking.address || '')}" required>
           </label>
 
-          <label class="mockup-field">
-            <span class="mockup-label">Tỉnh / thành phố <span class="mockup-req">*</span></span>
-            <div class="mockup-select-wrapper">
-              <select class="mockup-select" name="city" required>
-                <option value="" disabled ${!state.booking.city ? 'selected' : ''}>Chọn tỉnh / thành phố</option>
-                ${cities.map(c => `<option value="${c}" ${(state.booking.city || 'Hà Nội') === c ? 'selected' : ''}>${c}</option>`).join('')}
-              </select>
-              ${chevronSvg}
-            </div>
-          </label>
+          ${locationSearchField({
+            field: 'city',
+            label: 'Tỉnh / thành phố hiện hành',
+            value: curCity,
+            placeholder: 'Gõ tên tỉnh hoặc thành phố...',
+            required: true,
+            hint: 'Danh mục 34 tỉnh/thành; có thể tìm không dấu, ví dụ “ha noi”.'
+          })}
         </div>
 
         <div class="mockup-grid-2">
-          <label class="mockup-field">
-            <span class="mockup-label">Quận / huyện <span class="mockup-req">*</span></span>
-            <div class="mockup-select-wrapper">
-              <select class="mockup-select" name="district" required>
-                <option value="" disabled ${!state.booking.district ? 'selected' : ''}>Chọn quận / huyện</option>
-                ${districts.map(d => `<option value="${d}" ${state.booking.district === d ? 'selected' : ''}>${d}</option>`).join('')}
-              </select>
-              ${chevronSvg}
-            </div>
-          </label>
+          ${locationSearchField({
+            field: 'ward',
+            label: 'Phường / xã / đặc khu hiện hành',
+            value: state.booking.ward,
+            placeholder: 'Gõ tên phường, xã hoặc đặc khu...',
+            required: true,
+            hint: `Hiển thị ${currentWards(curCity).length.toLocaleString('vi-VN')} đơn vị trực thuộc ${esc(provinceShortName(curCity))}.`
+          })}
 
-          <label class="mockup-field">
-            <span class="mockup-label">Phường / xã</span>
-            <div class="mockup-select-wrapper">
-              <select class="mockup-select" name="ward">
-                <option value="" ${!state.booking.ward ? 'selected' : ''}>Chọn phường / xã</option>
-                ${wards.map(w => `<option value="${w}" ${state.booking.ward === w ? 'selected' : ''}>${w}</option>`).join('')}
-              </select>
-              ${chevronSvg}
-            </div>
-          </label>
+          ${locationSearchField({
+            field: 'district',
+            label: 'Quận / huyện cũ (nếu có)',
+            value: state.booking.district,
+            placeholder: 'Tra cứu quận/huyện trước sáp nhập...',
+            hint: 'Không bắt buộc — chỉ dùng để đối chiếu địa chỉ cũ vì cấp quận/huyện đã kết thúc hoạt động.'
+          })}
         </div>
 
         <label class="mockup-field full">
@@ -2949,12 +2931,26 @@
     return '';
   }
 
+  let lastRenderedPath = '';
+
   function render() {
     siteTools?.beforeRender();
     const raw = location.hash.slice(1) || '/';
     const [path, queryString=''] = raw.split('?');
     const query = new URLSearchParams(queryString);
     const parts = path.split('/').filter(Boolean);
+    const appRoot = $('#app');
+    const routeChanged = path !== lastRenderedPath;
+    const previousScroll = { x: window.scrollX, y: window.scrollY };
+    const activeField = typeof appRoot?.contains === 'function' && appRoot.contains(document.activeElement) && document.activeElement?.matches?.('input, textarea, select')
+      ? document.activeElement
+      : null;
+    const focusState = activeField ? {
+      id: activeField.id,
+      name: activeField.getAttribute('name'),
+      start: activeField.selectionStart,
+      end: activeField.selectionEnd
+    } : null;
     const needsFullContentEditor = path === '/admin/content' || path === '/admin/content-pages';
     let html = path.startsWith('/admin') && !needsFullContentEditor && window.HoanMobileAdmin?.matches()
       ? window.HoanMobileAdmin.render(raw, state)
@@ -2982,18 +2978,34 @@
       else if (path === '/admin/settings') html = adminSettings();
       else html = `<div class="page">${publicHeader()}<main class="help-wrap"><h1>Không tìm thấy trang</h1><a class="btn btn-dark" href="#/">Về trang chủ</a></main></div>`;
     }
-    $('#app').innerHTML = html;
+    appRoot.innerHTML = html;
+    lastRenderedPath = path;
     siteTools?.mount(path);
     if (path === '/admin/appointments' && query.get('code')) {
       setTimeout(() => document.querySelector(`[data-action="admin-view-appointment"][data-code="${CSS.escape(query.get('code'))}"]`)?.click(), 0);
     }
-    window.scrollTo(0,0);
     mountCoutureMotion(path);
     if (path === '/booking/deposit') {
       initDepositTimer();
       initDepositSync();
     }
     document.title = path.startsWith('/admin') ? 'Quản trị — HOÀN' : 'HOÀN — Makeup Artist';
+    if (routeChanged) {
+      window.scrollTo(0, 0);
+    } else {
+      if (focusState) {
+        const field = focusState.id
+          ? document.getElementById(focusState.id)
+          : focusState.name ? appRoot.querySelector(`[name="${CSS.escape(focusState.name)}"]`) : null;
+        if (field) {
+          field.focus({ preventScroll: true });
+          if (typeof field.setSelectionRange === 'function' && focusState.start != null) {
+            try { field.setSelectionRange(focusState.start, focusState.end ?? focusState.start); } catch { /* unsupported input type */ }
+          }
+        }
+      }
+      window.scrollTo(previousScroll.x, previousScroll.y);
+    }
   }
 
   function initDepositTimer() {
@@ -3564,7 +3576,12 @@
         document.getElementById('contact-file-input')?.click();
       }else if(action==='ct-next'){
         const step=Number(el.dataset.step),form=document.querySelector('.ct-booking form');
-        if(form){if(!form.reportValidity())return;Object.assign(state.booking,Object.fromEntries(new FormData(form)));for(const box of form.querySelectorAll('input[type=checkbox][name]'))state.booking[box.name]=box.checked;}
+        if(form){
+          if (form.dataset.form === 'location') form.querySelectorAll('[data-location-search]').forEach(validateLocationSearchInput);
+          if(!form.reportValidity())return;
+          Object.assign(state.booking,Object.fromEntries(new FormData(form)));
+          for(const box of form.querySelectorAll('input[type=checkbox][name]'))state.booking[box.name]=box.checked;
+        }
         if(step===1&&service().contact)return route('/contact');
         if(step===2){if(!state.booking.time||slotUnavailable(state.booking.date,state.booking.time)||!state.settings.scheduleOpen)return toast('Vui lòng chọn một khung giờ còn trống.');}
         if(step===3){state.booking.locationType='client';state.booking.travelFee=Number(state.settings.travelFee||50000);}
@@ -3700,9 +3717,15 @@
 
   document.addEventListener('input', (event) => {
     if (event.target.tagName === 'SELECT') return;
+    if (event.target.matches('[data-location-search]')) {
+      event.target.setCustomValidity('');
+      refreshLocationDatalist(event.target);
+    }
     const bookingForm=event.target.closest('form[data-form="info"], form[data-form="location"]');
-    if(bookingForm && event.target.name) {
-      state.booking[event.target.name]=event.target.type==='checkbox'?event.target.checked:event.target.value;
+    if(bookingForm && event.target.name && !event.target.matches('[data-location-search]')) {
+      const nextValue=event.target.type==='checkbox'?event.target.checked:event.target.value;
+      if(bookingForm.dataset.form==='location' && ['address','city','district','ward'].includes(event.target.name) && state.booking[event.target.name]!==nextValue) resetLocationConfirmation();
+      state.booking[event.target.name]=nextValue;
       saveState();
     }
     const contentForm = event.target.closest('form[data-form="content"]');
@@ -3775,40 +3798,72 @@
       toast('Đã chọn '+event.target.files.length+' ảnh. Ảnh sẽ xuất hiện sau khi đăng.');
     }
     if (event.target.closest('form[data-form="info"], form[data-form="location"]') && event.target.name) {
-      state.booking[event.target.name]=event.target.type==='checkbox'?event.target.checked:event.target.value;
+      const locationForm=event.target.closest('form[data-form="location"]');
+      const nextValue=event.target.type==='checkbox'?event.target.checked:event.target.value;
+      if(locationForm && ['address','city','district','ward'].includes(event.target.name) && state.booking[event.target.name]!==nextValue) resetLocationConfirmation();
+      if (!event.target.matches('[data-location-search]')) state.booking[event.target.name]=nextValue;
 
       if (event.target.name === 'city') {
-        const newCity = event.target.value;
-        state.booking.city = newCity;
-        const availableDistricts = getDistricts(newCity);
-        state.booking.district = availableDistricts[0] !== 'Khác' ? availableDistricts[0] : '';
-        const availableWards = getWards(newCity, state.booking.district);
-        state.booking.ward = availableWards[0] !== 'Khác' ? availableWards[0] : '';
+        const matched = findCurrentProvince(event.target.value) || mapLegacyProvince(event.target.value);
+        if (!matched) {
+          validateLocationSearchInput(event.target);
+          event.target.reportValidity();
+          return;
+        }
+        state.booking.city = matched.name;
+        state.booking.district = '';
+        state.booking.ward = '';
+        event.target.value = matched.name;
+        event.target.setCustomValidity('');
+        for (const field of ['ward', 'district']) {
+          const dependentInput = locationForm?.querySelector(`[name="${field}"]`);
+          if (!dependentInput) continue;
+          dependentInput.value = '';
+          dependentInput.setCustomValidity('');
+          refreshLocationDatalist(dependentInput);
+          const count = dependentInput.closest('.mockup-location-search')?.querySelector('.mockup-location-count');
+          if (count) count.textContent = `${locationSearchOptions(field).length.toLocaleString('vi-VN')} mục`;
+        }
+        const wardHint = locationForm?.querySelector('[name="ward"]')?.closest('.mockup-field')?.querySelector('.mockup-location-hint');
+        if (wardHint) wardHint.textContent = `Hiển thị ${currentWards(matched.name).length.toLocaleString('vi-VN')} đơn vị trực thuộc ${provinceShortName(matched.name)}.`;
         saveState();
-        render();
         return;
       }
 
       if (event.target.name === 'district') {
-        const newDistrict = event.target.value;
-        state.booking.district = newDistrict;
-        state.booking.travelFee = newDistrict ? 50000 : 0;
-        const availableWards = getWards(state.booking.city, newDistrict);
-        state.booking.ward = availableWards[0] !== 'Khác' ? availableWards[0] : '';
+        const matched = exactLocationCandidate('district', event.target.value);
+        if (event.target.value.trim() && !matched) {
+          validateLocationSearchInput(event.target);
+          event.target.reportValidity();
+          return;
+        }
+        state.booking.district = matched || '';
+        event.target.value = matched || '';
+        event.target.setCustomValidity('');
         saveState();
-        render();
         return;
       }
 
       if (event.target.name === 'ward') {
-        state.booking.ward = event.target.value;
+        const matched = exactLocationCandidate('ward', event.target.value);
+        if (!matched) {
+          validateLocationSearchInput(event.target);
+          event.target.reportValidity();
+          return;
+        }
+        state.booking.ward = matched;
+        event.target.value = matched;
+        event.target.setCustomValidity('');
         saveState();
-        render();
         return;
       }
 
       saveState();
     }
+  });
+
+  document.addEventListener('focusin', event => {
+    if (event.target.matches('[data-location-search]')) refreshLocationDatalist(event.target);
   });
 
   document.addEventListener('click', async (event) => {
@@ -3873,15 +3928,23 @@
     else if (action === 'detect-location') {
       if (state.booking.isDetectingLocation) return;
       state.booking.isDetectingLocation = true;
+      state.booking.locationError = '';
       render();
-      toast('Đang kích hoạt GPS để xác định vị trí chuẩn xác của bạn...');
+      toast('Đang xin quyền GPS để xác định vị trí của bạn...');
+
+      const failLocation = (message) => {
+        state.booking.isDetectingLocation = false;
+        state.booking.locationError = message;
+        saveState();
+        render();
+        toast(message);
+      };
 
       const applyLocationResult = (data) => {
         state.booking.isDetectingLocation = false;
         if (!data || (!data.address && !data.fullAddress && !data.city)) {
-          render();
-          toast('Không thể nhận diện vị trí. Vui lòng tự nhập địa chỉ bên dưới.');
-          return;
+          failLocation('Đã lấy được tọa độ nhưng chưa đọc được địa chỉ. Vui lòng nhập địa chỉ bên dưới.');
+          return false;
         }
 
         let address = data.address || '';
@@ -3889,38 +3952,38 @@
         let district = data.district || '';
         let ward = data.ward || '';
 
-        // Standardize Nam Tu Liem & Chau Van Liem
+        // Chuẩn hóa trường hợp dịch vụ bản đồ vẫn trả tên đơn vị trước sắp xếp.
         if (address.includes('Châu Văn Liêm') || data.fullAddress?.includes('Châu Văn Liêm')) {
           address = address || 'Đường Châu Văn Liêm';
           city = 'Hà Nội';
           district = 'Nam Từ Liêm';
-          ward = 'Phường Phú Đô';
+          ward = 'Phường Từ Liêm';
         }
         if (district === 'Từ Liêm' || district === 'Phường Từ Liêm') district = 'Nam Từ Liêm';
-        if (ward === 'Xuân Phong') ward = 'Phường Phú Đô';
-        // Normalize against VIETNAM_LOCATIONS
-        const matchedCity = VIETNAM_LOCATIONS.provinces.find(p => p.toLowerCase() === city.toLowerCase() || city.toLowerCase().includes(p.toLowerCase()));
-        if (matchedCity) city = matchedCity;
+        if (ward === 'Xuân Phong') ward = 'Phường Xuân Phương';
+        // Chuẩn hóa theo mô hình hành chính 2 cấp hiện hành. Tên tỉnh cũ được
+        // ánh xạ sang tỉnh/thành sau sáp nhập; quận/huyện chỉ lưu để đối chiếu.
+        const matchedCity = findCurrentProvince(city) || mapLegacyProvince(city);
+        if (matchedCity) city = matchedCity.name;
 
-        const distList = getDistricts(city);
-        const normDist = district.replace(/^(Quận|Huyện|Thị xã|TP\.)\s+/i, '').trim();
-        const matchedDist = distList.find(d => {
-          const dNorm = d.replace(/^(Quận|Huyện|Thị xã|TP\.)\s+/i, '').trim();
-          return d.toLowerCase() === district.toLowerCase() || dNorm.toLowerCase() === normDist.toLowerCase();
-        });
-        if (matchedDist) district = matchedDist;
+        const matchedDistrict = exactLocationCandidate('district', district, city);
+        if (matchedDistrict) district = matchedDistrict;
 
-        const wardList = getWards(city, district);
-        const normWard = ward.replace(/^(Phường|Xã|Thị trấn)\s+/i, '').trim();
-        const matchedWard = wardList.find(w => {
-          const wNorm = w.replace(/^(Phường|Xã|Thị trấn)\s+/i, '').trim();
-          return w.toLowerCase() === ward.toLowerCase() || wNorm.toLowerCase() === normWard.toLowerCase();
-        });
+        const matchedWard = exactLocationCandidate('ward', ward, city);
         if (matchedWard) ward = matchedWard;
 
-        const fullAddr = [address, ward, district ? (district.startsWith('Quận') || district.startsWith('Huyện') || district.startsWith('Thị xã') || district.startsWith('TP.') ? district : 'Quận ' + district) : '', city].filter(Boolean).join(', ');
+        const fullAddr = [address, ward, city].filter(Boolean).join(', ');
+
+        if (!address.trim()) {
+          if (city) state.booking.city = city;
+          if (district) state.booking.district = district;
+          if (ward) state.booking.ward = ward;
+          failLocation('Đã lấy được GPS nhưng chưa tìm thấy số nhà hoặc tên đường. Vui lòng nhập phần còn thiếu bên dưới.');
+          return false;
+        }
 
         state.booking.detectedAddress = fullAddr;
+        state.booking.locationError = '';
         state.booking.address = address;
         state.booking.city = city;
         state.booking.district = district;
@@ -3928,54 +3991,64 @@
 
         saveState();
         render();
-        toast('Đã xác định vị trí chuẩn xác: ' + fullAddr);
+        toast('Đã xác định vị trí: ' + fullAddr);
+        return true;
       };
 
       if (!navigator.geolocation) {
-        try {
-          const res = await api({ action: 'reverseGeocode' });
-          applyLocationResult(res);
-        } catch (e) {
-          applyLocationResult(null);
-        }
+        failLocation('Thiết bị hoặc trình duyệt này không hỗ trợ GPS. Vui lòng nhập địa chỉ bên dưới.');
         return;
       }
 
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          const lat = position.coords.latitude;
-          const lon = position.coords.longitude;
-          try {
-            const res = await api({ action: 'reverseGeocode', lat, lon });
-            applyLocationResult(res);
-          } catch (e) {
-            try {
-              const bdcRes = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=vi`);
-              const bdc = await bdcRes.json();
-              const city = bdc.city || bdc.principalSubdivision || 'Hà Nội';
-              applyLocationResult({
-                fullAddress: [bdc.locality, city].filter(Boolean).join(', '),
-                address: '',
-                city,
-                district: bdc.locality || '',
-                ward: ''
-              });
-            } catch (err2) {
-              applyLocationResult(null);
-            }
-          }
-        },
-        async (err) => {
-          console.warn('Geolocation error:', err);
-          try {
-            const res = await api({ action: 'reverseGeocode' });
-            applyLocationResult(res);
-          } catch (e) {
-            applyLocationResult(null);
-          }
-        },
-        { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
-      );
+      if (!window.isSecureContext && !['localhost', '127.0.0.1'].includes(location.hostname)) {
+        failLocation('Định vị chỉ hoạt động trên kết nối HTTPS an toàn. Vui lòng mở lại website bằng HTTPS.');
+        return;
+      }
+
+      const requestPosition = options => new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, options));
+      let position;
+      try {
+        try {
+          position = await requestPosition({ enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+        } catch (firstError) {
+          if (firstError?.code === 1) throw firstError;
+          position = await requestPosition({ enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
+        }
+      } catch (error) {
+        console.warn('Geolocation error:', error);
+        if (error?.code === 1) failLocation('Quyền định vị đang bị chặn. Hãy cho phép Vị trí trong cài đặt trình duyệt rồi thử lại.');
+        else if (error?.code === 3) failLocation('GPS phản hồi quá lâu. Hãy bật định vị trên thiết bị, di chuyển đến nơi thoáng hơn rồi thử lại.');
+        else failLocation('Thiết bị chưa cung cấp được vị trí. Hãy bật GPS rồi thử lại hoặc nhập địa chỉ bên dưới.');
+        return;
+      }
+
+      const lat = Number(position.coords.latitude);
+      const lon = Number(position.coords.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        failLocation('Tọa độ GPS không hợp lệ. Vui lòng thử lại hoặc nhập địa chỉ bên dưới.');
+        return;
+      }
+
+      try {
+        const res = await api({ action: 'reverseGeocode', lat, lon });
+        applyLocationResult(res);
+      } catch (apiError) {
+        try {
+          const bdcRes = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&localityLanguage=vi`);
+          if (!bdcRes.ok) throw new Error('Không đọc được địa chỉ.');
+          const bdc = await bdcRes.json();
+          const city = bdc.city || bdc.principalSubdivision || '';
+          applyLocationResult({
+            fullAddress: [bdc.locality, city].filter(Boolean).join(', '),
+            address: '',
+            city,
+            district: bdc.locality || '',
+            ward: ''
+          });
+        } catch (fallbackError) {
+          failLocation('Đã lấy được GPS nhưng dịch vụ địa chỉ đang tạm thời gián đoạn. Vui lòng nhập địa chỉ bên dưới.');
+        }
+      }
     }
     else if (action === 'payment-method') { state.booking.payment = el.dataset.method; saveState(); render(); }
     else if (action === 'complete-booking') {

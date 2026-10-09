@@ -508,44 +508,43 @@ export async function POST(request: Request) {
     }
 
     if (action === "reverseGeocode") {
-      const lat = payload.lat ? Number(payload.lat) : null;
-      const lon = payload.lon ? Number(payload.lon) : null;
+      const lat = Number(payload.lat);
+      const lon = Number(payload.lon);
+      if (payload.lat == null || payload.lon == null || !Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+        return Response.json({ error: "Tọa độ GPS không hợp lệ." }, { status: 400 });
+      }
       let rawResult: { street?: string; ward?: string; district?: string; city?: string; fullStr?: string; lat?: number; lon?: number } | null = null;
 
-      if (lat != null && lon != null && !Number.isNaN(lat) && !Number.isNaN(lon)) {
-        try {
-          const nomRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1&accept-language=vi`, {
-            headers: { 'User-Agent': 'HoanMakeupArtist/1.0 (booking@hoanmakeup.vn)' }
-          });
-          if (nomRes.ok) {
-            const data = await nomRes.json() as Record<string, unknown>;
-            const a = (data.address || {}) as Record<string, string>;
-            const houseNumber = a.house_number || '';
-            const road = a.road || a.street || a.amenity || a.building || '';
-            const street = [houseNumber, road].filter(Boolean).join(' ');
-            const ward = a.suburb || a.quarter || a.neighbourhood || '';
-            const district = a.city_district || a.district || a.county || '';
-            const rawCity = a.city || a.state || a.province || 'Hà Nội';
-            rawResult = {
-              street: street || (data.name as string) || '',
-              ward,
-              district,
-              city: rawCity,
-              fullStr: (data.display_name as string) || '',
-              lat,
-              lon
-            };
-          }
-        } catch (e) {
-          console.warn('Backend Nominatim error:', e);
+      try {
+        const nomRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1&accept-language=vi`, {
+          headers: { 'User-Agent': 'HoanMakeupArtist/1.0 (booking@hoanmakeup.vn)' }
+        });
+        if (nomRes.ok) {
+          const data = await nomRes.json() as Record<string, unknown>;
+          const a = (data.address || {}) as Record<string, string>;
+          const houseNumber = a.house_number || '';
+          const road = a.road || a.street || a.amenity || a.building || '';
+          const street = [houseNumber, road].filter(Boolean).join(' ');
+          const ward = a.suburb || a.quarter || a.neighbourhood || '';
+          const district = a.city_district || a.district || a.county || '';
+          const rawCity = a.city || a.state || a.province || 'Hà Nội';
+          rawResult = {
+            street: street || (data.name as string) || '',
+            ward,
+            district,
+            city: rawCity,
+            fullStr: (data.display_name as string) || '',
+            lat,
+            lon
+          };
         }
+      } catch (e) {
+        console.warn('Backend Nominatim error:', e);
       }
 
       if (!rawResult) {
         try {
-          const bdcUrl = (lat != null && lon != null && !Number.isNaN(lat) && !Number.isNaN(lon))
-            ? `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=vi`
-            : `https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=vi`;
+          const bdcUrl = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=vi`;
           const bdcRes = await fetch(bdcUrl);
           if (bdcRes.ok) {
             const data = await bdcRes.json() as Record<string, unknown>;
@@ -565,8 +564,8 @@ export async function POST(request: Request) {
               district,
               city: rawCity,
               fullStr: '',
-              lat: lat || undefined,
-              lon: lon || undefined
+              lat,
+              lon
             };
           }
         } catch (e) {
@@ -633,7 +632,8 @@ export async function POST(request: Request) {
           }
         }
 
-        const fullParts = [street, ward, district ? `Quận ${district}` : '', city].filter(Boolean);
+        const districtLabel = district && /^(Quận|Huyện|Thị xã|TP\.|Thành phố)\s+/i.test(district) ? district : district ? `Quận ${district}` : '';
+        const fullParts = [street, ward, districtLabel, city].filter(Boolean);
         const fullAddress = fullParts.join(', ');
 
         return Response.json({

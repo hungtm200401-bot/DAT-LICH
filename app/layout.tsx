@@ -59,7 +59,7 @@ export default function RootLayout({
         <link rel="preload" href="/fonts/tinos-Tinos-Regular.ttf" as="font" type="font/ttf" crossOrigin="anonymous" />
         <link rel="stylesheet" href="/fonts/fonts.css" />
         <link rel="stylesheet" href="/styles.css?v=2.5" />
-        <link rel="stylesheet" href="/couture.css?v=119.0" />
+        <link rel="stylesheet" href="/couture.css?v=120.0" />
         <link rel="stylesheet" href="/site-tools.css?v=146.0" />
         <link rel="stylesheet" href="/admin-refinements.css?v=8" />
         <link rel="stylesheet" href="/mobile-admin.css?v=1.2" />

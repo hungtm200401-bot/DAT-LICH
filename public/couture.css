@@ -194,6 +194,7 @@
 }
 
 .mockup-option-card {
+  width: 100%;
   border: 1.5px solid #111;
   border-radius: 6px;
   padding: 16px 20px;
@@ -203,8 +204,19 @@
   background: #fff;
   margin-bottom: 24px;
   cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   user-select: none;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.mockup-option-card:focus-visible {
+  outline: 3px solid rgba(122, 24, 50, 0.24);
+  outline-offset: 3px;
+}
+.mockup-option-card:disabled {
+  cursor: progress;
+  opacity: 1;
 }
 .mockup-option-card:hover {
   background: #fbf9f6;
@@ -217,6 +229,10 @@
 .mockup-option-card.is-detected {
   background: #fafafa;
   border-color: #111;
+}
+.mockup-option-card.has-error {
+  border-color: #a33a4f;
+  background: #fffafb;
 }
 .mockup-radio-indicator {
   width: 20px;
@@ -280,6 +296,16 @@
   color: #374151;
   border: 1px solid #d1d5db;
   animation: pulse-badge 1.2s infinite;
+}
+.mockup-gps-tag.error {
+  color: #8b1e35;
+  border-color: #e5b8c2;
+  background: #fff1f4;
+}
+.mockup-location-error {
+  display: block;
+  color: #8b1e35;
+  font-weight: 600;
 }
 @keyframes pulse-badge {
   0%, 100% { opacity: 1; }
@@ -389,6 +415,53 @@
   font-size: 14px !important;
   font-weight: 400 !important;
   color: #888 !important;
+}
+.mockup-location-search {
+  position: relative;
+  width: 100%;
+}
+.mockup-location-search > svg {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  width: 17px;
+  height: 17px;
+  transform: translateY(-50%);
+  fill: none;
+  stroke: #555;
+  stroke-width: 1.8;
+  pointer-events: none;
+  z-index: 1;
+}
+.mockup-location-search .mockup-input {
+  padding-left: 42px;
+  padding-right: 82px;
+  appearance: none;
+}
+.mockup-location-search .mockup-input::-webkit-search-cancel-button {
+  margin-right: 58px;
+}
+.mockup-location-count {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #f3f4f6;
+  color: #5b616b;
+  font: 500 10px/1.2 Inter, Arial, sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.mockup-location-hint {
+  display: block;
+  margin-top: 7px;
+  color: #686868;
+  font: 400 11.5px/1.5 Inter, Arial, sans-serif;
+}
+.location-search-field:focus-within .mockup-location-hint {
+  color: #333;
 }
 
 .mockup-check-box {

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hoan-makeup-v4';
+const CACHE_NAME = 'hoan-makeup-v5';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
@@ -6,11 +6,13 @@ const STATIC_ASSETS = [
   '/fonts/hoan-5.ttf',
   '/fonts/tinos-Tinos-Regular.ttf',
   '/styles.css?v=2.5',
-  '/couture.css?v=119.0',
+  '/couture.css?v=120.0',
   '/mobile-admin.css?v=1.2',
   '/scroll-enhancements.js?v=1.2',
   '/mobile-admin.js?v=1.2',
-  '/app.js?v=142.0'
+  '/app.js?v=145.0',
+  '/data/vietnam-administrative-latest.json',
+  '/data/vietnam-legacy-districts.json'
 ];
 
 self.addEventListener('install', event => {
