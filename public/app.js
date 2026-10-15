@@ -147,6 +147,20 @@
     audit: [],
     settings: { autoConfirm: false, zaloReminder: true, emailReminder: true, bookingWindow: '60', deposit: '200000', timezone: 'GMT+7', scheduleOpen: true },
     adminWeekOffset: 0,
+    portfolio: [
+      { id: 'port-bridal-1', serviceId: 'bridal', title: 'Cô dâu thanh lịch lễ gia tiên', tag: 'Cô dâu', image: 'bridal-new.png', note: 'Tone hồng đào trong trẻo, nền mướt mịn' },
+      { id: 'port-bridal-2', serviceId: 'bridal', title: 'Cô dâu đãi tiệc lộng lẫy', tag: 'Cô dâu', image: 'bridal-user.png', note: 'Layout mắt nhũ sáng, tóc búi sang trọng' },
+      { id: 'port-bridal-3', serviceId: 'bridal', title: 'Cận cảnh đường nét & tóc cưới', tag: 'Cô dâu', image: 'bridal.png', note: 'Lớp nền tự nhiên bắt sáng nhẹ' },
+      { id: 'port-bridal-4', serviceId: 'bridal', title: 'Chi tiết ánh nhìn ngày trọng đại', tag: 'Cô dâu', image: 'about-eye.png', note: 'Eyeliner mảnh và mi tơ tự nhiên' },
+      { id: 'port-party-1', serviceId: 'party', title: 'Đỏ rượu trên nền lụa đen', tag: 'Dự tiệc', image: 'hero.png', note: 'Tone đỏ cổ điển quý phái' },
+      { id: 'port-party-2', serviceId: 'party', title: 'Sắc sảo tiệc đêm Gala', tag: 'Dự tiệc', image: 'evening.png', note: 'Mắt khói nhẹ bắt sáng cuốn hút' },
+      { id: 'port-party-3', serviceId: 'party', title: 'Tone nâu Tây sang trọng', tag: 'Dự tiệc', image: 'campaign.png', note: 'Sâu lắng, tôn đường nét góc cạnh gương mặt' },
+      { id: 'port-personal-1', serviceId: 'personal', title: 'Trong trẻo tự nhiên hằng ngày', tag: 'Tự nhiên', image: 'natural.png', note: 'Lớp nền mỏng nhẹ như sương, tôn nét tự nhiên' },
+      { id: 'port-personal-2', serviceId: 'personal', title: 'Tone cam đào tươi sáng', tag: 'Tự nhiên', image: 'campaign.png', note: 'Trẻ trung, rạng rỡ cho dạo phố & công việc' },
+      { id: 'port-personal-3', serviceId: 'personal', title: 'Chi tiết đường nét & hàng mi', tag: 'Tự nhiên', image: 'about-eye.png', note: 'Mắt kẻ mảnh tự nhiên, chuốt mi tơ tơi đều' },
+      { id: 'port-photo-1', serviceId: 'photo', title: 'Ánh nâu trước ống kính Studio', tag: 'Chụp ảnh', image: 'campaign.png', note: 'Tối ưu khối mặt và ánh nhìn' },
+      { id: 'port-photo-2', serviceId: 'photo', title: 'Đường nét nghệ thuật trước ống kính', tag: 'Chụp ảnh', image: 'about-process.png', note: 'Kiểm soát bóng dầu và góc sáng' }
+    ],
     backendReady: false,
     backendError: ''
   };
@@ -164,7 +178,8 @@
       const loaded = {
         ...structuredClone(defaultState),
         booking: { ...defaultState.booking, ...(saved.booking || {}) },
-        adminWeekOffset: saved.adminWeekOffset === undefined ? 0 : Number(saved.adminWeekOffset)
+        adminWeekOffset: saved.adminWeekOffset === undefined ? 0 : Number(saved.adminWeekOffset),
+        portfolio: (saved.portfolio && Array.isArray(saved.portfolio) && saved.portfolio.length) ? saved.portfolio : structuredClone(defaultState.portfolio)
       };
       if (!loaded.booking.date || loaded.booking.date < today) {
         loaded.booking.date = today;
@@ -189,13 +204,15 @@
     saveState();
     route('/booking/service');
   }
+  const isPreview = typeof window !== 'undefined' && window.parent !== window && new URLSearchParams(location.search || '').get('cmsPreview') === '1';
   let state = loadState();
   let siteTools;
 
   if (typeof window !== 'undefined') window.state = state;
   const saveState = (message) => {
+    if (isPreview) return;
     try {
-      localStorage.setItem('hoanMakeupDraft', JSON.stringify({ booking: state.booking, adminWeekOffset: state.adminWeekOffset }));
+      localStorage.setItem('hoanMakeupDraft', JSON.stringify({ booking: state.booking, adminWeekOffset: state.adminWeekOffset, portfolio: state.portfolio }));
       localStorage.setItem('hoanDepositSyncTrigger', String(Date.now()));
     } catch { /* storage may be blocked in iframe / test sandbox */ }
     if (message) toast(message);
@@ -213,14 +230,16 @@
     }
   };
   const currentToday = localIso();
-  if (!state.booking.date || state.booking.date < currentToday) {
-    state.booking.date = currentToday;
-    state.booking.time = defaultBookingTime(currentToday);
-    saveState();
-  }
-  if (!state.booking.time) {
-    state.booking.time = defaultBookingTime(state.booking.date);
-    saveState();
+  if (!isPreview) {
+    if (!state.booking.date || state.booking.date < currentToday) {
+      state.booking.date = currentToday;
+      state.booking.time = defaultBookingTime(currentToday);
+      saveState();
+    }
+    if (!state.booking.time) {
+      state.booking.time = defaultBookingTime(state.booking.date);
+      saveState();
+    }
   }
   const service = (id = state.booking.serviceId) => state.services.find(s => s.id === id) || state.services[0];
   const currentTotal = () => service().price + Number(state.booking.travelFee || 0);
@@ -230,6 +249,15 @@
   };
   let bookingCode = 'CHƯA TẠO';
   try { bookingCode = localStorage.getItem('hoanLastBookingCode') || 'CHƯA TẠO'; } catch {}
+
+  const isUserAdmin = () => {
+    try {
+      return Boolean(localStorage.getItem('hoanAdminToken') || sessionStorage.getItem('hoanAdminToken') || (typeof window !== 'undefined' && window.parent !== window) || (typeof location !== 'undefined' && location.hash.startsWith('#/admin')));
+    } catch {
+      return false;
+    }
+  };
+  if (typeof window !== 'undefined') window.isAdmin = isUserAdmin;
 
   async function api(payload) {
     if (payload && window.parent !== window && new URLSearchParams(location.search).get('cmsPreview') === '1') throw new Error('Bản xem trước không gửi dữ liệu nghiệp vụ.');
@@ -266,11 +294,11 @@
       ensureScheduleSeedData();
       state.backendReady = true;
       state.backendError = '';
-      if (!silent) render();
+      if (!silent && !isPreview) render();
     } catch (error) {
       state.backendError = error.message;
       ensureScheduleSeedData();
-      if (!silent) render();
+      if (!silent && !isPreview) render();
     }
   }
 
@@ -422,8 +450,65 @@
     }
     return `<footer class="public-footer couture-footer ${isAbout?'ct-about-footer':''}">${brandMarkup()}<nav aria-label="Thông tin và hỗ trợ">${footerNav.map(([p,t],i)=>`${i>0?'<span class="footer-sep">|</span>':''}<a ${current.startsWith('/'+p)?'aria-current="page"':''} href="#/${p}">${t}</a>`).join('')}</nav><button type="button" class="visit-preferences" data-visit-action="preferences">Tùy chọn thống kê</button>${socialLinks}${tagline}</footer>`;
   }
+  function resolveBreadcrumbHref(text) {
+    if (!text) return null;
+    const t = String(text).trim();
+    const lower = t.toLowerCase();
+    
+    if (lower === 'trang chủ') return '#/';
+    if (lower === 'dịch vụ') return '#/services';
+    if (lower === 'bộ sưu tập') return '#/gallery';
+    if (lower === 'về hoàn') return '#/about';
+    if (lower === 'hỗ trợ') return '#/support';
+    if (lower === 'chính sách') return '#/policies';
+    if (lower === 'tra cứu lịch' || lower === 'lịch hẹn' || lower === 'tra cứu') return '#/lookup';
+    if (lower === 'liên hệ') return '#/contact';
+    
+    const matchedService = (state.services || []).find(s => 
+      s.name.toLowerCase() === lower || 
+      lower.includes(s.name.toLowerCase()) || 
+      s.name.toLowerCase().includes(lower)
+    );
+    if (matchedService) {
+      return `#/services/${matchedService.id}`;
+    }
+    
+    if (lower === 'cá nhân') return '#/services?filter=personal';
+    if (lower === 'dự tiệc') return '#/services?filter=party';
+    if (lower === 'cô dâu') return '#/services/bridal';
+    
+    return null;
+  }
+
+  function formatBreadcrumbs(breadcrumb) {
+    let items = [];
+    if (Array.isArray(breadcrumb)) {
+      items = breadcrumb.map(item => (typeof item === 'string' ? { label: item, href: resolveBreadcrumbHref(item) } : item));
+    } else if (typeof breadcrumb === 'string') {
+      const parts = breadcrumb.split(/\s*[\/›]\s*/).filter(Boolean);
+      items = parts.map((part, idx) => {
+        const isLast = idx === parts.length - 1;
+        if (isLast) return { label: part };
+        const href = resolveBreadcrumbHref(part);
+        return { label: part, href };
+      });
+    } else {
+      items = [{ label: String(breadcrumb || '') }];
+    }
+
+    const rendered = items.map((item, idx) => {
+      const isLast = idx === items.length - 1;
+      const content = isLast || !item.href
+        ? `<span class="breadcrumb-item ${isLast ? 'breadcrumb-current' : ''}">${esc(item.label)}</span>`
+        : `<a class="breadcrumb-link" href="${esc(item.href)}">${esc(item.label)}</a>`;
+      return `<span>›</span>${content}`;
+    }).join('');
+
+    return `<div class="breadcrumbs"><a class="breadcrumb-link" href="#/">Trang chủ</a>${rendered}</div>`;
+  }
+
   function ctPage(active,title,body,breadcrumb=title,wide=false) {
-    return `<div class="page couture ct-page-${active||'default'}">${publicHeader(active)}<main id="main" class="ct-main ${wide?'ct-wide':''}"><div class="breadcrumbs"><a href="#/">Trang chủ</a><span>›</span>${esc(breadcrumb)}</div>${title?`<h1 class="ct-title">${title}</h1>`:''}${body}</main>${publicFooter()}</div>`;
+    return `<div class="page couture ct-page-${active||'default'}">${publicHeader(active)}<main id="main" class="ct-main ${wide?'ct-wide':''}">${formatBreadcrumbs(breadcrumb)}${title?`<h1 class="ct-title">${title}</h1>`:''}${body}</main>${publicFooter()}</div>`;
   }
   function bookingInvite() {
     const b = state.brand || {};
@@ -451,20 +536,260 @@
     const srvSubtitle = b.servicesPageSubtitle || 'Lựa chọn dành cho khoảnh khắc của bạn.';
     const consultTitle = b.consultTitle || 'Tìm phong cách phù hợp';
     const consultDesc = b.consultDesc || 'Chia sẻ dịp tham dự, trang phục và mong muốn của bạn cùng Hoàn.';
-    const filter=new URLSearchParams(location.hash.split('?')[1]).get('filter')||'all';
-    return ctPage('services',srvTitle,`<p class="ct-subtitle">${esc(srvSubtitle)}</p><nav class="ct-tabs">${[['all','Tất cả'],['personal','Cá nhân'],['party','Dự tiệc'],['bridal','Cô dâu']].map(([v,t])=>`<a class="${filter===v?'active':''}" href="#/services?filter=${v}">${t}</a>`).join('')}</nav><section class="ct-service-grid">${state.services.filter(s=>s.enabled&&(filter==='all'||s.id===filter)).map(s=>`<article><a href="#/services/${s.id}">${fashionPhoto(imageFor(s),esc(s.name))}</a><h2>${esc(s.name)}</h2><p>${esc(s.description)}</p><p class="ct-service-meta">${s.contact?'Tư vấn riêng':`${money(s.price)} · ${s.duration} phút`}</p><a class="link" href="#/services/${s.id}">Xem chi tiết ${icon('arrow')}</a><button class="btn btn-wide" data-action="choose-service" data-id="${s.id}">CHỌN DỊCH VỤ</button></article>`).join('')}</section><section class="ct-consult"><img src="/assets/natural.png" alt="Phong cách trang điểm tự nhiên" loading="lazy"><div><h2>${esc(consultTitle)}</h2><p>${esc(consultDesc)}</p><a class="btn" href="#/contact">NHẬN TƯ VẤN</a></div></section>`,'Dịch vụ',true);
+    const filter = new URLSearchParams(location.hash.split('?')[1]).get('filter') || 'all';
+
+    let contentHtml = '';
+    if (filter === 'all') {
+      contentHtml = `
+        <section class="ct-service-grid">
+          ${state.services.filter(s=>s.enabled).map(s=>`
+            <article>
+              <a href="#/services/${s.id}">
+                ${fashionPhoto(imageFor(s),esc(s.name))}
+              </a>
+              <a href="#/services/${s.id}" style="text-decoration:none;color:inherit;">
+                <h2>${esc(s.name)}</h2>
+              </a>
+              <p>${esc(s.description)}</p>
+              <p class="ct-service-meta">${s.contact?'Tư vấn riêng':`${money(s.price)} · ${s.duration} phút`}</p>
+              <a class="link" href="#/services/${s.id}">Xem ảnh thực tế & Chi tiết ${icon('arrow')}</a>
+              <a class="btn btn-wide" href="#/services/${s.id}">CHỌN DỊCH VỤ</a>
+            </article>
+          `).join('')}
+        </section>
+      `;
+    } else {
+      const s = state.services.find(x => x.id === filter) || state.services[0];
+      const styles = (state.portfolio || []).filter(p => p.serviceId === filter);
+      const photosToShow = styles.length ? styles : [{
+        id: 'default',
+        serviceId: s.id,
+        title: s.name,
+        image: imageFor(s),
+        note: s.description
+      }];
+      contentHtml = `
+        <section class="ct-service-real-gallery-standalone">
+          <div class="ct-real-photo-grid">
+            ${photosToShow.map(p => `
+              <article class="ct-real-photo-card">
+                <a href="#/services/${s.id}/${p.id}">
+                  <div class="ct-real-photo-img-wrap">
+                    <img src="${esc(assetUrl(p.image))}" alt="${esc(p.title)}" loading="lazy">
+                    <span class="ct-real-photo-zoom">Xem chi tiết phong cách ${icon('arrow')}</span>
+                  </div>
+                </a>
+                <figcaption>
+                  <b>${esc(p.title)}</b>
+                  <span>${esc(p.note || p.tag || s.name)}</span>
+                  <p class="ct-service-meta" style="margin-top:6px;font-size:12.5px;color:var(--wine);font-weight:600;">
+                    ${s.contact ? 'Tư vấn riêng' : `${money(s.price)} · ${s.duration} phút`}
+                  </p>
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;gap:8px;flex-wrap:wrap;">
+                    <a class="link" href="#/services/${s.id}/${p.id}" style="font-size:13px;display:inline-block;">
+                      Xem chi tiết phong cách ${icon('arrow')}
+                    </a>
+                    ${(p.id !== 'default' && (isAdmin() || (typeof window !== 'undefined' && (Boolean(localStorage.getItem('hoanAdminToken')) || window.parent !== window)))) ? `
+                      <button type="button" class="btn btn-sm btn-danger" data-action="delete-portfolio-item" data-id="${esc(p.id)}" style="padding:2px 8px;font-size:11px;background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;border-radius:3px;cursor:pointer;" title="Xóa pack này khỏi website">🗑 Xóa pack</button>
+                    ` : ''}
+                  </div>
+                </figcaption>
+              </article>
+            `).join('')}
+          </div>
+          <div style="margin-top:40px;display:flex;justify-content:center;gap:20px;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-dark" data-action="choose-service" data-id="${s.id}">
+              ${s.contact ? 'YÊU CẦU TƯ VẤN GÓI NÀY' : 'ĐẶT LỊCH GÓI NÀY NGAY'}
+            </button>
+            <a class="link" href="#/services?filter=all">← Xem tất cả 4 gói dịch vụ</a>
+          </div>
+        </section>
+      `;
+    }
+
+    const subText = filter === 'all'
+      ? esc(srvSubtitle)
+      : `Khoảnh khắc & hình ảnh khách hàng thực tế — Chọn một phong cách bên dưới để xem chi tiết và đặt lịch:`;
+
+    const breadcrumbVal = filter === 'all'
+      ? 'Dịch vụ'
+      : [
+          { label: 'Dịch vụ', href: '#/services?filter=all' },
+          { label: (state.services.find(x => x.id === filter) || {}).name || 'Dịch vụ' }
+        ];
+
+    return ctPage(
+      'services',
+      srvTitle,
+      `<p class="ct-subtitle">${subText}</p>
+      <nav class="ct-tabs">
+        ${[['all','Tất cả'],['personal','Cá nhân'],['party','Dự tiệc'],['bridal','Cô dâu']].map(([v,t])=>`<a class="${filter===v?'active':''}" href="#/services?filter=${v}">${t}</a>`).join('')}
+      </nav>
+      ${contentHtml}
+      <section class="ct-consult">
+        <img src="/assets/natural.png" alt="Phong cách trang điểm tự nhiên" loading="lazy">
+        <div>
+          <h2>${esc(consultTitle)}</h2>
+          <p>${esc(consultDesc)}</p>
+          <a class="btn" href="#/contact">NHẬN TƯ VẤN</a>
+        </div>
+      </section>`,
+      breadcrumbVal,
+      true
+    );
   }
-  function pageServiceDetail(id) {
-    const s=state.services.find(s=>s.id===id);if(!s)return ctPage('services','Không tìm thấy dịch vụ','<a href="#/services">Xem các dịch vụ</a>');
-    return ctPage(id==='bridal'?'bridal':'services','',`<section class="ct-product-detail"><div>${fashionPhoto(imageFor(s),esc(s.name))}</div><article><p class="ct-overline">${esc(state.brand?.name||'HOÀN')} MAKEUP ARTIST</p><h1>${esc(s.name)}</h1><p>${esc(s.description)}</p><p class="ct-price">${s.contact?'Trao đổi để nhận tư vấn':money(s.price)}</p><p>${icon('clock')} ${s.duration} phút · Phí di chuyển được báo trước khi đặt cọc.</p><h3>Trải nghiệm của bạn</h3><ul><li>Trao đổi phong cách, trang phục và dịp tham dự.</li><li>Chuẩn bị da và trang điểm theo đường nét.</li><li>Kiểm tra và hoàn thiện diện mạo.</li></ul><button class="btn btn-dark btn-wide" data-action="choose-service" data-id="${s.id}">${s.contact?'YÊU CẦU TƯ VẤN':'CHỌN NGÀY VÀ GIỜ'}</button><a class="link" href="#/policies/deposit">Chính sách đặt cọc ${icon('arrow')}</a></article></section>`,`Dịch vụ / ${s.name}`,true);
+  function pageServiceDetail(id, photoId) {
+    const s = state.services.find(s => s.id === id);
+    if (!s) return ctPage('services', 'Không tìm thấy dịch vụ', '<a href="#/services">Xem các dịch vụ</a>');
+    const servicePhotos = (state.portfolio || []).filter(p => p.serviceId === s.id);
+
+    // BƯỚC 4: "click ảnh nào thì hiển thị thông tin đó và ảnh đó" -> Chuẩn Hình ảnh mẫu 2
+    if (photoId) {
+      const selectedPhoto = (state.portfolio || []).find(p => p.id === photoId) || servicePhotos[0] || {
+        id: photoId,
+        image: imageFor(s),
+        title: s.name,
+        note: ''
+      };
+      return ctPage(
+        id === 'bridal' ? 'bridal' : 'services',
+        '',
+        `<section class="ct-product-detail">
+          <div>${fashionPhoto(selectedPhoto.image, selectedPhoto.title)}</div>
+          <article>
+            <p class="ct-overline">${esc(state.brand?.name || 'HOÀN')} MAKEUP ARTIST</p>
+            <h1>${esc(s.name)}</h1>
+            <p class="ct-look-style-note" style="color:#7A1832;font-size:12.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;margin:-8px 0 16px;">PHONG CÁCH: ${esc(selectedPhoto.title)}${selectedPhoto.note ? ` — <span style="font-weight:400;text-transform:none;color:#555;">${esc(selectedPhoto.note)}</span>` : ''}</p>
+            <p>${esc(s.description)}</p>
+            <p class="ct-price">${s.contact ? 'Trao đổi để nhận tư vấn' : money(s.price)}</p>
+            <p>${icon('clock')} ${s.duration} phút · Phí di chuyển được báo trước khi đặt cọc.</p>
+            <h3>Trải nghiệm của bạn</h3>
+            <ul>
+              <li>Trao đổi phong cách, trang phục và dịp tham dự.</li>
+              <li>Chuẩn bị da và trang điểm theo đường nét.</li>
+              <li>Kiểm tra và hoàn thiện diện mạo.</li>
+            </ul>
+            <button class="btn btn-dark btn-wide" data-action="choose-service" data-id="${s.id}" data-style="${esc(selectedPhoto.title)}">${s.contact ? 'YÊU CẦU TƯ VẤN' : 'CHỌN NGÀY VÀ GIỜ'}</button>
+            ${(selectedPhoto.id !== 'default' && (isUserAdmin() || (typeof window !== 'undefined' && Boolean(localStorage.getItem('hoanAdminToken'))))) ? `
+              <div style="margin-top:14px;">
+                <button type="button" class="btn btn-sm btn-danger" data-action="delete-portfolio-item" data-id="${esc(selectedPhoto.id)}" style="padding:6px 14px;font-size:12px;background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;border-radius:3px;cursor:pointer;" title="Xóa pack này khỏi website">🗑 Xóa pack này khỏi website</button>
+              </div>
+            ` : ''}
+            <div style="margin-top:20px;display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
+              <a class="link" href="#/policies/deposit">Chính sách đặt cọc ${icon('arrow')}</a>
+              <a class="link" href="#/services?filter=${s.id}">← Xem các ảnh thực tế khác của ${esc(s.name)}</a>
+            </div>
+          </article>
+        </section>`,
+        [
+          { label: 'Dịch vụ', href: '#/services?filter=all' },
+          { label: s.name, href: `#/services/${s.id}` },
+          { label: selectedPhoto.title }
+        ],
+        true
+      );
+    }
+
+    // BƯỚC 3: "chọn dịch vụ -> hiển thị ảnh thật" -> Danh sách ảnh khách hàng thực tế (kèm tabs đồng bộ)
+    const photosToShow = servicePhotos.length ? servicePhotos : [{
+      id: 'default',
+      serviceId: s.id,
+      title: s.name,
+      image: imageFor(s),
+      note: s.description
+    }];
+
+    return ctPage(
+      id === 'bridal' ? 'bridal' : 'services',
+      s.name,
+      `<p class="ct-subtitle">Khoảnh khắc & hình ảnh khách hàng thực tế — Chọn một phong cách bên dưới để xem chi tiết và đặt lịch:</p>
+      <nav class="ct-tabs">
+        ${[['all','Tất cả','#/services?filter=all'],['personal','Cá nhân','#/services?filter=personal'],['party','Dự tiệc','#/services?filter=party'],['bridal','Cô dâu','#/services?filter=bridal']].map(([v,t,hr])=>`<a class="${id===v?'active':''}" href="${hr}">${t}</a>`).join('')}
+      </nav>
+      <section class="ct-service-real-gallery-standalone">
+        <div class="ct-real-photo-grid">
+          ${photosToShow.map(p => `
+            <article class="ct-real-photo-card">
+              <a href="#/services/${s.id}/${p.id}">
+                <div class="ct-real-photo-img-wrap">
+                  <img src="${esc(assetUrl(p.image))}" alt="${esc(p.title)}" loading="lazy">
+                  <span class="ct-real-photo-zoom">Xem chi tiết phong cách ${icon('arrow')}</span>
+                </div>
+              </a>
+              <figcaption>
+                <b>${esc(p.title)}</b>
+                <span>${esc(p.note || p.tag || s.name)}</span>
+                <p class="ct-service-meta" style="margin-top:6px;font-size:12.5px;color:var(--wine);font-weight:600;">
+                  ${s.contact ? 'Tư vấn riêng' : `${money(s.price)} · ${s.duration} phút`}
+                </p>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;gap:8px;flex-wrap:wrap;">
+                  <a class="link" href="#/services/${s.id}/${p.id}" style="font-size:13px;display:inline-block;">Xem chi tiết phong cách ${icon('arrow')}</a>
+                  ${(p.id !== 'default' && (isUserAdmin() || (typeof window !== 'undefined' && Boolean(localStorage.getItem('hoanAdminToken'))))) ? `
+                    <button type="button" class="btn btn-sm btn-danger" data-action="delete-portfolio-item" data-id="${esc(p.id)}" style="padding:2px 8px;font-size:11px;background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;border-radius:3px;cursor:pointer;" title="Xóa pack này khỏi website">🗑 Xóa pack</button>
+                  ` : ''}
+                </div>
+              </figcaption>
+            </article>
+          `).join('')}
+        </div>
+        <div style="margin-top:40px;display:flex;justify-content:center;gap:20px;align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-dark" data-action="choose-service" data-id="${s.id}">${s.contact ? 'YÊU CẦU TƯ VẤN GÓI NÀY' : 'ĐẶT LỊCH GÓI NÀY NGAY'}</button>
+          <a class="link" href="#/services?filter=all">← Trở về danh sách tất cả dịch vụ</a>
+        </div>
+      </section>`,
+      [
+        { label: 'Dịch vụ', href: '#/services?filter=all' },
+        { label: s.name }
+      ],
+      true
+    );
   }
   function pageGallery(filter='all') {
-    const visible=lookItems.filter(x=>filter==='all'||x[3]===filter);
-    return ctPage('gallery','Những sắc thái của vẻ đẹp',`<p class="ct-subtitle">Tìm cảm hứng cho phong cách của bạn.</p><nav class="ct-tabs">${[['all','Tất cả'],['personal','Trong trẻo'],['party','Dự tiệc'],['bridal','Cô dâu']].map(([v,t])=>`<a class="${filter===v?'active':''}" href="#/gallery?filter=${v}">${t}</a>`).join('')}</nav><section class="ct-gallery">${visible.map(([id,title,photo])=>`<article class="ct-look-${id}"><a href="#/look/${id}">${fashionPhoto(photo,title)}</a><div><h2>${title}</h2><a class="link" href="#/look/${id}">Xem bộ ảnh ${icon('arrow')}</a></div></article>`).join('')}</section>`,'Bộ sưu tập',true);
+    const list = state.portfolio || [];
+    const visible = list.filter(x => filter==='all' || x.serviceId === filter || (filter === 'personal' && (x.serviceId === 'personal' || x.tag === 'Tự nhiên')) || (filter === 'party' && x.serviceId === 'party') || (filter === 'bridal' && x.serviceId === 'bridal'));
+    return ctPage('gallery','Những sắc thái của vẻ đẹp',`<p class="ct-subtitle">Tìm cảm hứng cho phong cách của bạn.</p><nav class="ct-tabs">${[['all','Tất cả'],['bridal','Cô dâu'],['party','Dự tiệc'],['personal','Trong trẻo']].map(([v,t])=>`<a class="${filter===v?'active':''}" href="#/gallery?filter=${v}">${t}</a>`).join('')}</nav><section class="ct-gallery">${visible.map((p, idx)=>`<article class="ct-look-card ${p.serviceId==='bridal' && idx===0 ? 'ct-look-bridal' : ''}"><a href="#/look/${p.id}">${fashionPhoto(p.image,p.title)}</a><div class="ct-look-card-meta"><div><span class="ct-look-tag">${esc(p.tag)}</span><h2>${esc(p.title)}</h2></div><a class="link" href="#/look/${p.id}">Xem chi tiết ${icon('arrow')}</a></div></article>`).join('')}</section>`,'Bộ sưu tập',true);
   }
-  function pageLook() {
-    const id=location.hash.split('/')[2];const x=lookItems.find(x=>x[0]===id)||lookItems[0];
-    return ctPage('gallery',x[1],`<section class="ct-product-detail"><div class="${x[0]==='detail'?'ct-detail-crop':''}">${fashionPhoto(x[2],x[1])}</div><article><p class="ct-overline">${esc(service(x[3]).name)}</p><h2>${x[1]}</h2><p>Lựa chọn điểm nhấn theo đường nét, trang phục và mong muốn của bạn.</p><button class="btn btn-dark" data-action="look-book" data-id="${x[3]}" data-style="${x[1]}">ĐẶT LỊCH PHONG CÁCH NÀY</button><a class="link" href="#/gallery">Trở về bộ sưu tập</a></article></section>`,'Bộ sưu tập / '+x[1]);
+  function pageLook(lookId) {
+    const id = lookId || (location.hash.split('/')[2]);
+    const photo = (state.portfolio || []).find(p => p.id === id || p.serviceId === id) || (state.portfolio && state.portfolio[0]) || {
+      id: 'bridal',
+      title: 'Ngày của riêng bạn',
+      image: 'bridal-new.png',
+      serviceId: 'bridal',
+      note: 'Chi tiết phong cách'
+    };
+    const s = service(photo.serviceId) || state.services[0];
+    return ctPage(
+      'gallery',
+      '',
+      `<section class="ct-product-detail">
+        <div>${fashionPhoto(photo.image, photo.title)}</div>
+        <article>
+          <p class="ct-overline">${esc(state.brand?.name || 'HOÀN')} MAKEUP ARTIST</p>
+          <h1>${esc(s.name)}</h1>
+          <p class="ct-look-style-note" style="color:#7A1832;font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;margin:-10px 0 16px;">PHONG CÁCH: ${esc(photo.title)}</p>
+          <p>${esc(s.description)}</p>
+          <p class="ct-price">${s.contact ? 'Trao đổi để nhận tư vấn' : money(s.price)}</p>
+          <p>${icon('clock')} ${s.duration} phút · Phí di chuyển được báo trước khi đặt cọc.</p>
+          <h3>Trải nghiệm của bạn</h3>
+          <ul>
+            <li>Trao đổi phong cách, trang phục và dịp tham dự.</li>
+            <li>Chuẩn bị da và trang điểm theo đường nét.</li>
+            <li>Kiểm tra và hoàn thiện diện mạo.</li>
+          </ul>
+          <button class="btn btn-dark btn-wide" data-action="choose-service" data-id="${s.id}">${s.contact ? 'YÊU CẦU TƯ VẤN' : 'CHỌN NGÀY VÀ GIỜ'}</button>
+          <div style="margin-top:20px;display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
+            <a class="link" href="#/policies/deposit">Chính sách đặt cọc ${icon('arrow')}</a>
+            <a class="link" href="#/gallery">← Trở về bộ sưu tập</a>
+          </div>
+        </article>
+      </section>`,
+      [
+        { label: 'Bộ sưu tập', href: '#/gallery' },
+        { label: photo.title }
+      ],
+      true
+    );
   }
   function pageAbout() {
     const b = state.brand || {};
@@ -2048,8 +2373,37 @@
   }
 
   function adminGallery() {
-    const body = `<div class="toolbar"><button class="filter-btn active">Tất cả</button><button class="filter-btn">Tự nhiên</button><button class="filter-btn">Dự tiệc</button><button class="filter-btn">Chụp ảnh</button><button class="filter-btn">Cô dâu</button><label class="btn btn-dark" style="margin-left:auto">+ Tải ảnh lên<input type="file" accept="image/*" multiple hidden data-action="gallery-upload"></label></div><div class="admin-card-grid" id="admin-gallery">${galleryItems.map((g,i)=>`<article class="admin-card"><div style="height:220px;overflow:hidden">${img(g.image,g.title)}</div><h3 style="margin-top:14px">${g.title}</h3><p class="muted">${g.tag} · 0${i+1}</p><div class="admin-card-actions"><button class="btn btn-sm" data-action="edit-gallery" data-index="${i}">Chỉnh sửa</button><button class="btn btn-sm btn-danger" data-action="hide-gallery" data-index="${i}">Ẩn ảnh</button></div></article>`).join('')}</div>`;
-    return adminShell('gallery',body,'Bộ sưu tập','Sắp xếp hình ảnh và nội dung hiển thị trên website.',`<a class="btn" href="#/gallery">Xem trên website</a>`);
+    const list = state.portfolio || [];
+    const filter = state.adminGalleryFilter || 'all';
+    const filtered = list.filter(g => filter === 'all' || g.serviceId === filter || g.tag === filter);
+    const body = `
+      <div class="toolbar">
+        <button class="filter-btn ${filter==='all'?'active':''}" data-action="filter-admin-gallery" data-val="all">Tất cả (${list.length})</button>
+        <button class="filter-btn ${filter==='bridal'?'active':''}" data-action="filter-admin-gallery" data-val="bridal">Cô dâu</button>
+        <button class="filter-btn ${filter==='party'?'active':''}" data-action="filter-admin-gallery" data-val="party">Dự tiệc</button>
+        <button class="filter-btn ${filter==='personal'?'active':''}" data-action="filter-admin-gallery" data-val="personal">Tự nhiên</button>
+        <button class="filter-btn ${filter==='photo'?'active':''}" data-action="filter-admin-gallery" data-val="photo">Chụp ảnh</button>
+        <button class="btn btn-dark" style="margin-left:auto" data-action="open-add-portfolio-modal">+ Tải ảnh thật lên</button>
+      </div>
+      <div class="admin-card-grid" id="admin-gallery">
+        ${filtered.map((g,i)=>`
+          <article class="admin-card">
+            <div style="height:220px;overflow:hidden;position:relative;background:#f8f9fa;">
+              ${img(g.image,g.title)}
+              <span class="badge" style="position:absolute;top:10px;left:10px;background:rgba(0,0,0,0.7);color:#fff;font-size:11px;">${esc(g.tag)}</span>
+            </div>
+            <h3 style="margin-top:14px;font-size:16px;">${esc(g.title)}</h3>
+            <p class="muted" style="font-size:13px;">Gắn dịch vụ: <b>${esc(service(g.serviceId)?.name || g.serviceId)}</b></p>
+            <p style="font-size:12px;color:#666;margin:4px 0 12px;">${esc(g.note || 'Không có ghi chú')}</p>
+            <div class="admin-card-actions">
+              <button class="btn btn-sm" data-action="edit-portfolio-item" data-id="${g.id}">Chỉnh sửa</button>
+              <button class="btn btn-sm btn-danger" data-action="delete-portfolio-item" data-id="${g.id}">Xóa ảnh</button>
+            </div>
+          </article>
+        `).join('')}
+      </div>
+    `;
+    return adminShell('gallery',body,'Bộ sưu tập & Ảnh thực tế','Quản lý toàn bộ ảnh mẫu và ảnh khách hàng hiển thị trên Website.',`<a class="btn" href="#/gallery">Xem trên website</a>`);
   }
 
   function adminContent() {
@@ -2798,7 +3152,8 @@
   }
 
   function modal(title, content, confirmLabel = 'Lưu', onConfirm = '', confirmClass = 'btn-dark') {
-    $('#modal-root').innerHTML = `<div class="modal-backdrop" role="presentation" data-action="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><h2 id="modal-title">${title}</h2><div>${content}</div><div class="modal-actions"><button class="btn" data-action="close-modal">Hủy</button><button class="btn ${confirmClass}" data-action="modal-confirm" data-confirm="${onConfirm}">${confirmLabel}</button></div></section></div>`;
+    const isWide = content.includes('admin-preview-grid');
+    $('#modal-root').innerHTML = `<div class="modal-backdrop" role="presentation" data-action="modal-backdrop"><section class="modal ${isWide ? 'modal-wide' : ''}" role="dialog" aria-modal="true" aria-labelledby="modal-title"><h2 id="modal-title">${title}</h2><div>${content}</div><div class="modal-actions"><button class="btn" data-action="close-modal">Hủy</button><button class="btn ${confirmClass}" data-action="modal-confirm" data-confirm="${onConfirm}">${confirmLabel}</button></div></section></div>`;
     setTimeout(() => $('.modal input, .modal select, .modal textarea')?.focus(), 0);
   }
   const closeModal = () => { $('#modal-root').innerHTML = ''; };
@@ -2906,9 +3261,9 @@
     if (path.startsWith('/pages/')) return siteTools?.customPageHtml(path) || '';
     if (path === '/') return pageHome();
     if (path === '/services') return pageServices();
-    if (parts[0] === 'services' && parts[1]) return pageServiceDetail(parts[1]);
+    if (parts[0] === 'services' && parts[1]) return pageServiceDetail(parts[1], parts[2]);
     if (path === '/gallery') return pageGallery(query.get('filter') || 'all');
-    if (parts[0] === 'look') return pageLook();
+    if (parts[0] === 'look') return pageLook(parts[1]);
     if (path === '/about') return pageAbout();
     if (path === '/support') return pageSupport();
     if (path === '/policies') return pagePolicies(query.get('tab'));
@@ -3866,12 +4221,145 @@
     if (event.target.matches('[data-location-search]')) refreshLocationDatalist(event.target);
   });
 
+  function renderCardMockupForm({ title = '', desc = '', price = 450000, duration = 60, image = 'natural.png', tag = 'Tự nhiên', isService = true }) {
+    const preview = image?.startsWith('/') || image?.startsWith('http') ? image : ('/assets/' + (image || 'natural.png'));
+    const priceDisplay = typeof price === 'number' ? price.toLocaleString('vi-VN') + 'đ' : (price || '450.000đ');
+    return `
+      <div class="admin-preview-grid">
+        <!-- Left: Admin Form Fields -->
+        <div class="admin-fields-column">
+          <div class="field">
+            <label>${isService ? 'Tên dịch vụ / Phong cách' : 'Tiêu đề ảnh / Lookbook'}</label>
+            <input id="${isService ? 'modal-service-name' : 'modal-port-title'}" value="${esc(title)}" placeholder="Ví dụ: Trang điểm cá nhân" required oninput="const el=document.getElementById('card-live-preview-title');if(el)el.textContent=this.value||'Tiêu đề';">
+            <small style="color:var(--muted);font-size:12px;margin-top:4px;display:block;">Tên gói sẽ hiển thị ở tiêu đề thẻ trên website.</small>
+          </div>
+
+          <div class="field" style="margin-top:14px;">
+            <label>Mô tả diện mạo & phong cách</label>
+            <textarea id="${isService ? 'modal-service-desc' : 'modal-port-note'}" rows="3" placeholder="Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày." oninput="const el=document.getElementById('card-live-preview-note');if(el)el.textContent=this.value||'Mô tả...';">${esc(desc)}</textarea>
+            <small style="color:var(--muted);font-size:12px;margin-top:4px;display:block;">Đoạn văn ngắn giới thiệu đặc trưng diện mạo.</small>
+          </div>
+
+          ${isService ? `
+            <div class="form-grid" style="margin-top:14px;">
+              <div class="field">
+                <label>Giá niêm yết (VNĐ)</label>
+                <input id="modal-service-price" type="number" value="${price || 450000}" placeholder="450000" oninput="const el=document.getElementById('card-live-preview-price');if(el)el.textContent=Number(this.value).toLocaleString('vi-VN')+'đ';">
+              </div>
+              <div class="field">
+                <label>Thời lượng (phút)</label>
+                <input id="modal-service-duration" type="number" value="${duration || 60}" placeholder="60" oninput="const el=document.getElementById('card-live-preview-duration');if(el)el.textContent=this.value+' phút';">
+              </div>
+            </div>
+          ` : `
+            <div class="form-grid" style="margin-top:14px;">
+              <div class="field">
+                <label>Tag phong cách</label>
+                <select id="modal-port-tag" onchange="const el=document.getElementById('card-live-preview-tag');if(el)el.textContent=this.value;">
+                  ${['Cô dâu', 'Dự tiệc', 'Tự nhiên', 'Chụp ảnh'].map(t => `<option ${tag===t?'selected':''}>${t}</option>`).join('')}
+                </select>
+              </div>
+              <div class="field">
+                <label>Dịch vụ liên kết</label>
+                <select id="modal-port-service">
+                  ${state.services.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+            <input id="modal-port-img" value="${esc(image || 'bridal-new.png')}" style="display:none;">
+          `}
+
+          <div class="field" style="margin-top:16px;">
+            <label>Hình ảnh đại diện</label>
+            <div style="background:#f8f7f5;border:1px solid #e7e3dc;border-radius:4px;padding:12px 14px;margin-top:6px;">
+              <div style="margin-bottom:10px;">
+                <label class="btn btn-dark" style="cursor:pointer; display:inline-flex; align-items:center; gap:8px; padding:9px 16px; font-size:12.5px; font-weight:700; background:var(--wine,#7A1832); border-color:var(--wine,#7A1832); color:#fff; border-radius:3px;">
+                  <span>📷 + TẢI / THÊM ẢNH MỚI TỪ MÁY TÍNH</span>
+                  <input type="file" id="modal-card-file-upload" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="
+                    const f=this.files[0];
+                    if(f){
+                      const u=URL.createObjectURL(f);
+                      const p=document.getElementById('card-live-preview-img');
+                      if(p)p.src=u;
+                      const inImg=document.getElementById('${isService ? 'modal-service-img' : 'modal-port-img'}');
+                      if(inImg)inImg.value=u;
+                      const st=document.getElementById('card-upload-file-status');
+                      if(st)st.innerHTML='<span style=\\'color:#0a7a3b;font-weight:600;\\'>✓ Đã chọn ảnh mới: '+f.name+'</span>';
+                      toast('Đã cập nhật ảnh mới vào khung mẫu');
+                      const d=new FormData();d.append('files',f);
+                      fetch('/api/uploads',{method:'POST',body:d,headers:typeof adminHeaders==='function'?adminHeaders():{}}).then(r=>r.json()).then(res=>{if(res.paths&&res.paths[0]&&inImg)inImg.value=res.paths[0];}).catch(()=>{});
+                    }
+                  ">
+                </label>
+                <div id="card-upload-file-status" style="font-size:12px;color:#555;margin-top:6px;">
+                  Ảnh hiện tại: <b>${esc(image || 'natural.png')}</b>
+                </div>
+              </div>
+
+              <div style="font-size:11.5px;color:#666;font-weight:600;margin-bottom:6px;">Hoặc chọn nhanh ảnh mẫu trong thư viện:</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                ${['natural.png','evening.png','bridal-new.png','natural-detail.png','campaign.png'].map(imgName => `
+                  <button type="button" class="btn btn-sm ${imgName===(image||'natural.png')?'btn-dark':''}" onclick="document.querySelectorAll('.sample-chip-btn').forEach(b=>b.classList.remove('btn-dark'));this.classList.add('btn-dark');document.getElementById('card-live-preview-img').src='/assets/${imgName}';const el=document.getElementById('${isService ? 'modal-service-img' : 'modal-port-img'}');if(el)el.value='${imgName}';const st=document.getElementById('card-upload-file-status');if(st)st.innerHTML='Ảnh mẫu: <b>${imgName}</b>';" class="sample-chip-btn">${imgName}</button>
+                `).join('')}
+              </div>
+              <input id="modal-service-img" value="${esc(image || 'natural.png')}" style="display:none;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Live Preview Card Frame -->
+        <div class="admin-preview-column" style="background:#fbfaf8;border:1px solid #e5e5e5;border-radius:4px;padding:16px;">
+          <div style="margin-bottom:12px;">
+            <span style="color:var(--wine,#7A1832);font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">KHUNG MẪU HIỂN THỊ THỰC TẾ</span>
+            <h4 style="margin:2px 0 0;font-size:13.5px;color:#181818;">Xem trước giao diện thẻ website (Chỉnh đến đâu hiện đến đấy)</h4>
+          </div>
+
+          <div style="background:#fff;border:1px solid #dedede;border-radius:4px;box-shadow:0 6px 18px rgba(0,0,0,0.06);overflow:hidden;">
+            <div style="position:relative;width:100%;aspect-ratio:4/3;max-height:200px;background:#ece6e0;overflow:hidden;cursor:pointer;" onclick="document.getElementById('modal-card-file-upload')?.click();" title="Nhấp vào để đổi ảnh mới">
+              <img id="card-live-preview-img" src="${esc(preview)}" alt="Ảnh xem trước" style="width:100%;height:100%;object-fit:cover;display:block;">
+              <div style="position:absolute;bottom:6px;left:6px;background:rgba(0,0,0,0.65);color:#fff;font-size:10.5px;padding:2px 8px;border-radius:10px;backdrop-filter:blur(3px);">
+                📷 Nhấp đổi ảnh
+              </div>
+              <div style="position:absolute;top:8px;right:8px;background:rgba(0,0,0,0.7);color:#fff;font-size:10px;font-weight:600;padding:2px 6px;border-radius:3px;">
+                LIVE PREVIEW
+              </div>
+            </div>
+            <div style="padding:16px 18px 18px;">
+              <h4 id="card-live-preview-title" style="margin:0 0 6px;font-family:var(--serif,'Tinos',Georgia,serif);font-size:20px;font-weight:400;color:#181818;line-height:1.2;">
+                ${esc(title || 'Trang điểm cá nhân')}
+              </h4>
+              <p id="card-live-preview-note" style="margin:0 0 12px;font-size:13px;color:#555;line-height:1.5;min-height:38px;">
+                ${esc(desc || 'Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.')}
+              </p>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;font-size:13px;">
+                <div style="display:flex;align-items:center;gap:6px;color:#222;">
+                  <b id="card-live-preview-price" style="font-weight:600;color:#181818;">${esc(priceDisplay)}</b>
+                  <span>·</span>
+                  <span id="card-live-preview-duration" style="color:#666;">${esc(duration || 60)} phút</span>
+                </div>
+                <span id="card-live-preview-tag" style="font-size:11px;font-weight:600;color:var(--wine,#7A1832);background:rgba(122,24,50,0.08);padding:3px 8px;border-radius:12px;">
+                  ${esc(tag || 'Tự nhiên')}
+                </span>
+              </div>
+              <div style="margin-bottom:14px;font-size:13px;text-decoration:underline;text-underline-offset:3px;color:#181818;">
+                Xem ảnh thực tế & Chi tiết →
+              </div>
+              <div style="width:100%;border:1px solid #181818;background:#fff;color:#181818;font-weight:700;font-size:11.5px;letter-spacing:0.12em;text-transform:uppercase;padding:10px;text-align:center;border-radius:2px;box-sizing:border-box;">
+                CHỌN DỊCH VỤ
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   document.addEventListener('click', async (event) => {
     const el = event.target.closest('[data-action]');
     if (!el) return;
     const action = el.dataset.action;
     if (action === 'mobile-menu') {const on=$('#site-header')?.classList.toggle('menu-open');el.setAttribute('aria-expanded',String(!!on));}
-    else if (action === 'choose-service' || action === 'booking-service') { state.booking.serviceId = el.dataset.id; saveState(); route(action==='choose-service'?(service().contact?'/contact':'/booking/time'):'/booking/service'); render(); }
+    else if (action === 'choose-service' || action === 'booking-service') { state.booking.serviceId = el.dataset.id; if (el.dataset.style) state.booking.style = el.dataset.style; saveState(); route(action==='choose-service'?(service().contact?'/contact':'/booking/time'):'/booking/service'); render(); }
     else if (action === 'go-step') {
       const form = document.querySelector('.ct-booking form');
       if (form) {
@@ -4064,7 +4552,7 @@
       try {
         const result=await api({action:'createAppointment',...b,customer:b.name,paymentStatus:b.depositReported?'pending_verification':'not_paid'});
         bookingCode=result.appointment.code;
-        try { localStorage.setItem('hoanLastBookingCode',bookingCode); } catch {}
+        try { if (!isPreview) localStorage.setItem('hoanLastBookingCode',bookingCode); } catch {}
         state.appointments.unshift(result.appointment);
         // Xóa draft cũ
         state.booking.depositReported=false;
@@ -4136,8 +4624,27 @@
       }
     }
     else if (action === 'toggle-service') { const s=service(el.dataset.id); try{const result=await api({action:'saveService',...s,enabled:!s.enabled});Object.assign(s,result.service);toast('Đã cập nhật trạng thái dịch vụ');render();}catch(error){toast(error.message)} }
-    else if (action === 'edit-service') { const s=service(el.dataset.id); modal('Chỉnh sửa dịch vụ',`<div class="field"><label>Tên dịch vụ</label><input id="modal-service-name" value="${s.name}"></div><div class="form-grid"><div class="field"><label>Thời lượng</label><input id="modal-service-duration" type="number" value="${s.duration}"></div><div class="field"><label>Giá</label><input id="modal-service-price" type="number" value="${s.price}"></div></div><div class="field"><label>Mô tả</label><textarea id="modal-service-desc">${s.description}</textarea></div>`,'Lưu thay đổi','edit-service:'+s.id); }
-    else if (action === 'add-service') modal('Thêm dịch vụ',`<div class="field"><label>Tên dịch vụ</label><input id="modal-service-name"></div><div class="form-grid"><div class="field"><label>Thời lượng</label><input id="modal-service-duration" type="number" value="60"></div><div class="field"><label>Giá</label><input id="modal-service-price" type="number" value="500000"></div></div><div class="field"><label>Mô tả</label><textarea id="modal-service-desc"></textarea></div>`,'Thêm dịch vụ','add-service');
+    else if (action === 'edit-service') {
+      const s = service(el.dataset.id);
+      modal('Khung mẫu: Chỉnh sửa dịch vụ', renderCardMockupForm({
+        title: s.name,
+        desc: s.description,
+        price: s.price,
+        duration: s.duration,
+        image: imageFor(s),
+        isService: true
+      }), 'Lưu thay đổi', 'edit-service:' + s.id);
+    }
+    else if (action === 'add-service') {
+      modal('Khung mẫu: Thêm dịch vụ mới', renderCardMockupForm({
+        title: 'Trang điểm cá nhân',
+        desc: 'Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.',
+        price: 450000,
+        duration: 60,
+        image: 'natural.png',
+        isService: true
+      }), 'Thêm dịch vụ vào Website', 'add-service');
+    }
     else if (action === 'delete-service') { if(state.services.length<=1)return toast('Cần giữ ít nhất một dịch vụ');try{await api({action:'deleteService',id:el.dataset.id});state.services=state.services.filter(s=>s.id!==el.dataset.id);toast('Đã xóa dịch vụ');render();}catch(error){toast(error.message)} }
     else if (action === 'edit-customer') { const c=state.customers[Number(el.dataset.index)]; modal('Chỉnh sửa khách hàng',`<div class="field"><label>Họ tên</label><input id="modal-customer-name" value="${c.name}"></div><div class="field"><label>Ghi chú</label><textarea id="modal-customer-note">${c.note}</textarea></div>`,'Lưu','edit-customer:'+el.dataset.index); }
     else if (action === 'add-customer') modal('Thêm khách hàng',`<div class="field"><label>Họ tên</label><input id="modal-customer-name"></div><div class="field"><label>Số điện thoại</label><input id="modal-customer-phone"></div><div class="field"><label>Email</label><input id="modal-customer-email" type="email"></div>`,'Thêm','add-customer');
@@ -4145,6 +4652,56 @@
     else if (action === 'add-promo') modal('Tạo mã ưu đãi',`<div class="field"><label>Mã ưu đãi</label><input id="modal-promo-code" value="NEWCLIENT"></div><div class="field"><label>Giá trị</label><input id="modal-promo-value" value="100.000đ"></div>`,'Tạo mã','add-promo');
     else if (action === 'delete-promo') { state.promotions.splice(Number(el.dataset.index),1); saveState('Đã xóa mã ưu đãi'); render(); }
     else if (action === 'edit-promo') toast('Đã mở chỉnh sửa mã '+state.promotions[Number(el.dataset.index)].code);
+    else if (action === 'filter-admin-gallery') {
+      state.adminGalleryFilter = el.dataset.val;
+      render();
+    }
+    else if (action === 'open-add-portfolio-modal') {
+      modal('Khung mẫu: Thêm ảnh thật & Lookbook', renderCardMockupForm({
+        title: 'Cô dâu Thu Thảo - Tone Hồng Đào',
+        desc: 'Lớp nền mướt mịn, mi tơ tự nhiên, layout tiệc tối',
+        image: 'bridal-new.png',
+        tag: 'Cô dâu',
+        isService: false
+      }), 'Thêm vào website', 'add-portfolio-confirm');
+    }
+    else if (action === 'delete-portfolio-item') {
+      const id = el.dataset.id;
+      if (confirm('Bạn có chắc chắn muốn xóa ảnh này khỏi website?')) {
+        state.portfolio = (state.portfolio || []).filter(p => p.id !== id);
+        saveState('Đã xóa ảnh khỏi website');
+        render();
+      }
+    }
+    else if (action === 'edit-portfolio-item') {
+      const id = el.dataset.id;
+      const p = (state.portfolio || []).find(x => x.id === id);
+      if (p) {
+        modal('Khung mẫu: Chỉnh sửa ảnh thật & Lookbook', renderCardMockupForm({
+          title: p.title,
+          desc: p.note,
+          image: p.image,
+          tag: p.tag,
+          isService: false
+        }), 'Lưu thay đổi', 'edit-portfolio-confirm:' + id);
+      }
+    }
+    else if (action === 'view-photo') {
+      const src = el.dataset.src;
+      const title = el.dataset.title;
+      const tag = el.dataset.tag;
+      const note = el.dataset.note;
+      modal(title || 'Chi tiết hình ảnh', `
+        <div style="text-align:center;">
+          <img src="${esc(src)}" alt="${esc(title)}" style="max-height:65vh;max-width:100%;object-fit:contain;border-radius:4px;box-shadow:0 10px 30px rgba(0,0,0,0.15);">
+          <div style="margin-top:16px;text-align:left;background:#f9f9f9;padding:14px 18px;border-radius:6px;">
+            <p style="font-size:12px;font-weight:700;letter-spacing:1px;color:#7A1832;text-transform:uppercase;margin:0 0 4px;">${esc(tag)}</p>
+            <h4 style="margin:0 0 6px;font-size:17px;font-family:Tinos,Georgia,serif;">${esc(title)}</h4>
+            <p style="margin:0;font-size:13px;color:#555;">${esc(note || 'Lựa chọn phong cách cá nhân hóa cùng HOÀN Makeup Artist.')}</p>
+          </div>
+        </div>
+      `, 'Đặt lịch phong cách này', 'book-this-style:' + (tag || ''));
+    }
     else if (action === 'hide-gallery') { el.closest('.admin-card').style.opacity='.35'; toast('Đã ẩn ảnh khỏi website'); }
     else if (action === 'publish-content') {
       try {
@@ -4513,6 +5070,44 @@
       try { const date=$('#modal-block-date').value,time=$('#modal-block-time').value;await api({action:'setScheduleSlot',date,time,status:'blocked',note:$('#modal-block-reason').value});const existing=slotRecord(date,time);if(existing)existing.status='blocked';else state.scheduleSlots.push({slotDate:date,slotTime:time,status:'blocked'});toast('Đã chặn khung giờ'); }
       catch(error){toast(error.message);return;}
     }
+    else if (action === 'add-portfolio-confirm') {
+      const title = $('#modal-port-title')?.value.trim();
+      if (!title) { toast('Vui lòng nhập tiêu đề ảnh'); return; }
+      const tag = $('#modal-port-tag')?.value || 'Cô dâu';
+      const serviceId = $('#modal-port-service')?.value || 'bridal';
+      const image = $('#modal-port-img')?.value.trim() || 'bridal-new.png';
+      const note = $('#modal-port-note')?.value.trim() || '';
+      const newItem = {
+        id: 'port-' + Date.now(),
+        serviceId,
+        title,
+        tag,
+        image,
+        note
+      };
+      if (!state.portfolio) state.portfolio = [];
+      state.portfolio.unshift(newItem);
+      saveState('Đã thêm ảnh vào Website và Dịch vụ thành công!');
+    }
+    else if (action.startsWith('edit-portfolio-confirm:')) {
+      const id = action.split(':')[1];
+      const p = (state.portfolio || []).find(x => x.id === id);
+      if (p) {
+        p.title = $('#modal-port-title')?.value.trim() || p.title;
+        p.tag = $('#modal-port-tag')?.value || p.tag;
+        p.serviceId = $('#modal-port-service')?.value || p.serviceId;
+        p.image = $('#modal-port-img')?.value.trim() || p.image;
+        p.note = $('#modal-port-note')?.value.trim() || p.note;
+        saveState('Đã cập nhật ảnh thành công!');
+      }
+    }
+    else if (action.startsWith('book-this-style:')) {
+      const tag = action.split(':')[1];
+      const matched = state.services.find(s => s.name.includes(tag) || (tag === 'Cô dâu' && s.id === 'bridal') || (tag === 'Dự tiệc' && s.id === 'party'));
+      if (matched) state.booking.serviceId = matched.id;
+      saveState();
+      route(service().contact ? '/contact' : '/booking/time');
+    }
     else if (action === 'manual-payment') {
       try { const code=$('#modal-payment-code').value.trim();const result=await api({action:'updateAppointment',code,deposit:Number($('#modal-payment-amount').value)});const a=getAppointment(code);if(a)Object.assign(a,result.appointment);toast('Đã ghi nhận tiền cọc vào dữ liệu thật'); }
       catch(error){toast(error.message);return;}
@@ -4570,7 +5165,11 @@
   window.addEventListener('hashchange',()=>closeEditorial());
   window.addEventListener('hashchange', render);
   window.addEventListener('storage', async (event) => {
+    if (isPreview) return;
+    if (event.url && event.url.includes('cmsPreview=1')) return;
     if (event.key && !['hoanDepositSyncTrigger', 'hoanMakeupDraft', 'hoanLastBookingCode'].includes(event.key)) return;
+    const currentRoute = (location.hash.slice(1) || '/').split('?')[0];
+    if (currentRoute === '/admin/content' || currentRoute === '/admin/content-pages') return;
     state = loadState();
     if (typeof window !== 'undefined') window.state = state;
     await hydrateBackend(true);

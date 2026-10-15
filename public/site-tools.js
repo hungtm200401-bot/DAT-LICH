@@ -37,9 +37,12 @@ export function createSiteTools(ctx) {
 
   const adminHeaders = () => {
     let token = '';
-    try { token = sessionStorage.getItem('hoanAdminToken') || ''; } catch { /* local */ }
+    try { token = localStorage.getItem('hoanAdminToken') || sessionStorage.getItem('hoanAdminToken') || ''; } catch { /* local */ }
     return token ? { Authorization: 'Bearer ' + token } : {};
   };
+  function drawStudioOutline() {
+    try { drawStudioNavigation(); } catch (e) {}
+  }
   async function request(url, data, admin = false) {
     const response = await fetch(url, { cache: 'no-store', ...(data ? { method: 'POST', body: JSON.stringify(data) } : {}), headers: { ...(data ? { 'Content-Type': 'application/json' } : {}), ...(admin ? adminHeaders() : {}) } });
     const result = await response.json();
@@ -235,18 +238,328 @@ export function createSiteTools(ctx) {
     return slots.map(item => option(String(item.value), item.label, String(Math.min(selectedSlot, pageSectionSlots.length)))).join('');
   }
 
-  function openBlockPicker(slot = pageSectionSlots.length) {
+  function openSectionTemplatesPicker(slot = pageSectionSlots.length) {
     blockInsertSlot = Number.isFinite(Number(slot)) ? Number(slot) : pageSectionSlots.length;
     const container = blockModalContainer();
     container.innerHTML = `
       <div class="cms-modal-overlay cms-section-overlay" data-action="close-block-modal">
-        <div class="cms-section-dialog" role="dialog" aria-modal="true" aria-labelledby="cms-block-picker-title">
-          <header><div><span class="cms-dialog-kicker">THƯ VIỆN SECTION</span><h2 id="cms-block-picker-title">Thêm nội dung vào trang</h2><p>Mỗi mẫu tự dùng font, khoảng cách và responsive của website.</p></div><button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng">&times;</button></header>
+        <div class="cms-section-dialog" role="dialog" aria-modal="true" aria-labelledby="cms-block-picker-title" style="max-width:760px;width:95%;">
+          <header style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid #e5e7eb;padding-bottom:14px;margin-bottom:16px;">
+            <div>
+              <span class="cms-dialog-kicker">THƯ VIỆN KHUNG MẪU SECTION</span>
+              <h2 id="cms-block-picker-title" style="margin:4px 0 4px;font-size:22px;font-weight:600;">Thêm phần nội dung vào trang</h2>
+              <p style="margin:0;font-size:13px;color:#666;">Chọn một mẫu có sẵn cấu trúc, font và responsive tối ưu cho website.</p>
+            </div>
+            <button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng">&times;</button>
+          </header>
+          <div style="margin-bottom:16px;display:flex;gap:10px;align-items:center;">
+            <button type="button" class="btn btn-dark btn-sm" data-action="switch-to-pack-template" style="background:var(--wine,#7A1832);border-color:var(--wine,#7A1832);color:#fff;font-weight:500;">
+              ⭐ Khung mẫu: Thêm Pack / Phong cách makeup
+            </button>
+            <span style="font-size:12.5px;color:#777;">(Dành riêng cho trang Dịch vụ & Bộ sưu tập)</span>
+          </div>
           <div class="cms-template-grid">
             ${CONTENT_BLOCK_TEMPLATES.map(template => `<button type="button" class="cms-template-card" data-action="choose-block-template" data-type="${template.type}"><span class="cms-template-preview">${template.preview}</span><b>${esc(template.name)}</b><small>${esc(template.description)}</small></button>`).join('')}
           </div>
         </div>
       </div>`;
+  }
+
+  function openPackModal(packToEdit = null) {
+    const container = blockModalContainer();
+    if (!container) return;
+
+    const state = ctx.getState ? ctx.getState() : (typeof window !== 'undefined' ? window.state : {});
+    const packs = (state && state.portfolio) ? state.portfolio : [];
+
+    let currentService = 'personal';
+    if (packToEdit) {
+      currentService = packToEdit.serviceId || 'personal';
+    } else {
+      try {
+        const hash = frame()?.contentWindow?.location?.hash || '';
+        if (hash.includes('party')) currentService = 'party';
+        else if (hash.includes('bridal')) currentService = 'bridal';
+        else if (hash.includes('photo')) currentService = 'photo';
+        else if (hash.includes('personal')) currentService = 'personal';
+      } catch (e) {}
+    }
+
+    const titleVal = packToEdit ? packToEdit.title : (currentService === 'party' ? 'Trang điểm dự tiệc' : currentService === 'bridal' ? 'Trang điểm cô dâu' : currentService === 'photo' ? 'Trang điểm chụp ảnh' : 'Trang điểm cá nhân');
+    const tagVal = packToEdit ? packToEdit.tag : (currentService === 'party' ? 'Dự tiệc' : currentService === 'bridal' ? 'Cô dâu' : currentService === 'photo' ? 'Chụp ảnh' : 'Tự nhiên');
+    const noteVal = packToEdit ? (packToEdit.note || '') : (currentService === 'party' ? 'Sắc nét vừa đủ, bền đẹp dưới nhiều điều kiện ánh sáng.' : currentService === 'bridal' ? 'Thiết kế diện mạo, thử phong cách và đồng hành trong ngày cưới.' : currentService === 'photo' ? 'Tối ưu lớp nền, đường nét và màu sắc trước ống kính.' : 'Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.');
+    const priceVal = packToEdit ? (packToEdit.price || (currentService === 'bridal' ? 'Tư vấn riêng' : currentService === 'party' ? '650.000đ' : currentService === 'photo' ? '850.000đ' : '450.000đ')) : (currentService === 'bridal' ? 'Tư vấn riêng' : currentService === 'party' ? '650.000đ' : currentService === 'photo' ? '850.000đ' : '450.000đ');
+    const durationVal = packToEdit ? (packToEdit.duration || (currentService === 'bridal' ? '150 phút' : currentService === 'party' ? '90 phút' : currentService === 'photo' ? '120 phút' : '60 phút')) : (currentService === 'bridal' ? '150 phút' : currentService === 'party' ? '90 phút' : currentService === 'photo' ? '120 phút' : '60 phút');
+    const imgVal = packToEdit ? packToEdit.image : (currentService === 'party' ? 'evening.png' : currentService === 'bridal' ? 'bridal-new.png' : currentService === 'photo' ? 'campaign.png' : 'natural.png');
+    const previewSrc = imgVal.startsWith('/') || imgVal.startsWith('http') ? imgVal : '/assets/' + imgVal;
+
+    container.innerHTML = `
+      <div class="cms-modal-overlay cms-section-overlay" data-action="close-block-modal" style="background:rgba(18,16,14,0.68);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;position:fixed;inset:0;z-index:99999;padding:20px;overflow-y:auto;">
+        <div class="cms-section-dialog cms-block-editor" role="dialog" aria-modal="true" aria-labelledby="cms-block-picker-title" style="width:min(980px, calc(100vw - 32px)); max-height:calc(100dvh - 48px); background:#fff; border:1px solid #d8d8d8; box-shadow:0 24px 70px rgba(0,0,0,.22); display:flex; flex-direction:column; overflow:hidden; border-radius:4px;">
+          
+          <header style="position:sticky; top:0; z-index:2; display:flex; justify-content:space-between; align-items:flex-start; gap:20px; padding:18px 24px 14px; border-bottom:1px solid #e5e5e5; background:#fff;">
+            <div>
+              <span class="cms-dialog-kicker" style="color:var(--wine,#7A1832); font-size:10.5px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase;">QUẢN TRỊ DỊCH VỤ & GÓI TRANG ĐIỂM · HOÀN WEB ADMIN</span>
+              <h2 id="cms-block-picker-title" style="margin:2px 0 3px; font-size:21px; font-weight:600; color:#181818;">
+                ${packToEdit ? 'Chỉnh sửa gói dịch vụ trên khung mẫu' : 'Khung Mẫu Chuẩn: Thêm / Chỉnh Sửa Pack Dịch Vụ'}
+              </h2>
+              <p style="margin:0; font-size:12.5px; color:#666;">
+                Chỉnh đến đâu thông tin hiện đến đấy — Viết text và chọn ảnh, khung mẫu thẻ bên phải sẽ cập nhật tức thì.
+              </p>
+            </div>
+            <button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng" style="font-size:24px; border:none; background:transparent; cursor:pointer; color:#888;">&times;</button>
+          </header>
+
+          <!-- Category selector tabs (Admin pills style, NO emojis!) -->
+          <div style="background:#faf8f5; border-bottom:1px solid #ebe5df; padding:10px 24px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span style="font-size:12px; font-weight:700; color:#444; text-transform:uppercase; letter-spacing:0.04em;">Chọn phân loại:</span>
+              <div class="card-template-tabs" style="display:flex; gap:6px; flex-wrap:wrap;">
+                <button type="button" class="btn btn-sm card-category-tab ${currentService==='personal'?'btn-dark active':''}" data-cat="personal">Trang điểm cá nhân</button>
+                <button type="button" class="btn btn-sm card-category-tab ${currentService==='party'?'btn-dark active':''}" data-cat="party">Trang điểm dự tiệc</button>
+                <button type="button" class="btn btn-sm card-category-tab ${currentService==='bridal'?'btn-dark active':''}" data-cat="bridal">Trang điểm cô dâu</button>
+                <button type="button" class="btn btn-sm card-category-tab ${currentService==='photo'?'btn-dark active':''}" data-cat="photo">Trang điểm chụp ảnh</button>
+              </div>
+            </div>
+            <select id="modal-new-pack-service" style="display:none;">
+              <option value="personal" ${currentService==='personal'?'selected':''}>Trang điểm cá nhân</option>
+              <option value="party" ${currentService==='party'?'selected':''}>Trang điểm dự tiệc</option>
+              <option value="bridal" ${currentService==='bridal'?'selected':''}>Trang điểm cô dâu</option>
+              <option value="photo" ${currentService==='photo'?'selected':''}>Trang điểm chụp ảnh</option>
+            </select>
+          </div>
+
+          ${packs.length ? `
+            <!-- Quick Pack Manager Bar with Delete Button -->
+            <div style="background:#fff; border-bottom:1px solid #ebe5df; padding:8px 24px; display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:12px; overflow-x:auto;">
+              <div style="display:flex; align-items:center; gap:8px; white-space:nowrap; flex-wrap:nowrap; width:100%;">
+                <span style="font-weight:700; color:var(--wine,#7A1832); text-transform:uppercase; font-size:11px; letter-spacing:0.04em; flex-shrink:0;">Pack đã thêm (${packs.length}):</span>
+                <div style="display:flex; align-items:center; gap:6px; overflow-x:auto; padding:2px 0; flex:1;">
+                  ${packs.map(p => `
+                    <span style="display:inline-flex; align-items:center; gap:6px; background:#f4f2ee; border:1px solid #e0dbd3; padding:2px 8px; border-radius:3px; font-size:11.5px; flex-shrink:0;">
+                      <span style="max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(p.title)}">${esc(p.title)}</span>
+                      <button type="button" class="btn btn-sm" data-action="edit-pack-item" data-id="${esc(p.id)}" style="padding:1px 6px; font-size:10px; line-height:1.2; border:none; background:#e2ded8; cursor:pointer;" title="Chỉnh sửa pack này">Sửa</button>
+                      <button type="button" class="btn btn-sm btn-danger" data-action="delete-pack-item" data-id="${esc(p.id)}" style="padding:1px 6px; font-size:10px; line-height:1.2; border:none; background:#fee2e2; color:#b91c1c; font-weight:700; cursor:pointer;" title="Xóa pack này khỏi website">🗑 Xóa</button>
+                    </span>
+                  `).join('')}
+                </div>
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- Scrollable Body: 2-Column Responsive Layout -->
+          <div style="flex:1; overflow-y:auto; padding:20px 24px; background:#f4f2ee;">
+            <form id="cms-new-pack-form" ${packToEdit ? `data-edit-id="${esc(packToEdit.id)}"` : ''} style="display:grid; grid-template-columns:repeat(auto-fit, minmax(360px, 1fr)); gap:24px; align-items:start;">
+              
+              <!-- LEFT COLUMN: EDITING INPUTS & PROMINENT PHOTO UPLOAD -->
+              <div style="background:#fff; border:1px solid #dedede; border-radius:4px; padding:20px; box-shadow:0 4px 16px rgba(0,0,0,0.04);">
+                
+                <div style="margin-bottom:14px;">
+                  <label style="font-size:11px; font-weight:700; letter-spacing:0.08em; color:#7A1832; text-transform:uppercase; display:block; margin-bottom:5px;">
+                    Tên gói / Phong cách Makeup (Viết text vào đây)
+                  </label>
+                  <input id="modal-new-pack-title" value="${esc(titleVal)}" placeholder="Ví dụ: Trang điểm cá nhân tự nhiên" required style="width:100%; font-size:15px; font-weight:600; color:#181818; padding:9px 12px; border:1px solid #d5d5d5; border-radius:3px; background:#fff; box-sizing:border-box; transition:border-color 0.2s;" onfocus="this.style.borderColor='#181818';" onblur="this.style.borderColor='#d5d5d5';">
+                  <small style="color:#666; font-size:11.5px; margin-top:4px; display:block;">Gõ text đến đâu, tiêu đề thẻ bên phải hiển thị ngay đến đấy.</small>
+                </div>
+
+                <div style="margin-bottom:14px;">
+                  <label style="font-size:11px; font-weight:700; letter-spacing:0.08em; color:#7A1832; text-transform:uppercase; display:block; margin-bottom:5px;">
+                    Mô tả diện mạo & layout (Viết text vào đây)
+                  </label>
+                  <textarea id="modal-new-pack-note" rows="3" placeholder="Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày..." style="width:100%; font-size:13.5px; color:#333; line-height:1.6; padding:9px 12px; border:1px solid #d5d5d5; border-radius:3px; background:#fff; box-sizing:border-box; resize:vertical; transition:border-color 0.2s;" onfocus="this.style.borderColor='#181818';" onblur="this.style.borderColor='#d5d5d5';">${esc(noteVal)}</textarea>
+                  <small style="color:#666; font-size:11.5px; margin-top:4px; display:block;">Gõ text đến đâu, đoạn mô tả thẻ bên phải hiển thị ngay đến đấy.</small>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:18px;">
+                  <div>
+                    <label style="font-size:10.5px; font-weight:700; color:#555; text-transform:uppercase; display:block; margin-bottom:4px;">Giá niêm yết</label>
+                    <input id="modal-new-pack-price" value="${esc(priceVal)}" placeholder="450.000đ" style="width:100%; font-weight:600; font-size:13.5px; color:#181818; padding:7px 10px; border:1px solid #d5d5d5; border-radius:3px; background:#fff; box-sizing:border-box;">
+                  </div>
+                  <div>
+                    <label style="font-size:10.5px; font-weight:700; color:#555; text-transform:uppercase; display:block; margin-bottom:4px;">Thời lượng</label>
+                    <input id="modal-new-pack-duration" value="${esc(durationVal)}" placeholder="60 phút" style="width:100%; font-size:13.5px; color:#444; padding:7px 10px; border:1px solid #d5d5d5; border-radius:3px; background:#fff; box-sizing:border-box;">
+                  </div>
+                  <div>
+                    <label style="font-size:10.5px; font-weight:700; color:#7A1832; text-transform:uppercase; display:block; margin-bottom:4px;">Tag phong cách</label>
+                    <input id="modal-new-pack-tag" value="${esc(tagVal)}" placeholder="Tự nhiên" style="width:100%; font-size:13px; font-weight:600; color:#7A1832; padding:7px 10px; border:1px solid #d5d5d5; border-radius:3px; background:#fff; box-sizing:border-box;">
+                  </div>
+                </div>
+
+                <!-- DEDICATED & PROMINENT PHOTO UPLOAD SECTION -->
+                <div style="background:#faf8f5; border:1px solid #e8e3dc; border-radius:4px; padding:14px 16px;">
+                  <label style="font-size:11px; font-weight:700; letter-spacing:0.08em; color:#7A1832; text-transform:uppercase; display:block; margin-bottom:8px;">
+                    HÌNH ẢNH ĐẠI DIỆN GÓI
+                  </label>
+                  
+                  <!-- Prominent Upload Button -->
+                  <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+                    <label class="btn btn-dark" style="cursor:pointer; display:inline-flex; align-items:center; gap:8px; padding:10px 18px; font-size:12.5px; font-weight:700; letter-spacing:0.03em; border-radius:3px; background:#7A1832; border-color:#7A1832; color:#fff; box-shadow:0 3px 10px rgba(122,24,50,0.22); transition:all 0.2s;" onmouseover="this.style.background='#5f1226';" onmouseout="this.style.background='#7A1832';">
+                      <span>📷 + TẢI / THÊM ẢNH MỚI TỪ MÁY TÍNH</span>
+                      <input type="file" id="modal-pack-file-upload" accept="image/png,image/jpeg,image/webp" style="display:none;">
+                    </label>
+                    <span style="font-size:12px; color:#666;">Hỗ trợ PNG, JPG, WEBP (Tối đa 5MB)</span>
+                  </div>
+
+                  <!-- Status badge: Live file indicator -->
+                  <div id="pack-upload-filename-badge" style="font-size:12px; color:#333; background:#fff; border:1px solid #ddd; border-radius:3px; padding:7px 12px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between;">
+                    <span>Ảnh đang chọn: <b id="pack-upload-active-filename">${esc(imgVal)}</b></span>
+                    <span id="pack-upload-status-pill" style="color:#0a7a3b; font-weight:600; font-size:11.5px;">✓ Hiển thị ngay tức thì</span>
+                  </div>
+
+                  <!-- Quick sample library -->
+                  <div style="font-size:11.5px; color:#666; font-weight:600; margin-bottom:6px;">Hoặc chọn nhanh ảnh mẫu có sẵn:</div>
+                  <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                    <button type="button" class="btn btn-sm ${imgVal==='natural.png'?'btn-dark':''}" data-action="pick-pack-sample" data-img="natural.png">natural.png</button>
+                    <button type="button" class="btn btn-sm ${imgVal==='evening.png'?'btn-dark':''}" data-action="pick-pack-sample" data-img="evening.png">evening.png</button>
+                    <button type="button" class="btn btn-sm ${imgVal==='bridal-new.png'?'btn-dark':''}" data-action="pick-pack-sample" data-img="bridal-new.png">bridal-new.png</button>
+                    <button type="button" class="btn btn-sm ${imgVal==='natural-detail.png'?'btn-dark':''}" data-action="pick-pack-sample" data-img="natural-detail.png">natural-detail.png</button>
+                    <button type="button" class="btn btn-sm ${imgVal==='campaign.png'?'btn-dark':''}" data-action="pick-pack-sample" data-img="campaign.png">campaign.png</button>
+                    <input id="modal-new-pack-img" value="${esc(imgVal)}" style="display:none;">
+                  </div>
+                </div>
+              </div>
+
+              <!-- RIGHT COLUMN: KHUNG MẪU HIỂN THỊ THỰC TẾ (REAL-TIME CARD PREVIEW) -->
+              <div style="position:sticky; top:0;">
+                <div style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+                  <div>
+                    <span style="color:#7A1832; font-size:10px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase;">KHUNG MẪU HIỂN THỊ THỰC TẾ</span>
+                    <h4 style="margin:2px 0 0; font-size:13.5px; color:#181818;">Xem trước giao diện thẻ website (Chỉnh đến đâu hiện đến đấy)</h4>
+                  </div>
+                  <span style="font-size:10px; background:#181818; color:#fff; font-weight:700; padding:2px 8px; border-radius:3px;">LIVE 0ms</span>
+                </div>
+
+                <!-- THE CARD MOCKUP FRAME -->
+                <article class="ct-service-card card-mockup-frame" style="background:#fff; border:1px solid #dedede; border-radius:4px; box-shadow:0 8px 30px rgba(0,0,0,0.08); overflow:hidden;">
+                  
+                  <!-- Photo Box with Click-to-upload & Drag-and-drop -->
+                  <div id="modal-pack-photo-container" style="position:relative; width:100%; height:260px; background:#e8e3dc; overflow:hidden; cursor:pointer;" title="Nhấp vào đây hoặc nút bên trái để đổi ảnh mới">
+                    <img id="modal-pack-preview-img" src="${esc(previewSrc)}" alt="Ảnh đại diện gói" style="width:100%; height:100%; object-fit:cover; display:block; transition:transform 0.3s;">
+                    <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 40%, rgba(0,0,0,0.2) 100%); pointer-events:none;"></div>
+                    <div style="position:absolute; bottom:10px; left:10px; background:rgba(0,0,0,0.7); color:#fff; font-size:11px; font-weight:500; padding:4px 12px; border-radius:14px; backdrop-filter:blur(4px); pointer-events:none;">
+                      📷 Nhấp vào ảnh để tải ảnh mới từ máy
+                    </div>
+                    <div style="position:absolute; top:10px; right:10px; background:rgba(122,24,50,0.85); color:#fff; font-size:10px; font-weight:700; padding:3px 8px; border-radius:3px; letter-spacing:0.04em;">
+                      MẪU THỰC TẾ
+                    </div>
+                    ${packToEdit ? `
+                      <button type="button" class="btn btn-sm btn-danger" data-action="delete-pack-from-modal" data-id="${esc(packToEdit.id)}" style="position:absolute; top:10px; left:10px; z-index:3; background:rgba(185,28,28,0.92); border:none; color:#fff; font-size:11px; font-weight:700; padding:4px 10px; border-radius:3px; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,0.35);" title="Xóa pack này khỏi website">
+                        🗑 Xóa pack này
+                      </button>
+                    ` : ''}
+                  </div>
+
+                  <!-- Card Content with Live Reactive Text -->
+                  <div style="padding:20px 22px 22px; background:#fff;">
+                    <h3 id="card-preview-live-title" style="margin:0 0 8px; font-family:var(--serif,'Tinos',Georgia,serif); font-size:24px; font-weight:400; color:#181818; line-height:1.2;">
+                      ${esc(titleVal || 'Tên gói dịch vụ')}
+                    </h3>
+                    <p id="card-preview-live-note" style="margin:0 0 14px; font-size:13.5px; color:#555; line-height:1.6; min-height:44px;">
+                      ${esc(noteVal || 'Mô tả diện mạo & phong cách...')}
+                    </p>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; font-size:13.5px; padding-bottom:12px; border-bottom:1px solid #f0ece6;">
+                      <div style="display:flex; align-items:center; gap:6px;">
+                        <b id="card-preview-live-price" style="font-weight:600; color:#181818;">${esc(priceVal || '450.000đ')}</b>
+                        <span>·</span>
+                        <span id="card-preview-live-duration" style="color:#666;">${esc(durationVal || '60 phút')}</span>
+                      </div>
+                      <span id="card-preview-live-tag" style="font-size:11px; font-weight:600; color:#7A1832; background:rgba(122,24,50,0.08); padding:3px 10px; border-radius:12px;">
+                        ${esc(tagVal || 'Tự nhiên')}
+                      </span>
+                    </div>
+                    <div style="margin-bottom:16px; font-size:13.5px; text-decoration:underline; text-underline-offset:3px; color:#181818;">
+                      Xem ảnh thực tế & Chi tiết →
+                    </div>
+                    <button type="submit" class="btn btn-wide" style="display:block; width:100%; border:1px solid #181818; background:#181818; color:#fff; font-weight:700; font-size:12.5px; letter-spacing:0.12em; text-transform:uppercase; padding:13px 16px; text-align:center; border-radius:2px; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.background='#333';" onmouseout="this.style.background='#181818';">
+                      ${packToEdit ? '✓ LƯU THAY ĐỔI VÀO WEBSITE' : 'CHỌN DỊCH VỤ · LƯU VÀO WEBSITE'}
+                    </button>
+                  </div>
+                </article>
+              </div>
+            </form>
+          </div>
+
+          <!-- Sticky Footer -->
+          <footer style="position:sticky; bottom:0; z-index:2; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 24px; border-top:1px solid #e5e5e5; background:#fff;">
+            <div style="display:flex; align-items:center; gap:12px;">
+              <button type="button" class="btn btn-sm" data-action="show-section-templates" style="color:#666; background:transparent; border:none; cursor:pointer;">
+                ← Xem các mẫu Section khác
+              </button>
+              <span style="color:#888; font-size:12px;">Mọi thông tin chỉnh sửa trên khung mẫu được lưu trực tiếp vào website.</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px;">
+              ${packToEdit ? `
+                <button type="button" class="btn btn-danger" data-action="delete-pack-from-modal" data-id="${esc(packToEdit.id)}" style="background:#fee2e2; border-color:#fca5a5; color:#b91c1c; font-weight:600; padding:8px 16px; border-radius:3px; cursor:pointer;">
+                  🗑 Xóa pack này
+                </button>
+              ` : ''}
+              <button type="button" class="btn" data-action="close-block-modal">Hủy bỏ</button>
+              <button type="button" class="btn btn-dark" onclick="document.querySelector('#cms-new-pack-form')?.requestSubmit();">${packToEdit ? '✓ Lưu thay đổi' : '✓ Lưu gói vào Website'}</button>
+            </div>
+          </footer>
+        </div>
+      </div>
+    `;
+
+    // Real-time live text sync: "chỉnh đến đâu thông tin hiện đến đấy luôn"
+    const liveTitle = container.querySelector('#card-preview-live-title');
+    const liveNote = container.querySelector('#card-preview-live-note');
+    const livePrice = container.querySelector('#card-preview-live-price');
+    const liveDur = container.querySelector('#card-preview-live-duration');
+    const liveTag = container.querySelector('#card-preview-live-tag');
+
+    container.querySelector('#modal-new-pack-title')?.addEventListener('input', (e) => {
+      if (liveTitle) liveTitle.textContent = e.target.value.trim() || 'Tên gói dịch vụ';
+    });
+    container.querySelector('#modal-new-pack-note')?.addEventListener('input', (e) => {
+      if (liveNote) liveNote.textContent = e.target.value.trim() || 'Mô tả diện mạo & phong cách...';
+    });
+    container.querySelector('#modal-new-pack-price')?.addEventListener('input', (e) => {
+      if (livePrice) livePrice.textContent = e.target.value.trim() || '450.000đ';
+    });
+    container.querySelector('#modal-new-pack-duration')?.addEventListener('input', (e) => {
+      if (liveDur) liveDur.textContent = e.target.value.trim() || '60 phút';
+    });
+    container.querySelector('#modal-new-pack-tag')?.addEventListener('input', (e) => {
+      if (liveTag) liveTag.textContent = e.target.value.trim() || 'Tự nhiên';
+    });
+
+    // Wire drag & drop and click on photo container for instant photo update
+    const photoContainer = container.querySelector('#modal-pack-photo-container');
+    const fileInput = container.querySelector('#modal-pack-file-upload');
+    if (photoContainer && fileInput) {
+      photoContainer.addEventListener('click', () => {
+        fileInput.click();
+      });
+      photoContainer.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        photoContainer.style.filter = 'brightness(1.15)';
+      });
+      photoContainer.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        photoContainer.style.filter = '';
+      });
+      photoContainer.addEventListener('drop', (e) => {
+        e.preventDefault();
+        photoContainer.style.filter = '';
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          fileInput.files = e.dataTransfer.files;
+          fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      });
+    }
+
+    container.querySelector('#modal-new-pack-title')?.focus();
+  }
+  if (typeof window !== 'undefined') window.openPackModal = openPackModal;
+
+  function openBlockPicker(slot = pageSectionSlots.length) {
+    blockInsertSlot = Number.isFinite(Number(slot)) ? Number(slot) : pageSectionSlots.length;
+    if (selected === '/services' || selected.startsWith('/services') || selected === '/gallery') {
+      openPackModal();
+    } else {
+      openSectionTemplatesPicker(slot);
+    }
   }
 
   function blockCommonFields(block) {
@@ -417,6 +730,7 @@ export function createSiteTools(ctx) {
           item.node.dataset.cmsKey = item.key;
           item.node.dataset.cmsLabel = item.label;
           item.node.classList.add('cms-preview-node');
+          if (item.node.tagName === 'IMG') item.node.loading = 'eager';
         }
       }
       if (item.attr === 'src') {
@@ -560,6 +874,32 @@ export function createSiteTools(ctx) {
     if (q('#studio-current-page')) q('#studio-current-page').textContent = selectedName;
     const outline = q('#studio-outline');
     if (outline) {
+      let packsHtml = '';
+      {
+        const state = ctx.getState ? ctx.getState() : (typeof window !== 'undefined' ? window.state : {});
+        const packs = (state && state.portfolio) ? state.portfolio : [];
+        const sName = (id) => id === 'personal' ? 'Cá nhân' : id === 'party' ? 'Dự tiệc' : id === 'bridal' ? 'Cô dâu' : 'Chụp ảnh';
+        packsHtml = `
+          <div class="studio-packs-card" style="margin:0 0 14px;padding:12px;background:#fff8f9;border:1px solid #f3d5da;border-radius:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <b style="font-size:12px;color:var(--wine,#7A1832);letter-spacing:0.04em;">CÁC PACK PHONG CÁCH (${packs.length})</b>
+              <button type="button" class="btn btn-sm btn-dark" data-action="open-add-pack-template" style="font-size:11px;padding:3px 9px;background:var(--wine,#7A1832);border-color:var(--wine,#7A1832);color:#fff;">+ Thêm Pack</button>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px;max-height:170px;overflow-y:auto;">
+              ${packs.map(p => `
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 10px;background:#fff;border:1px solid #e8e8e8;border-radius:4px;font-size:12px;">
+                  <span style="font-weight:600;color:#666;font-size:10px;padding:2px 5px;background:#f0f0f0;border-radius:3px;flex-shrink:0;">${sName(p.serviceId)}</span>
+                  <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;" title="${esc(p.title)}">${esc(p.title)}</span>
+                  <div style="display:flex;align-items:center;gap:4px;">
+                    <button type="button" class="btn btn-sm" data-action="edit-pack-item" data-id="${esc(p.id)}" style="padding:2px 8px;font-size:11px;">Sửa</button>
+                    <button type="button" class="btn btn-sm btn-danger" data-action="delete-pack-item" data-id="${esc(p.id)}" style="padding:2px 8px;font-size:11px;background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;border-radius:3px;" title="Xóa pack này khỏi website">🗑 Xóa</button>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }
       const editable = descriptors.filter(d => !d.key.startsWith('alt-') && !d.key.startsWith('pos-'));
       const groups = new Map();
       editable.forEach(item => {
@@ -567,7 +907,7 @@ export function createSiteTools(ctx) {
         if (!groups.has(title)) groups.set(title, []);
         groups.get(title).push(item);
       });
-      outline.innerHTML = `${selected.startsWith('/pages/') ? '<button class="studio-outline-item studio-page-settings" type="button" data-studio="page-settings"><span>⚙</span><span>Tên trang và bản sao</span></button>' : ''}${[...groups.entries()].map(([title, items]) => `<section class="studio-outline-group"><b>${esc(title)}</b>${items.map(item => `<button type="button" class="studio-outline-item" data-studio="edit-field" data-key="${esc(item.key)}"><span>${item.key.startsWith('img-') ? 'Ảnh' : 'Chữ'}</span><span>${esc(item.label || item.value || 'Nội dung')}</span></button>`).join('')}</section>`).join('') || '<p class="studio-sidebar-tip">Đang đọc nội dung của trang…</p>'}`;
+      outline.innerHTML = packsHtml + `${selected.startsWith('/pages/') ? '<button class="studio-outline-item studio-page-settings" type="button" data-studio="page-settings"><span>⚙</span><span>Tên trang và bản sao</span></button>' : ''}${[...groups.entries()].map(([title, items]) => `<section class="studio-outline-group"><b>${esc(title)}</b>${items.map(item => `<button type="button" class="studio-outline-item" data-studio="edit-field" data-key="${esc(item.key)}"><span>${item.key.startsWith('img-') ? 'Ảnh' : 'Chữ'}</span><span>${esc(item.label || item.value || 'Nội dung')}</span></button>`).join('')}</section>`).join('') || '<p class="studio-sidebar-tip">Đang đọc nội dung của trang…</p>'}`;
     }
   }
   async function switchStudioPage(path) {
@@ -625,6 +965,7 @@ export function createSiteTools(ctx) {
           <div class="studio-layout">
             <aside class="studio-sidebar" aria-label="Quản lý trang và nội dung">
               <div class="studio-step-heading"><span>1</span><div><b>Chọn trang cần sửa</b><small>Chọn đúng trang khách sẽ nhìn thấy</small></div></div>
+              <select id="cms-page-select" class="cms-page-select-modern" style="margin-bottom:8px;width:100%;padding:6px 10px;border-radius:4px;border:1px solid var(--line,#ddd);background:#fff;font-size:13px;" aria-label="Chọn nhanh trang">${pageEntries().map(([p,n])=>`<option value="${esc(p)}" ${p===selected?'selected':''}>${esc(n)}</option>`).join('')}</select>
               <input id="studio-page-search" class="studio-search" type="search" placeholder="Tìm tên trang…" aria-label="Tìm trang">
               <nav id="studio-page-list" aria-label="Danh sách trang"></nav>
               <div class="studio-step-heading studio-structure-title"><span>2</span><div><b>Chọn nội dung cần sửa</b><small>Chọn chữ hoặc ảnh trong danh sách</small></div><button type="button" class="btn btn-sm" data-action="open-block-picker" aria-label="Thêm phần nội dung">+ Thêm</button></div>
@@ -709,7 +1050,7 @@ export function createSiteTools(ctx) {
           <div class="cms-modal-header">
             <div class="cms-modal-title">
               <span class="cms-role-badge ${role.badgeClass}">${role.tag}</span>
-              <div><small>ĐANG SỬA</small><h3>${esc(item.label || 'Nội dung')}</h3></div>
+              <div><small>ĐANG SỬA · Chỉnh sửa văn bản trực tiếp</small><h3>${esc(item.label || 'Nội dung')}</h3></div>
             </div>
             <button type="button" class="cms-modal-close" data-action="close-text-modal" title="Đóng">&times;</button>
           </div>
@@ -1021,7 +1362,12 @@ export function createSiteTools(ctx) {
       if (q('#cms-status')) q('#cms-status').textContent = 'Đang đồng bộ cấu trúc trang…';
     }
 
-    if (frame()) frame().src = previewUrl(path);
+    if (frame()) {
+      const targetUrl = previewUrl(path);
+      if (frame().getAttribute('src') !== targetUrl) {
+        frame().src = targetUrl;
+      }
+    }
     drawBlockManager();
     drawStudioNavigation();
     updateUndoRedoControls();
@@ -2152,7 +2498,13 @@ export function createSiteTools(ctx) {
         const select = q('#cms-page-select');
         if (select) {
           select.value = selected;
-          void selectPage(selected);
+          if (!frame() || frame().getAttribute('src') !== previewUrl(selected)) {
+            void selectPage(selected);
+          } else {
+            drawStudioNavigation();
+            drawBlockManager();
+            if (descriptors.length) drawFields();
+          }
         }
       }
       if (path === '/admin/visitors') { drawReport(); void loadReport(); refreshTimer = setInterval(() => { if (!document.hidden) void loadReport(); }, 10000); }
@@ -2174,7 +2526,22 @@ export function createSiteTools(ctx) {
     if (!document.querySelector('link[href*="image-editor.css"]')) {
       const imageEditorStyle = document.createElement('link'); imageEditorStyle.rel = 'stylesheet'; imageEditorStyle.href = '/image-editor.css'; document.head.append(imageEditorStyle);
     }
-    loadPages().then(() => ctx.render()).catch(error => { toast(error.message); ctx.render(); });
+    loadPages().then(() => {
+      if (isAdmin() && (currentPath() === '/admin/content' || currentPath() === '/admin/content-pages')) {
+        drawStudioNavigation();
+        drawFields();
+        drawBlockManager();
+      } else if (!isPreview) {
+        ctx.render();
+      } else {
+        applyContent(currentPath());
+      }
+    }).catch(error => {
+      if (!isPreview) {
+        toast(error.message);
+        if (!isAdmin() || !currentPath().startsWith('/admin/content')) ctx.render();
+      }
+    });
 
     if (isPreview) {
       const style = document.createElement('style');
@@ -2557,13 +2924,143 @@ export function createSiteTools(ctx) {
           toast('Đã tải ảnh lên bộ sưu tập.');
         } catch (error) { toast(error.message); }
       }
+      if (event.target.id === 'modal-pack-file-upload') {
+        const file = event.target.files[0];
+        if (!file) return;
+        if (file.size > 5 * 1024 * 1024) return toast('Ảnh tối đa 5 MB.');
+        
+        // Instant 0ms visual preview: "thêm ảnh thì thêm ảnh luôn"
+        const localUrl = URL.createObjectURL(file);
+        const preview = q('#modal-pack-preview-img');
+        if (preview) preview.src = localUrl;
+        const input = q('#modal-new-pack-img');
+        if (input) input.value = localUrl;
+        const filenameSpan = q('#pack-upload-active-filename') || q('#pack-upload-filename');
+        if (filenameSpan) filenameSpan.innerHTML = `<span style="color:#0a7a3b;">✓ Đã tải ảnh: ${esc(file.name)}</span>`;
+        document.querySelectorAll('[data-action="pick-pack-sample"]').forEach(sb => sb.classList.remove('btn-dark'));
+        toast('Đã cập nhật ảnh mới vào khung mẫu!');
+
+        // Background server upload
+        const data = new FormData();
+        data.append('files', file);
+        try {
+          const response = await fetch('/api/uploads', { method: 'POST', body: data, headers: adminHeaders() });
+          if (response.ok) {
+            const result = await response.json();
+            if (result.paths && result.paths[0]) {
+              if (input) input.value = result.paths[0];
+            }
+          }
+        } catch (error) {
+          // Local URL remains functional in draft
+        }
+        return;
+      }
+      if (event.target.id === 'modal-new-pack-service') {
+        const sVal = event.target.value;
+        const noteEl = q('#modal-new-pack-note');
+        if (noteEl && !noteEl.value) {
+          if (sVal === 'personal') noteEl.placeholder = 'VD: Lớp nền căng bóng mỏng nhẹ, bắt sáng tự nhiên chuẩn Hàn';
+          else if (sVal === 'party') noteEl.placeholder = 'VD: Sắc nét, quyến rũ dưới ánh đèn tiệc tối, bền màu suốt buổi';
+          else if (sVal === 'bridal') noteEl.placeholder = 'VD: Thanh lịch, lộng lẫy và tỏa sáng trong ngày trọng đại';
+          else if (sVal === 'photo') noteEl.placeholder = 'VD: Tối ưu cho ánh sáng studio và ống kính máy ảnh';
+        }
+      }
       if (event.target.matches('#visit-days, #visit-source, #visit-active')) { days = q('#visit-days').value; source = q('#visit-source').value; onlyActive = q('#visit-active').checked; offset = 0; await loadReport(); }
     });
     document.addEventListener('submit', async event => {
       if (isPreview) { event.preventDefault(); event.stopImmediatePropagation(); return; }
       const form = event.target;
-      if (!['cms-page-form', 'visit-share-form', 'visit-identity-form'].includes(form.id)) return;
+      if (!['cms-page-form', 'visit-share-form', 'visit-identity-form', 'cms-new-pack-form'].includes(form.id)) return;
       event.preventDefault(); event.stopImmediatePropagation();
+      if (form.id === 'cms-new-pack-form') {
+        const title = (q('#modal-new-pack-title')?.value || '').trim();
+        if (!title) return toast('Vui lòng nhập tên phong cách / pack.');
+        const serviceId = q('#modal-new-pack-service')?.value || 'personal';
+        const tag = (q('#modal-new-pack-tag')?.value || '').trim() || 'Tự nhiên';
+        const note = (q('#modal-new-pack-note')?.value || '').trim();
+        const image = (q('#modal-new-pack-img')?.value || '').trim() || 'natural.png';
+        const price = (q('#modal-new-pack-price')?.value || '').trim();
+        const duration = (q('#modal-new-pack-duration')?.value || '').trim();
+        const editId = form.dataset.editId;
+
+        const state = ctx.getState ? ctx.getState() : (typeof window !== 'undefined' ? window.state : {});
+        if (!state.portfolio) state.portfolio = [];
+
+        if (state.services) {
+          const svc = state.services.find(s => s.id === serviceId);
+          if (svc) {
+            if (price && !price.toLowerCase().includes('liên hệ') && !price.toLowerCase().includes('tư vấn')) {
+              const numP = Number(price.replace(/[^\d]/g, ''));
+              if (numP) svc.price = numP;
+            }
+            if (duration) {
+              const numD = Number(duration.replace(/[^\d]/g, ''));
+              if (numD) svc.duration = numD;
+            }
+          }
+        }
+
+        if (editId) {
+          const item = state.portfolio.find(p => p.id === editId);
+          if (item) {
+            item.title = title;
+            item.serviceId = serviceId;
+            item.tag = tag;
+            item.note = note;
+            item.image = image;
+            item.price = price;
+            item.duration = duration;
+          }
+        } else {
+          const newPack = {
+            id: 'port-' + Date.now(),
+            serviceId,
+            title,
+            tag,
+            image,
+            note,
+            price,
+            duration
+          };
+          state.portfolio.unshift(newPack);
+        }
+
+        try {
+          const saved = JSON.parse(localStorage.getItem('hoanMakeupDraft') || '{}');
+          saved.portfolio = state.portfolio;
+          localStorage.setItem('hoanMakeupDraft', JSON.stringify(saved));
+        } catch(e) {}
+
+        try {
+          window.dispatchEvent(new StorageEvent('storage', {
+            key: 'hoanMakeupDraft',
+            newValue: JSON.stringify({ portfolio: state.portfolio })
+          }));
+        } catch(e) {}
+
+        if (frame()) {
+          try {
+            if (frame().contentWindow) {
+              frame().contentWindow.location.reload();
+            } else {
+              frame().src = previewUrl(selected);
+            }
+          } catch(e) {
+            frame().src = previewUrl(selected);
+          }
+        }
+
+        try {
+          drawStudioNavigation();
+        } catch(e) {}
+        const container = q('#cms-block-modal-container');
+        if (container) container.replaceChildren();
+
+        const sTitle = serviceId === 'personal' ? 'Cá nhân' : serviceId === 'party' ? 'Dự tiệc' : serviceId === 'bridal' ? 'Cô dâu' : 'Chụp ảnh';
+        toast(editId ? `Đã cập nhật Pack "${title}"!` : `Đã thêm thành công Pack "${title}" vào mục ${sTitle}!`);
+        return;
+      }
       if (form.id === 'cms-page-form') return savePage();
       const data = Object.fromEntries(new FormData(form));
       if (form.id === 'visit-share-form') {
@@ -2685,6 +3182,166 @@ export function createSiteTools(ctx) {
       if (openPickerButton) {
         event.preventDefault();
         openBlockPicker(openPickerButton.dataset.slot ?? pageSectionSlots.length);
+        return;
+      }
+      const openAddPackBtn = event.target.closest('[data-action="open-add-pack-template"]');
+      if (openAddPackBtn) {
+        event.preventDefault();
+        openPackModal();
+        return;
+      }
+      const editPackBtn = event.target.closest('[data-action="edit-pack-item"]');
+      if (editPackBtn) {
+        event.preventDefault();
+        const id = editPackBtn.dataset.id;
+        const state = ctx.getState ? ctx.getState() : (typeof window !== 'undefined' ? window.state : {});
+        const pack = (state?.portfolio || []).find(p => p.id === id);
+        if (pack) openPackModal(pack);
+        return;
+      }
+      const deletePackAction = event.target.closest('[data-action="delete-pack-item"], [data-action="delete-pack-from-modal"]');
+      if (deletePackAction) {
+        event.preventDefault();
+        const id = deletePackAction.dataset.id;
+        const state = ctx.getState ? ctx.getState() : (typeof window !== 'undefined' ? window.state : {});
+        const pack = (state?.portfolio || []).find(p => p.id === id);
+        const name = pack ? pack.title : 'này';
+        if (confirm(`Bạn có chắc chắn muốn xóa pack "${name}" khỏi website không?`)) {
+          if (state && state.portfolio) {
+            state.portfolio = state.portfolio.filter(p => p.id !== id);
+            try {
+              const saved = JSON.parse(localStorage.getItem('hoanMakeupDraft') || '{}');
+              saved.portfolio = state.portfolio;
+              localStorage.setItem('hoanMakeupDraft', JSON.stringify(saved));
+            } catch(e) {}
+            try {
+              window.dispatchEvent(new StorageEvent('storage', {
+                key: 'hoanMakeupDraft',
+                newValue: JSON.stringify({ portfolio: state.portfolio })
+              }));
+            } catch(e) {}
+            if (frame()) {
+              try { frame().contentWindow.location.reload(); } catch(e) { frame().src = previewUrl(selected); }
+            }
+            try { drawStudioNavigation(); } catch(e) {}
+            q('#cms-block-modal-container')?.replaceChildren();
+            toast(`Đã xóa thành công pack "${name}" khỏi website.`);
+          }
+        }
+        return;
+      }
+      const catTab = event.target.closest('.card-category-tab');
+      if (catTab) {
+        event.preventDefault();
+        const cat = catTab.dataset.cat;
+        document.querySelectorAll('.card-category-tab').forEach(b => {
+          const isActive = b.dataset.cat === cat;
+          b.classList.toggle('active', isActive);
+          b.classList.toggle('btn-dark', isActive);
+          b.style.background = '';
+          b.style.color = '';
+        });
+        const select = q('#modal-new-pack-service');
+        if (select) select.value = cat;
+
+        const DEFAULTS = {
+          personal: {
+            img: 'natural.png',
+            title: 'Trang điểm cá nhân',
+            note: 'Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.',
+            price: '450.000đ',
+            duration: '60 phút',
+            tag: 'Tự nhiên'
+          },
+          party: {
+            img: 'evening.png',
+            title: 'Trang điểm dự tiệc',
+            note: 'Sắc nét vừa đủ, bền đẹp dưới nhiều điều kiện ánh sáng.',
+            price: '650.000đ',
+            duration: '90 phút',
+            tag: 'Dự tiệc'
+          },
+          bridal: {
+            img: 'bridal-new.png',
+            title: 'Trang điểm cô dâu',
+            note: 'Thiết kế diện mạo, thử phong cách và đồng hành trong ngày cưới.',
+            price: 'Tư vấn riêng',
+            duration: '150 phút',
+            tag: 'Cô dâu'
+          },
+          photo: {
+            img: 'campaign.png',
+            title: 'Trang điểm chụp ảnh',
+            note: 'Tối ưu lớp nền, đường nét và màu sắc trước ống kính.',
+            price: '850.000đ',
+            duration: '120 phút',
+            tag: 'Chụp ảnh'
+          }
+        };
+
+        const d = DEFAULTS[cat] || DEFAULTS.personal;
+        const inputImg = q('#modal-new-pack-img');
+        if (inputImg) inputImg.value = d.img;
+        const preview = q('#modal-pack-preview-img');
+        if (preview) preview.src = '/assets/' + d.img;
+        const filenameSpan = q('#pack-upload-active-filename') || q('#pack-upload-filename');
+        if (filenameSpan) filenameSpan.textContent = d.img;
+
+        const titleEl = q('#modal-new-pack-title');
+        if (titleEl) { titleEl.value = d.title; }
+        const liveTitle = q('#card-preview-live-title');
+        if (liveTitle) { liveTitle.textContent = d.title; }
+
+        const noteEl = q('#modal-new-pack-note');
+        if (noteEl) { noteEl.value = d.note; }
+        const liveNote = q('#card-preview-live-note');
+        if (liveNote) { liveNote.textContent = d.note; }
+
+        const priceEl = q('#modal-new-pack-price');
+        if (priceEl) { priceEl.value = d.price; }
+        const livePrice = q('#card-preview-live-price');
+        if (livePrice) { livePrice.textContent = d.price; }
+
+        const durEl = q('#modal-new-pack-duration');
+        if (durEl) { durEl.value = d.duration; }
+        const liveDur = q('#card-preview-live-duration');
+        if (liveDur) { liveDur.textContent = d.duration; }
+
+        const tagEl = q('#modal-new-pack-tag');
+        if (tagEl) { tagEl.value = d.tag; }
+        const liveTag = q('#card-preview-live-tag');
+        if (liveTag) { liveTag.textContent = d.tag; }
+
+        document.querySelectorAll('[data-action="pick-pack-sample"]').forEach(sb => {
+          sb.classList.toggle('btn-dark', sb.dataset.img === d.img);
+        });
+        return;
+      }
+      const pickPackSampleBtn = event.target.closest('[data-action="pick-pack-sample"]');
+      if (pickPackSampleBtn) {
+        event.preventDefault();
+        const imgName = pickPackSampleBtn.dataset.img;
+        const input = q('#modal-new-pack-img');
+        if (input) input.value = imgName;
+        const preview = q('#modal-pack-preview-img');
+        if (preview) preview.src = '/assets/' + imgName;
+        const filenameSpan = q('#pack-upload-active-filename') || q('#pack-upload-filename');
+        if (filenameSpan) filenameSpan.textContent = imgName;
+        document.querySelectorAll('[data-action="pick-pack-sample"]').forEach(sb => {
+          sb.classList.toggle('btn-dark', sb.dataset.img === imgName);
+        });
+        return;
+      }
+      const showSectionTemplatesBtn = event.target.closest('[data-action="show-section-templates"]');
+      if (showSectionTemplatesBtn) {
+        event.preventDefault();
+        openSectionTemplatesPicker();
+        return;
+      }
+      const switchToPackBtn = event.target.closest('[data-action="switch-to-pack-template"]');
+      if (switchToPackBtn) {
+        event.preventDefault();
+        openPackModal();
         return;
       }
       const chooseTemplateButton = event.target.closest('[data-action="choose-block-template"]');
