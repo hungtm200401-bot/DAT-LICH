@@ -164,8 +164,8 @@ test("uses the complete two-level Vietnam administrative directory with searchab
 
 test("preserves form focus and scroll when background data re-renders the same page", async () => {
   const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  assert.match(source, /const routeChanged = path !== lastRenderedPath/);
+  assert.match(source, /const routeChanged = routeKey !== lastRenderedPath/);
   assert.match(source, /field\.focus\(\{ preventScroll: true \}\)/);
   assert.match(source, /window\.scrollTo\(previousScroll\.x, previousScroll\.y\)/);
-  assert.match(source, /if \(routeChanged\) \{\s*window\.scrollTo\(0, 0\)/s);
+  assert.match(source, /if \(routeChanged\) \{\s*window\.scrollTo\(\{ top: 0, left: 0, behavior: 'instant' \}\)/s);
 });

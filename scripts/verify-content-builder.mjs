@@ -65,8 +65,10 @@ try {
   await preview.locator('section.cms-content-split').click();
   await page.locator('.cms-block-editor').waitFor();
   await page.locator('button[data-action="close-block-modal"]').last().click();
+  await page.locator('.studio-block-menu summary').click();
   await page.locator('[data-action="duplicate-cms-block"]').click();
   assert.equal(await page.locator('.cms-block-row').count(), 2);
+  await page.locator('.studio-block-menu summary').last().click();
   await page.locator('[data-action="toggle-cms-block"]').last().click();
   assert.equal(await preview.locator('section.cms-content-split').count(), 1);
 

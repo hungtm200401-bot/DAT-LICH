@@ -1,0 +1,92 @@
+import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import { chromium } from '../.sites-runtime/browser-tests/node_modules/playwright/index.mjs';
+const base = process.env.TEST_BASE_URL || 'http://127.0.0.1:5173';
+const browser = await chromium.launch({ channel:'chrome', headless:true });
+const context = await browser.newContext({ viewport:{width:1920,height:1080}, reducedMotion:'reduce' });
+await context.addInitScript(() => localStorage.setItem('hoanAnalyticsConsent','no'));
+const drafts={};
+await context.route('**/api/site-content*', route => {
+  if(route.request().method() === 'GET') return route.fulfill({json:{pages:{},drafts}});
+  const data=route.request().postDataJSON(); drafts[data.path]={fields:data.fields,baseRevision:''};
+  return route.fulfill({json:{draft:drafts[data.path]}});
+});
+await context.route('**/api/cms-resources*', route => route.fulfill({json:{shared:{value:{albums:[],testimonials:[]},revision:''},media:{value:[],revision:''},templates:{value:[],revision:''}}}));
+const page=await context.newPage(),errors=[];
+page.on('pageerror',error=>errors.push(error.message));
+const shot=name=>page.screenshot({path:'outputs/editor-layout/'+name+'.png',animations:'disabled'});
+const preview=page.frameLocator('#cms-real-preview');
+const settlePreview=async()=>{
+  await page.locator('#cms-real-preview').evaluate(frame=>new Promise(resolve=>frame.contentWindow.requestAnimationFrame(()=>frame.contentWindow.requestAnimationFrame(resolve))));
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+};
+try {
+  await mkdir('outputs/editor-layout',{recursive:true});
+  await page.goto(base+'/#/admin/content-pages');
+  await preview.locator('#main h1').waitFor();
+  await page.waitForFunction(()=>[...document.querySelectorAll('link[rel="stylesheet"]')].every(link=>link.sheet));
+  await page.locator('.studio-outline-group').first().waitFor();
+  const metrics=await page.evaluate(()=>{
+    const rect=selector=>document.querySelector(selector).getBoundingClientRect();
+    return {toolbar:rect('.studio-toolbar').height,nav:rect('.studio-workspace-tabs').height,canvasbar:rect('.studio-canvas-bar').height,workspaceTop:rect('.cms-editor-refined').top,frameTop:rect('#cms-real-preview').top,bottom:rect('.cms-editor-refined').bottom,height:innerHeight};
+  });
+  assert.ok(metrics.toolbar<=96,JSON.stringify(metrics));
+  assert.ok(metrics.nav<=72,JSON.stringify(metrics));
+  assert.ok(metrics.canvasbar<=60,JSON.stringify(metrics));
+  assert.ok(metrics.frameTop-metrics.workspaceTop<230,JSON.stringify(metrics));
+  assert.ok(metrics.bottom<=metrics.height+50,JSON.stringify(metrics));
+  const select=await page.locator('#cms-page-select').evaluate(node=>{const style=getComputedStyle(node);return{height:node.clientHeight,padding:parseFloat(style.paddingTop)+parseFloat(style.paddingBottom),font:parseFloat(style.fontSize)};});
+  assert.ok(select.height-select.padding>=select.font+2,'page name must not be clipped');
+  for (const selector of ['.studio-workspace-tabs > button > span','.studio-page-label','#cms-status','.studio-sidebar-tabs button','.studio-content-heading b','.studio-outline-title','.studio-outline-copy b','.studio-outline-copy small','.cms-device-btn','.studio-list-caption']) {
+    const sizes=await page.locator(selector).evaluateAll(nodes=>nodes.map(node=>parseFloat(getComputedStyle(node).fontSize)));
+    assert.ok(sizes.length>0 && sizes.every(size=>size>=14),selector+': content controls must remain readable');
+  }
+  assert.ok(select.font>=16,'selected page should use a readable control font');
+  assert.match(await page.locator('.studio-outline-title').first().innerText(),/Ảnh bìa/);
+  assert.ok(await page.locator('.studio-outline-thumb img').count()>0);
+  assert.doesNotMatch(await page.locator('#studio-outline').innerText(),/Mục: "/);
+  await shot('desktop');
+  await page.locator('#cms-real-preview').evaluate(frame=>{frame.contentWindow.__layoutIdentity='same-frame';});
+  const beforeWidth=await page.locator('#cms-real-preview').evaluate(node=>node.clientWidth);
+  await page.locator('[data-outline-toggle]').click();
+  assert.equal(await page.locator('#studio-editor-sidebar').isVisible(),false);
+  assert.equal(await page.locator('[data-outline-toggle]').getAttribute('aria-expanded'),'false');
+  assert.ok(await page.locator('#cms-real-preview').evaluate(node=>node.clientWidth)>beforeWidth+200);
+  assert.equal(await page.locator('#cms-real-preview').evaluate(frame=>frame.contentWindow.__layoutIdentity),'same-frame');
+  await shot('wide-preview');
+  await page.locator('[data-outline-toggle]').click();
+  await page.locator('.studio-outline-item[data-key^="txt-"]').first().click();
+  await page.locator('#modal-quick-text').fill('Nội dung chỉnh sửa được giữ lại');
+  await page.locator('[data-action="close-text-modal"]').first().click();
+  assert.equal(await page.locator('.studio-outline-item.is-selected').count(),1);
+  const selectedKey=await page.locator('.studio-outline-item.is-selected').getAttribute('data-key');
+  await page.locator('[data-cms-device="mobile"]').click();
+  assert.equal(Math.round(await page.locator('#cms-real-preview').evaluate(node=>node.getBoundingClientRect().width)),390);
+  await page.locator('[data-cms-device="desktop"]').click();
+  await page.locator('[data-outline-toggle]').click(); await page.locator('[data-outline-toggle]').click();
+  await page.locator('.studio-outline-item.is-selected').click();
+  assert.equal(await page.locator('#modal-quick-text').inputValue(),'Nội dung chỉnh sửa được giữ lại');
+  await page.locator('[data-action="close-text-modal"]').first().click();
+  await page.setViewportSize({width:1366,height:900});
+  await settlePreview();
+  assert.equal(await page.locator('.cms-editor-refined').evaluate(node=>node.scrollWidth>node.clientWidth+1),false);
+  await shot('laptop');
+  await page.setViewportSize({width:1024,height:900});
+  await settlePreview();
+  assert.equal(await page.locator('.cms-editor-refined').evaluate(node=>node.scrollWidth>node.clientWidth+1),false);
+  assert.equal(await page.locator('#cms-status').isVisible(),true);
+  await shot('tablet');
+  await page.setViewportSize({width:390,height:844});
+  await settlePreview();
+  assert.ok(await page.locator('#cms-status').evaluate(node=>parseFloat(getComputedStyle(node).fontSize))>=14,'mobile must not shrink status text');
+  assert.equal(await page.locator('.cms-editor-refined').evaluate(node=>node.scrollWidth>node.clientWidth+1),false);
+  await shot('mobile');
+  await page.locator('[data-outline-toggle]').click();
+  await page.locator('.studio-canvas').scrollIntoViewIfNeeded();
+  await settlePreview();
+  await shot('mobile-preview');
+  assert.equal(await page.locator('[data-outline-toggle]').getAttribute('aria-expanded'),'false');
+  assert.deepEqual(errors,[]);
+  console.log('PASS compact toolbar dimensions, readable page selector, named groups/thumbnails, outline toggle without iframe reload, selected field, draft preservation, device preview and desktop/laptop/mobile layouts');
+} catch(error) { await shot('failure'); console.error(errors); throw error; }
+finally { await browser.close(); }

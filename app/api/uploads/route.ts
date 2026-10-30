@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { siteAdmin, privateHeaders } from '../../../lib/site-admin';
+import { registerMedia } from '../../../lib/cms-resources';
 export async function POST(request: Request) {
   if (!await siteAdmin(request)) return Response.json({error:'Cần quyền quản trị để tải ảnh.'},{status:401,headers:privateHeaders});
   try {
@@ -14,6 +15,12 @@ export async function POST(request: Request) {
       const file=value as File;const key='references/'+crypto.randomUUID();
       await env.BUCKET.put(key,await file.arrayBuffer(),{httpMetadata:{contentType:file.type}});
       paths.push('/api/uploads?key='+encodeURIComponent(key));
+    }
+    try {
+      await registerMedia(paths.map((src, index) => ({ src, title: (files[index] as File).name.slice(0, 140), category: 'uploads', alt: '', desc: '' })));
+    } catch {
+      // The upload still returns a usable path; callers can add its metadata later.
+      return Response.json({paths, libraryWarning:'Ảnh đã tải lên. Chưa ghi được vào thư viện, hãy thêm bằng đường dẫn.'});
     }
     return Response.json({paths});
   }catch{return Response.json({error:'Không thể lưu ảnh. Vui lòng thử lại.'},{status:500});}

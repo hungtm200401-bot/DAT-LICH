@@ -112,9 +112,10 @@ export function openImageEditor({ container, liveImage, label, source, catalog, 
         <section id="image-library-panel" role="tabpanel" aria-labelledby="image-library-tab" hidden>
           <div class="cms-image-library-tools">
             <label class="cms-image-upload">${icon('plus')} Tải ảnh lên<input type="file" data-image-upload accept="image/png,image/jpeg,image/webp" hidden></label>
-            <select data-image-category aria-label="Nhóm ảnh"><option value="all">Tất cả ảnh</option><option value="bridal">Cô dâu</option><option value="party">Dự tiệc</option><option value="campaign">Chiến dịch</option><option value="process">Không gian</option></select>
+            <input type="search" data-image-search placeholder="Tìm ảnh…" aria-label="Tìm ảnh trong thư viện">
+            <select data-image-category aria-label="Nhóm ảnh"><option value="all">Tất cả ảnh</option>${[...new Set(catalog.map(image => image.category || 'khac'))].map(category => `<option value="${esc(category)}">${esc(category)}</option>`).join('')}</select>
           </div>
-          <div class="cms-image-library">${catalog.map(img => `<button type="button" class="cms-image-choice" data-image-source="${esc(img.src)}" data-category="${img.category}" aria-label="${esc(img.title)}" title="${esc(img.title)}" aria-pressed="${img.src === source}"><img src="${esc(img.src)}" alt="${esc(img.title)}" loading="lazy"></button>`).join('')}</div>
+          <div class="cms-image-library">${catalog.map(img => `<button type="button" class="cms-image-choice" data-image-source="${esc(img.src)}" data-image-description="${esc(img.alt || img.title)}" data-search="${esc([img.title, img.alt, img.desc, img.src].join(' ').toLocaleLowerCase('vi'))}" data-category="${esc(img.category || 'khac')}" aria-label="${esc(img.title)}" title="${esc(img.title)}" aria-pressed="${img.src === source}"><img src="${esc(img.src)}" alt="${esc(img.alt || img.title)}" loading="lazy"></button>`).join('')}</div>
           <form class="cms-image-url"><label for="cms-image-url">Đường dẫn ảnh</label><div><input id="cms-image-url" type="text" placeholder="https://..." value="${esc(source)}"><button type="submit" class="btn">Chọn ảnh</button></div></form>
         </section>
       </div>
@@ -184,16 +185,22 @@ export function openImageEditor({ container, liveImage, label, source, catalog, 
     }
   }
   const observer = new ResizeObserver(() => { resize(); syncControls(); });
+  function filterCatalog() {
+    const query = find('[data-image-search]').value.trim().toLocaleLowerCase('vi');
+    const category = find('[data-image-category]').value;
+    dialog.querySelectorAll('[data-image-source]').forEach(button => { button.hidden = !button.dataset.search.includes(query) || (category !== 'all' && button.dataset.category !== category); });
+  }
   observer.observe(stage);
   bindImagePan(stage, { resolve: () => ready ? image : null, change: (_, position) => update(position) });
   dialog.addEventListener('input', event => {
+    if (event.target.matches('[data-image-search]')) filterCatalog();
     const index = event.target.dataset.imageAxis ?? event.target.dataset.imageNumber;
     if (index !== undefined && event.target.value !== '') { const next = [...current.position]; next[Number(index)] = Number(event.target.value); update(next); }
     if (event.target.id === 'cms-image-alt') { current.alt = event.target.value; if (ready) onPreview({ ...current, position: positionValue(current.position) }); }
   });
   dialog.addEventListener('change', async event => {
     if (event.target.matches('[data-image-grid]')) find('.cms-image-grid').hidden = !event.target.checked;
-    if (event.target.matches('[data-image-category]')) dialog.querySelectorAll('[data-image-source]').forEach(button => { button.hidden = event.target.value !== 'all' && button.dataset.category !== event.target.value; });
+    if (event.target.matches('[data-image-category]')) filterCatalog();
     if (event.target.matches('[data-image-upload]')) {
       const file = event.target.files[0];
       if (!file) return;
@@ -217,7 +224,11 @@ export function openImageEditor({ container, liveImage, label, source, catalog, 
     const tab = event.target.closest('[data-image-tab]');
     if (tab) setTab(tab.dataset.imageTab);
     const choice = event.target.closest('[data-image-source]');
-    if (choice) void selectSource(choice.dataset.imageSource);
+    if (choice) {
+      current.alt = choice.dataset.imageDescription;
+      find('#cms-image-alt').value = current.alt;
+      void selectSource(choice.dataset.imageSource);
+    }
     if (event.target.closest('[data-image-apply]') && ready) { onApply({ ...current, position: positionValue(current.position) }); committed = true; dialog.close(); }
   });
   dialog.addEventListener('keydown', event => {

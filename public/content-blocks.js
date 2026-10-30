@@ -1,94 +1,6 @@
-const TYPES = new Set(['text', 'image', 'split', 'gallery', 'features', 'process', 'testimonial', 'faq', 'cta']);
-const WIDTHS = new Set(['narrow', 'standard', 'wide', 'full']);
-const SPACING = new Set(['compact', 'normal', 'airy']);
-const THEMES = new Set(['white', 'soft', 'dark', 'wine']);
-const ALIGNS = new Set(['left', 'center']);
-const RATIOS = new Set(['auto', 'landscape', 'portrait', 'square']);
-const IMAGE_POSITIONS = new Set(['left', 'right', 'top', 'background']);
-const COLUMNS = new Set(['2', '3', '4']);
-
-export const CONTENT_BLOCK_TEMPLATES = [
-  { type: 'text', name: 'Tiêu đề & nội dung', description: 'Một phần giới thiệu hoặc câu chuyện ngắn.', preview: 'Aa' },
-  { type: 'image', name: 'Ảnh nổi bật', description: 'Ảnh lớn kèm tiêu đề và chú thích.', preview: '▣' },
-  { type: 'split', name: 'Ảnh & nội dung', description: 'Bố cục hai cột, có nút hành động.', preview: '◧' },
-  { type: 'gallery', name: 'Bộ sưu tập ảnh', description: 'Lưới từ hai đến bốn ảnh.', preview: '▦' },
-  { type: 'features', name: 'Điểm nổi bật', description: 'Danh sách lợi ích hoặc cam kết.', preview: '✓' },
-  { type: 'process', name: 'Quy trình', description: 'Các bước thực hiện theo thứ tự.', preview: '01' },
-  { type: 'testimonial', name: 'Đánh giá khách hàng', description: 'Trích dẫn và tên khách hàng.', preview: '“”' },
-  { type: 'faq', name: 'Câu hỏi thường gặp', description: 'Danh sách câu hỏi có thể mở rộng.', preview: '?' },
-  { type: 'cta', name: 'Kêu gọi hành động', description: 'Khối đặt lịch hoặc liên hệ nổi bật.', preview: '→' },
-];
-
-const stringValue = (value, fallback = '') => typeof value === 'string' ? value : fallback;
-const enumValue = (value, values, fallback) => values.has(value) ? value : fallback;
-
-function normalizeImage(image = {}) {
-  return {
-    src: stringValue(image.src || image.image),
-    alt: stringValue(image.alt),
-    caption: stringValue(image.caption),
-  };
-}
-
-function normalizeItem(item = {}) {
-  return {
-    title: stringValue(item.title),
-    text: stringValue(item.text),
-  };
-}
-
-export function normalizeContentBlocks(raw, makeId) {
-  if (!Array.isArray(raw)) return [];
-  return raw.slice(0, 30).map(source => {
-    const block = source && typeof source === 'object' ? source : {};
-    const type = TYPES.has(block.type) ? block.type : 'text';
-    return {
-      id: stringValue(block.id) || makeId(),
-      type,
-      eyebrow: stringValue(block.eyebrow),
-      title: stringValue(block.title),
-      text: stringValue(block.text),
-      image: stringValue(block.image),
-      alt: stringValue(block.alt),
-      caption: stringValue(block.caption),
-      buttonLabel: stringValue(block.buttonLabel),
-      buttonHref: stringValue(block.buttonHref),
-      items: Array.isArray(block.items) ? block.items.slice(0, 12).map(normalizeItem) : [],
-      images: Array.isArray(block.images) ? block.images.slice(0, 8).map(normalizeImage) : [],
-      hidden: block.hidden === true,
-      slot: Number.isInteger(block.slot) ? Math.max(0, Math.min(40, block.slot)) : 40,
-      settings: {
-        width: enumValue(block.settings?.width, WIDTHS, type === 'cta' ? 'wide' : 'standard'),
-        spacing: enumValue(block.settings?.spacing, SPACING, 'normal'),
-        theme: enumValue(block.settings?.theme, THEMES, type === 'cta' ? 'wine' : 'white'),
-        align: enumValue(block.settings?.align, ALIGNS, type === 'cta' || type === 'testimonial' ? 'center' : 'left'),
-        ratio: enumValue(block.settings?.ratio, RATIOS, type === 'image' ? 'landscape' : 'portrait'),
-        imagePosition: enumValue(block.settings?.imagePosition, IMAGE_POSITIONS, 'left'),
-        columns: enumValue(String(block.settings?.columns || ''), COLUMNS, '3'),
-      },
-    };
-  });
-}
-
-export function createContentBlock(type, makeId, slot = 40) {
-  const base = {
-    id: makeId(), type, eyebrow: '', title: '', text: '', image: '', alt: '', caption: '',
-    buttonLabel: '', buttonHref: '', items: [], images: [], hidden: false, slot,
-    settings: { width: 'standard', spacing: 'normal', theme: 'white', align: 'left', ratio: 'portrait', imagePosition: 'left', columns: '3' },
-  };
-  const presets = {
-    text: { title: 'Tiêu đề nội dung', text: 'Nhập nội dung bạn muốn chia sẻ tại đây.', settings: { ...base.settings, width: 'narrow' } },
-    image: { title: 'Hình ảnh nổi bật', image: '/assets/campaign.png', alt: 'Hình ảnh nổi bật', settings: { ...base.settings, width: 'wide', ratio: 'landscape' } },
-    split: { eyebrow: 'CÂU CHUYỆN', title: 'Vẻ đẹp mang dấu ấn riêng', text: 'Chia sẻ câu chuyện, phong cách hoặc giá trị nổi bật.', image: '/assets/bridal-new.png', alt: 'Phong cách trang điểm', buttonLabel: 'ĐẶT LỊCH', buttonHref: '#/booking/service' },
-    gallery: { title: 'Bộ sưu tập', images: ['/assets/bridal-new.png', '/assets/natural.png', '/assets/evening.png'].map((src, index) => ({ src, alt: `Hình ảnh bộ sưu tập ${index + 1}`, caption: '' })), settings: { ...base.settings, width: 'wide', ratio: 'portrait' } },
-    features: { title: 'Điểm khác biệt', items: [{ title: 'Tư vấn riêng', text: 'Phong cách được lựa chọn theo đường nét và dịp tham dự.' }, { title: 'Sản phẩm chọn lọc', text: 'Ưu tiên độ bền, sự thoải mái và vẻ đẹp tự nhiên.' }, { title: 'Hoàn thiện tinh tế', text: 'Mọi chi tiết được kiểm tra trước khi kết thúc.' }], settings: { ...base.settings, width: 'wide' } },
-    process: { title: 'Quy trình trải nghiệm', items: [{ title: 'Lắng nghe', text: 'Trao đổi mong muốn và phong cách.' }, { title: 'Thiết kế', text: 'Thống nhất tone màu và điểm nhấn.' }, { title: 'Hoàn thiện', text: 'Kiểm tra tổng thể và chỉnh sửa.' }], settings: { ...base.settings, width: 'wide' } },
-    testimonial: { eyebrow: 'TRẢI NGHIỆM KHÁCH HÀNG', text: 'Mình cảm thấy tự tin và vẫn là chính mình trong ngày đặc biệt.', caption: 'Khách hàng của HOÀN', settings: { ...base.settings, width: 'narrow', align: 'center', theme: 'soft' } },
-    faq: { title: 'Câu hỏi thường gặp', items: [{ title: 'Tôi nên đặt lịch trước bao lâu?', text: 'Bạn nên đặt sớm để có nhiều lựa chọn về ngày và giờ.' }, { title: 'Tôi cần chuẩn bị gì?', text: 'Giữ da sạch, dưỡng ẩm nhẹ và chuẩn bị ảnh phong cách mong muốn.' }], settings: { ...base.settings, width: 'narrow' } },
-    cta: { eyebrow: 'DÀNH RIÊNG CHO BẠN', title: 'Sẵn sàng cho một diện mạo thật riêng?', text: 'Chọn thời gian phù hợp và bắt đầu buổi tư vấn cùng HOÀN.', buttonLabel: 'ĐẶT LỊCH', buttonHref: '#/booking/service', settings: { ...base.settings, width: 'wide', align: 'center', theme: 'wine' } },
-  };
-  return { ...base, ...(presets[type] || presets.text) };
-}
+import { BLOCK_SCHEMAS } from './cms/block-schema.js';
+export { createContentBlock, normalizeContentBlocks } from './cms/block-model.js';
+export const CONTENT_BLOCK_TEMPLATES = Object.entries(BLOCK_SCHEMAS).map(([type, schema]) => ({ type, ...schema }));
 
 function appendText(parent, tag, className, text) {
   if (!text) return null;
@@ -151,7 +63,7 @@ function fillBlock(section, block) {
     gallery.className = 'cms-content-gallery';
     for (const image of block.images.filter(item => item.src)) gallery.append(createImage(block, image));
     inner.append(gallery);
-  } else if (block.type === 'features' || block.type === 'process') {
+  } else if (block.type === 'features' || block.type === 'process' || block.type === 'services') {
     appendText(inner, 'p', 'cms-content-eyebrow', block.eyebrow);
     appendText(inner, 'h2', '', block.title);
     appendText(inner, 'p', 'cms-content-text', block.text);

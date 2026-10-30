@@ -13,9 +13,6 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: "HOÀN — Makeup Artist",
   description: "Đặt lịch trang điểm cá nhân hóa cùng HOÀN Makeup Artist.",
-  other: {
-    "codex-preview": "development",
-  },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
@@ -59,10 +56,11 @@ export default function RootLayout({
         <link rel="preload" href="/fonts/tinos-Tinos-Regular.ttf" as="font" type="font/ttf" crossOrigin="anonymous" />
         <link rel="stylesheet" href="/fonts/fonts.css" />
         <link rel="stylesheet" href="/styles.css?v=2.5" />
-        <link rel="stylesheet" href="/couture.css?v=120.0" />
+        <link rel="stylesheet" href="/couture.css?v=122.0" />
         <link rel="stylesheet" href="/site-tools.css?v=146.0" />
         <link rel="stylesheet" href="/admin-refinements.css?v=8" />
         <link rel="stylesheet" href="/mobile-admin.css?v=1.2" />
+        <link rel="stylesheet" href="/admin-interface.css?v=2" />
       </head>
       <body suppressHydrationWarning>
         {children}

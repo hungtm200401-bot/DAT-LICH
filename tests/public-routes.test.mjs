@@ -29,3 +29,22 @@ test('referenced public image assets exist',async()=>{
 test('lookup and policy index keep separate destination pages; payment has no fake successful receipt',()=>{
  const app=harness();assert.doesNotMatch(app.render('/lookup'),/KẾT QUẢ MINH HỌA|HOAN-MAU/);assert.match(app.render('/policies'),/#\/policies\/deposit/);assert.doesNotMatch(app.render('/booking/deposit'),/Thanh toán thành công/);
 });
+
+test('services use one overview and scoped detail pages, including legacy filter links',()=>{
+ const app=harness();
+ const overview=app.render('/services');
+ assert.match(overview,/ct-services-overview/);
+ assert.doesNotMatch(overview,/<nav class="ct-tabs">|services\?filter=/);
+ assert.equal((overview.match(/class="ct-service-card"/g)||[]).length,4);
+ for(const id of ['personal','party','photo','bridal']) {
+  const detail=app.render('/services/'+id);
+  assert.match(detail,/ct-service-collection/);
+  assert.doesNotMatch(detail,/<nav class="ct-tabs">|services\?filter=/);
+  assert.match(detail,/Quay lại danh sách dịch vụ/);
+  assert.equal(app.render('/services?filter='+id),detail);
+ }
+ assert.equal(app.render('/services?filter=all'),overview);
+ assert.match(app.render('/services/personal/port-personal-1'),/Trong trẻo tự nhiên hằng ngày/);
+ assert.match(app.render('/services/personal/port-party-1'),/Mẫu trang điểm hiện không khả dụng/);
+ assert.match(app.render('/services/missing'),/Dịch vụ hiện không khả dụng/);
+});

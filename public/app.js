@@ -418,10 +418,48 @@
     ['privacy','Bảo mật thông tin','Thông tin thu thập và mục đích sử dụng.']
   ];
   const helpSections = [
-    ['calendar','Đặt & quản lý lịch',[['booking','Hướng dẫn đặt lịch'],['lookup','Tra cứu và xem lịch hẹn']]],
-    ['card','Đặt cọc & thanh toán',[['deposit','Cách chuyển khoản đặt cọc'],['verification','Đã chuyển tiền nhưng chưa xác nhận'],['receipt','Xem và tải biên nhận']]],
-    ['clock','Đổi, hủy & hoàn cọc',[['reschedule','Gửi yêu cầu đổi lịch'],['cancel','Gửi yêu cầu hủy lịch'],['refund','Theo dõi hoàn cọc']]],
-    ['star','Chuẩn bị cho buổi hẹn',[['preparation','Chuẩn bị trước khi trang điểm'],['reference','Gửi ảnh phong cách tham khảo']]]
+    [
+      'calendar',
+      'Đặt & quản lý lịch',
+      [
+        ['booking', 'Hướng dẫn đặt lịch', '4 bước hoàn tất yêu cầu trang điểm nhanh chóng và chuẩn xác.'],
+        ['lookup', 'Tra cứu và xem lịch hẹn', 'Kiểm tra trạng thái duyệt, thời gian hẹn và thông tin đối soát.']
+      ],
+      '01 / QUY TRÌNH',
+      'Quy trình tạo yêu cầu, cố định khung giờ độc quyền và kiểm tra hồ sơ trực tuyến.'
+    ],
+    [
+      'card',
+      'Đặt cọc & thanh toán',
+      [
+        ['deposit', 'Cách chuyển khoản đặt cọc', 'Mức cọc tiêu chuẩn 200.000đ và lưu ý nội dung chuyển khoản.'],
+        ['verification', 'Đã chuyển tiền nhưng chưa xác nhận', 'Cách kiểm tra trạng thái và hỗ trợ đối soát nhanh trong 15 phút.'],
+        ['receipt', 'Xem và tải biên nhận', 'Truy xuất và tải biên nhận thanh toán chính thức dạng PDF / hình ảnh.']
+      ],
+      '02 / TÀI CHÍNH',
+      'Phương thức chuyển khoản bảo chứng, đối soát giao dịch và xuất biên nhận điện tử.'
+    ],
+    [
+      'clock',
+      'Đổi, hủy & hoàn cọc',
+      [
+        ['reschedule', 'Gửi yêu cầu đổi lịch', 'Miễn phí đổi ngày giờ trước 24h và bảo lưu cọc trong 60 ngày.'],
+        ['cancel', 'Gửi yêu cầu hủy lịch', 'Quy định hủy buổi hẹn và các điều kiện hoàn cọc minh bạch.'],
+        ['refund', 'Theo dõi hoàn cọc', 'Thời gian hoàn tiền từ 1-2 ngày làm việc về tài khoản chính chủ.']
+      ],
+      '03 / LINH HOẠT',
+      'Chính sách dời ngày hẹn, bảo lưu tiền cọc và quy định hoàn tiền minh bạch.'
+    ],
+    [
+      'star',
+      'Chuẩn bị cho buổi hẹn',
+      [
+        ['preparation', 'Chuẩn bị trước khi trang điểm', 'Chăm sóc da cơ bản, cấp ẩm nhẹ và chuẩn bị không gian thoải mái.'],
+        ['reference', 'Gửi ảnh phong cách tham khảo', 'Cách chọn ảnh tone makeup, màu son và kiểu tóc mong muốn.']
+      ],
+      '04 / CHĂM SÓC',
+      'Bí quyết chuẩn bị làn da hoàn hảo, trang phục và gửi ảnh tham khảo ưng ý.'
+    ]
   ];
   const lookItems = [
     ['bridal','Ngày của riêng bạn','bridal-new.png','bridal'],['natural','Nét trong trẻo','natural.png','personal'],
@@ -473,8 +511,8 @@
       return `#/services/${matchedService.id}`;
     }
     
-    if (lower === 'cá nhân') return '#/services?filter=personal';
-    if (lower === 'dự tiệc') return '#/services?filter=party';
+    if (lower === 'cá nhân') return '#/services/personal';
+    if (lower === 'dự tiệc') return '#/services/party';
     if (lower === 'cô dâu') return '#/services/bridal';
     
     return null;
@@ -532,218 +570,128 @@
   }
   function pageServices() {
     const b = state.brand || {};
-    const srvTitle = b.servicesPageTitle || 'Dịch vụ trang điểm';
-    const srvSubtitle = b.servicesPageSubtitle || 'Lựa chọn dành cho khoảnh khắc của bạn.';
-    const consultTitle = b.consultTitle || 'Tìm phong cách phù hợp';
-    const consultDesc = b.consultDesc || 'Chia sẻ dịp tham dự, trang phục và mong muốn của bạn cùng Hoàn.';
-    const filter = new URLSearchParams(location.hash.split('?')[1]).get('filter') || 'all';
-
-    let contentHtml = '';
-    if (filter === 'all') {
-      contentHtml = `
-        <section class="ct-service-grid">
-          ${state.services.filter(s=>s.enabled).map(s=>`
-            <article>
-              <a href="#/services/${s.id}">
-                ${fashionPhoto(imageFor(s),esc(s.name))}
-              </a>
-              <a href="#/services/${s.id}" style="text-decoration:none;color:inherit;">
-                <h2>${esc(s.name)}</h2>
-              </a>
-              <p>${esc(s.description)}</p>
-              <p class="ct-service-meta">${s.contact?'Tư vấn riêng':`${money(s.price)} · ${s.duration} phút`}</p>
-              <a class="link" href="#/services/${s.id}">Xem ảnh thực tế & Chi tiết ${icon('arrow')}</a>
-              <a class="btn btn-wide" href="#/services/${s.id}">CHỌN DỊCH VỤ</a>
-            </article>
-          `).join('')}
-        </section>
-      `;
-    } else {
-      const s = state.services.find(x => x.id === filter) || state.services[0];
-      const styles = (state.portfolio || []).filter(p => p.serviceId === filter);
-      const photosToShow = styles.length ? styles : [{
-        id: 'default',
-        serviceId: s.id,
-        title: s.name,
-        image: imageFor(s),
-        note: s.description
-      }];
-      contentHtml = `
-        <section class="ct-service-real-gallery-standalone">
-          <div class="ct-real-photo-grid">
-            ${photosToShow.map(p => `
-              <article class="ct-real-photo-card">
-                <a href="#/services/${s.id}/${p.id}">
-                  <div class="ct-real-photo-img-wrap">
-                    <img src="${esc(assetUrl(p.image))}" alt="${esc(p.title)}" loading="lazy">
-                    <span class="ct-real-photo-zoom">Xem chi tiết phong cách ${icon('arrow')}</span>
-                  </div>
-                </a>
-                <figcaption>
-                  <b>${esc(p.title)}</b>
-                  <span>${esc(p.note || p.tag || s.name)}</span>
-                  <p class="ct-service-meta" style="margin-top:6px;font-size:12.5px;color:var(--wine);font-weight:600;">
-                    ${s.contact ? 'Tư vấn riêng' : `${money(s.price)} · ${s.duration} phút`}
-                  </p>
-                  <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;gap:8px;flex-wrap:wrap;">
-                    <a class="link" href="#/services/${s.id}/${p.id}" style="font-size:13px;display:inline-block;">
-                      Xem chi tiết phong cách ${icon('arrow')}
-                    </a>
-                    ${(p.id !== 'default' && (isAdmin() || (typeof window !== 'undefined' && (Boolean(localStorage.getItem('hoanAdminToken')) || window.parent !== window)))) ? `
-                      <button type="button" class="btn btn-sm btn-danger" data-action="delete-portfolio-item" data-id="${esc(p.id)}" style="padding:2px 8px;font-size:11px;background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;border-radius:3px;cursor:pointer;" title="Xóa pack này khỏi website">🗑 Xóa pack</button>
-                    ` : ''}
-                  </div>
-                </figcaption>
-              </article>
-            `).join('')}
-          </div>
-          <div style="margin-top:40px;display:flex;justify-content:center;gap:20px;align-items:center;flex-wrap:wrap;">
-            <button class="btn btn-dark" data-action="choose-service" data-id="${s.id}">
-              ${s.contact ? 'YÊU CẦU TƯ VẤN GÓI NÀY' : 'ĐẶT LỊCH GÓI NÀY NGAY'}
-            </button>
-            <a class="link" href="#/services?filter=all">← Xem tất cả 4 gói dịch vụ</a>
-          </div>
-        </section>
-      `;
-    }
-
-    const subText = filter === 'all'
-      ? esc(srvSubtitle)
-      : `Khoảnh khắc & hình ảnh khách hàng thực tế — Chọn một phong cách bên dưới để xem chi tiết và đặt lịch:`;
-
-    const breadcrumbVal = filter === 'all'
-      ? 'Dịch vụ'
-      : [
-          { label: 'Dịch vụ', href: '#/services?filter=all' },
-          { label: (state.services.find(x => x.id === filter) || {}).name || 'Dịch vụ' }
-        ];
-
+    const services = state.services.filter(s => s.enabled);
     return ctPage(
       'services',
-      srvTitle,
-      `<p class="ct-subtitle">${subText}</p>
-      <nav class="ct-tabs">
-        ${[['all','Tất cả'],['personal','Cá nhân'],['party','Dự tiệc'],['bridal','Cô dâu']].map(([v,t])=>`<a class="${filter===v?'active':''}" href="#/services?filter=${v}">${t}</a>`).join('')}
-      </nav>
-      ${contentHtml}
+      esc(b.servicesPageTitle || 'Dịch vụ trang điểm'),
+      `<p class="ct-subtitle">${esc(b.servicesPageSubtitle || 'Lựa chọn dành cho khoảnh khắc của bạn.')}</p>
+      <section class="ct-service-grid ct-services-overview" aria-label="Danh sách dịch vụ">
+        ${services.map(s => `
+          <article class="ct-service-card">
+            <a class="ct-service-cover" href="#/services/${esc(s.id)}" aria-label="Xem ${esc(s.name)}">
+              ${fashionPhoto(imageFor(s), s.name)}
+            </a>
+            <a class="ct-service-name" href="#/services/${esc(s.id)}"><h2>${esc(s.name)}</h2></a>
+            <p class="ct-service-description">${esc(s.description)}</p>
+            <p class="ct-service-meta"><b>${s.contact ? 'Tư vấn riêng' : money(s.price)}</b><span>${icon('clock')} ${esc(s.duration)} phút</span></p>
+            <a class="btn btn-wide ct-service-discover" href="#/services/${esc(s.id)}">Xem mẫu & chi tiết ${icon('arrow')}</a>
+          </article>
+        `).join('')}
+        ${!services.length ? '<div class="ct-service-empty"><p>Dịch vụ đang được cập nhật. Liên hệ Hoàn để được tư vấn lựa chọn phù hợp.</p><a class="btn" href="#/contact">Liên hệ tư vấn</a></div>' : ''}
+      </section>
       <section class="ct-consult">
         <img src="/assets/natural.png" alt="Phong cách trang điểm tự nhiên" loading="lazy">
         <div>
-          <h2>${esc(consultTitle)}</h2>
-          <p>${esc(consultDesc)}</p>
-          <a class="btn" href="#/contact">NHẬN TƯ VẤN</a>
+          <h2>${esc(b.consultTitle || 'Tìm phong cách phù hợp')}</h2>
+          <p>${esc(b.consultDesc || 'Chia sẻ dịp tham dự, trang phục và mong muốn của bạn cùng Hoàn.')}</p>
+          <a class="btn" href="#/contact">Nhận tư vấn ${icon('arrow')}</a>
         </div>
       </section>`,
-      breadcrumbVal,
+      'Dịch vụ',
       true
     );
   }
-  function pageServiceDetail(id, photoId) {
-    const s = state.services.find(s => s.id === id);
-    if (!s) return ctPage('services', 'Không tìm thấy dịch vụ', '<a href="#/services">Xem các dịch vụ</a>');
-    const servicePhotos = (state.portfolio || []).filter(p => p.serviceId === s.id);
 
-    // BƯỚC 4: "click ảnh nào thì hiển thị thông tin đó và ảnh đó" -> Chuẩn Hình ảnh mẫu 2
+  function pageServiceDetail(id, photoId) {
+    const s = state.services.find(item => item.id === id && item.enabled);
+    if (!s) return ctPage('services', 'Dịch vụ hiện không khả dụng', '<div class="ct-service-empty"><p>Dịch vụ này có thể đã được cập nhật hoặc tạm ngừng nhận lịch.</p><a class="btn" href="#/services">Quay lại danh sách dịch vụ</a></div>', 'Dịch vụ');
+    const servicePhotos = (state.portfolio || []).filter(p => p.serviceId === s.id);
+    const serviceHref = `#/services/${esc(s.id)}`;
+    const price = s.contact ? 'Tư vấn riêng' : money(s.price);
+    const bookLabel = s.contact ? 'Liên hệ tư vấn' : 'Chọn ngày & giờ';
+    const backToServices = `<a class="ct-service-back" href="#/services">${icon('back')} Quay lại danh sách dịch vụ</a>`;
+
     if (photoId) {
-      const selectedPhoto = (state.portfolio || []).find(p => p.id === photoId) || servicePhotos[0] || {
-        id: photoId,
-        image: imageFor(s),
-        title: s.name,
-        note: ''
-      };
+      // Old links to the default illustration remain usable; never select a photo from another service.
+      const selectedPhoto = servicePhotos.find(p => p.id === photoId) ||
+        (photoId === 'default' && !servicePhotos.length ? { id: 'default', image: imageFor(s), title: s.name, note: '' } : null);
+      if (!selectedPhoto) return ctPage('services', 'Mẫu trang điểm hiện không khả dụng', `<div class="ct-service-empty"><p>Mẫu này đã được cập nhật hoặc không thuộc dịch vụ bạn đang xem.</p><a class="btn" href="${serviceHref}">Xem các mẫu của ${esc(s.name)}</a></div>`, [{ label: 'Dịch vụ', href: '#/services' }, { label: s.name, href: serviceHref }, { label: 'Mẫu trang điểm' }]);
       return ctPage(
         id === 'bridal' ? 'bridal' : 'services',
         '',
-        `<section class="ct-product-detail">
-          <div>${fashionPhoto(selectedPhoto.image, selectedPhoto.title)}</div>
+        `<a class="ct-service-back ct-service-look-back" href="${serviceHref}">${icon('back')} Quay lại ${esc(s.name)}</a>
+        <section class="ct-product-detail ct-service-look">
+          <div class="ct-service-look-image">${fashionPhoto(selectedPhoto.image, selectedPhoto.title)}</div>
           <article>
-            <p class="ct-overline">${esc(state.brand?.name || 'HOÀN')} MAKEUP ARTIST</p>
-            <h1>${esc(s.name)}</h1>
-            <p class="ct-look-style-note" style="color:#7A1832;font-size:12.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;margin:-8px 0 16px;">PHONG CÁCH: ${esc(selectedPhoto.title)}${selectedPhoto.note ? ` — <span style="font-weight:400;text-transform:none;color:#555;">${esc(selectedPhoto.note)}</span>` : ''}</p>
+            <p class="ct-overline">${esc(s.name)}</p>
+            <h1>${esc(selectedPhoto.title)}</h1>
+            ${selectedPhoto.note ? `<p class="ct-service-look-note">${esc(selectedPhoto.note)}</p>` : ''}
             <p>${esc(s.description)}</p>
-            <p class="ct-price">${s.contact ? 'Trao đổi để nhận tư vấn' : money(s.price)}</p>
-            <p>${icon('clock')} ${s.duration} phút · Phí di chuyển được báo trước khi đặt cọc.</p>
-            <h3>Trải nghiệm của bạn</h3>
+            <dl class="ct-service-facts">
+              <div><dt>Giá dịch vụ</dt><dd>${price}</dd></div>
+              <div><dt>Thời lượng</dt><dd>${icon('clock')} ${esc(s.duration)} phút</dd></div>
+            </dl>
+            <h2>Trải nghiệm của bạn</h2>
             <ul>
               <li>Trao đổi phong cách, trang phục và dịp tham dự.</li>
               <li>Chuẩn bị da và trang điểm theo đường nét.</li>
               <li>Kiểm tra và hoàn thiện diện mạo.</li>
             </ul>
-            <button class="btn btn-dark btn-wide" data-action="choose-service" data-id="${s.id}" data-style="${esc(selectedPhoto.title)}">${s.contact ? 'YÊU CẦU TƯ VẤN' : 'CHỌN NGÀY VÀ GIỜ'}</button>
-            ${(selectedPhoto.id !== 'default' && (isUserAdmin() || (typeof window !== 'undefined' && Boolean(localStorage.getItem('hoanAdminToken'))))) ? `
-              <div style="margin-top:14px;">
-                <button type="button" class="btn btn-sm btn-danger" data-action="delete-portfolio-item" data-id="${esc(selectedPhoto.id)}" style="padding:6px 14px;font-size:12px;background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;border-radius:3px;cursor:pointer;" title="Xóa pack này khỏi website">🗑 Xóa pack này khỏi website</button>
-              </div>
-            ` : ''}
-            <div style="margin-top:20px;display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-dark btn-wide" data-action="choose-service" data-id="${esc(s.id)}" data-style="${esc(selectedPhoto.title)}">${bookLabel} ${icon('arrow')}</button>
+            <p class="ct-service-booking-note">Phí di chuyển được báo trước khi đặt cọc.</p>
+            <div class="ct-service-look-links">
               <a class="link" href="#/policies/deposit">Chính sách đặt cọc ${icon('arrow')}</a>
-              <a class="link" href="#/services?filter=${s.id}">← Xem các ảnh thực tế khác của ${esc(s.name)}</a>
+              <a class="link" href="#/services">Danh sách dịch vụ ${icon('arrow')}</a>
             </div>
+            ${selectedPhoto.id !== 'default' && isUserAdmin() ? `<button type="button" class="ct-service-manage" data-action="delete-portfolio-item" data-id="${esc(selectedPhoto.id)}">${icon('trash')} Xóa mẫu này</button>` : ''}
           </article>
         </section>`,
-        [
-          { label: 'Dịch vụ', href: '#/services?filter=all' },
-          { label: s.name, href: `#/services/${s.id}` },
-          { label: selectedPhoto.title }
-        ],
+        [{ label: 'Dịch vụ', href: '#/services' }, { label: s.name, href: serviceHref }, { label: selectedPhoto.title }],
         true
       );
     }
 
-    // BƯỚC 3: "chọn dịch vụ -> hiển thị ảnh thật" -> Danh sách ảnh khách hàng thực tế (kèm tabs đồng bộ)
-    const photosToShow = servicePhotos.length ? servicePhotos : [{
-      id: 'default',
-      serviceId: s.id,
-      title: s.name,
-      image: imageFor(s),
-      note: s.description
-    }];
-
     return ctPage(
       id === 'bridal' ? 'bridal' : 'services',
-      s.name,
-      `<p class="ct-subtitle">Khoảnh khắc & hình ảnh khách hàng thực tế — Chọn một phong cách bên dưới để xem chi tiết và đặt lịch:</p>
-      <nav class="ct-tabs">
-        ${[['all','Tất cả','#/services?filter=all'],['personal','Cá nhân','#/services?filter=personal'],['party','Dự tiệc','#/services?filter=party'],['bridal','Cô dâu','#/services?filter=bridal']].map(([v,t,hr])=>`<a class="${id===v?'active':''}" href="${hr}">${t}</a>`).join('')}
-      </nav>
-      <section class="ct-service-real-gallery-standalone">
-        <div class="ct-real-photo-grid">
-          ${photosToShow.map(p => `
-            <article class="ct-real-photo-card">
-              <a href="#/services/${s.id}/${p.id}">
-                <div class="ct-real-photo-img-wrap">
-                  <img src="${esc(assetUrl(p.image))}" alt="${esc(p.title)}" loading="lazy">
-                  <span class="ct-real-photo-zoom">Xem chi tiết phong cách ${icon('arrow')}</span>
+      esc(s.name),
+      `<p class="ct-subtitle">${esc(s.description)}</p>
+      <section class="ct-service-collection">
+        <div class="ct-service-bar">
+          ${backToServices}
+          <div class="ct-service-bar-booking">
+            ${!servicePhotos.length ? `<div class="ct-service-meta"><b>${price}</b><span>${icon('clock')} ${esc(s.duration)} phút</span></div>` : ''}
+            <button class="btn btn-dark" data-action="choose-service" data-id="${esc(s.id)}">${bookLabel} ${icon('arrow')}</button>
+          </div>
+        </div>
+        <header class="ct-service-collection-heading">
+          <div><h2>Mẫu trang điểm</h2><p>Chọn một mẫu để xem chi tiết và đặt lịch theo phong cách bạn thích.</p></div>
+          ${servicePhotos.length ? `<span class="ct-service-count">${servicePhotos.length} mẫu</span>` : ''}
+        </header>
+        ${servicePhotos.length ? `<div class="ct-real-photo-grid ct-service-looks-grid">
+          ${servicePhotos.map(p => `
+            <article class="ct-service-style-card">
+              <a class="ct-service-style-link" href="${serviceHref}/${esc(p.id)}">
+                <div class="ct-real-photo-img-wrap"><img src="${esc(assetUrl(p.image))}" alt="${esc(p.title)}" loading="lazy" width="768" height="1024"></div>
+                <div class="ct-service-style-copy">
+                  <h3>${esc(p.title)}</h3>
+                  ${p.note || p.tag ? `<p>${esc(p.note || p.tag)}</p>` : ''}
+                  <div class="ct-service-style-pricing ct-service-meta">
+                    <div><span>Giá dịch vụ</span><b>${price}</b></div>
+                    <div><span>Thời lượng</span><b>${icon('clock')} ${esc(s.duration)} phút</b></div>
+                  </div>
+                  <span class="link">Xem chi tiết & đặt lịch ${icon('arrow')}</span>
                 </div>
               </a>
-              <figcaption>
-                <b>${esc(p.title)}</b>
-                <span>${esc(p.note || p.tag || s.name)}</span>
-                <p class="ct-service-meta" style="margin-top:6px;font-size:12.5px;color:var(--wine);font-weight:600;">
-                  ${s.contact ? 'Tư vấn riêng' : `${money(s.price)} · ${s.duration} phút`}
-                </p>
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;gap:8px;flex-wrap:wrap;">
-                  <a class="link" href="#/services/${s.id}/${p.id}" style="font-size:13px;display:inline-block;">Xem chi tiết phong cách ${icon('arrow')}</a>
-                  ${(p.id !== 'default' && (isUserAdmin() || (typeof window !== 'undefined' && Boolean(localStorage.getItem('hoanAdminToken'))))) ? `
-                    <button type="button" class="btn btn-sm btn-danger" data-action="delete-portfolio-item" data-id="${esc(p.id)}" style="padding:2px 8px;font-size:11px;background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;border-radius:3px;cursor:pointer;" title="Xóa pack này khỏi website">🗑 Xóa pack</button>
-                  ` : ''}
-                </div>
-              </figcaption>
+              ${isUserAdmin() ? `<button type="button" class="ct-service-manage" data-action="delete-portfolio-item" data-id="${esc(p.id)}">${icon('trash')} Xóa mẫu</button>` : ''}
             </article>
           `).join('')}
-        </div>
-        <div style="margin-top:40px;display:flex;justify-content:center;gap:20px;align-items:center;flex-wrap:wrap;">
-          <button class="btn btn-dark" data-action="choose-service" data-id="${s.id}">${s.contact ? 'YÊU CẦU TƯ VẤN GÓI NÀY' : 'ĐẶT LỊCH GÓI NÀY NGAY'}</button>
-          <a class="link" href="#/services?filter=all">← Trở về danh sách tất cả dịch vụ</a>
-        </div>
+        </div>` : `<div class="ct-service-empty"><p>Hình ảnh mẫu của dịch vụ này đang được cập nhật.</p><a class="link" href="#/contact">Nhận tư vấn phong cách ${icon('arrow')}</a></div>`}
       </section>`,
-      [
-        { label: 'Dịch vụ', href: '#/services?filter=all' },
-        { label: s.name }
-      ],
+      [{ label: 'Dịch vụ', href: '#/services' }, { label: s.name }],
       true
     );
   }
+
   function pageGallery(filter='all') {
     const list = state.portfolio || [];
     const visible = list.filter(x => filter==='all' || x.serviceId === filter || (filter === 'personal' && (x.serviceId === 'personal' || x.tag === 'Tự nhiên')) || (filter === 'party' && x.serviceId === 'party') || (filter === 'bridal' && x.serviceId === 'bridal'));
@@ -811,56 +759,890 @@
     const ctaTitle = b.aboutCtaTitle || 'Cùng tìm nét đẹp của bạn';
     return ctPage('about',aboutTitle,`<section class="ct-about"><div class="ct-about-img-wrap"><img src="${aboutImg}" alt="${esc(aboutCaption)}" loading="lazy" width="342" height="174" onerror="this.src='/assets/about-process.png'"><p class="ct-about-caption">${esc(aboutCaption)}</p></div><article><h2>${esc(brandName)} ${esc(brandRole)}</h2><p>${esc(bio1)}</p><hr><p>${esc(bio2)}</p></article></section><section class="ct-process"><h2>Một buổi hẹn cùng ${esc(brandName)}</h2><div>${[[p1Title,p1Desc],[p2Title,p2Desc],[p3Title,p3Desc],[p4Title,p4Desc]].map(([t,d],i)=>`<article><span>0${i+1}</span><h3>${esc(t)}</h3><p>${esc(d)}</p></article>`).join('')}</div></section><div class="ct-about-photos"><img src="/assets/about-brushes.png" alt="Cọ trang điểm" loading="lazy" width="385" height="91"><img src="/assets/about-eye.png" alt="Trang điểm mắt" loading="lazy" width="330" height="91"></div><div class="ct-center-cta"><h2>${esc(ctaTitle)}</h2><a class="btn btn-dark" href="#/booking/service">ĐẶT LỊCH</a><a class="btn" href="#/contact">TRAO ĐỔI VỚI ${esc(brandName)}</a></div>`,'Về Hoàn',true);
   }
+  const helpArticlesData = {
+    booking: {
+      category: 'Đặt & quản lý lịch',
+      badge: 'QUY TRÌNH DỊCH VỤ',
+      summary: 'Quy trình đặt lịch tại HOÀN Makeup Artist được tối ưu để bạn chủ động chọn dịch vụ, ngày giờ và phong cách chỉ trong vài phút.',
+      steps: [
+        {
+          title: 'Lựa chọn phong cách và gói dịch vụ',
+          desc: 'Truy cập danh mục Dịch vụ để tham khảo chi tiết về bảng giá, thời lượng thực hiện và đặc trưng từng phong cách (trang điểm cá nhân, dự tiệc, cô dâu...).',
+          tip: 'Mỗi gói dịch vụ đều được niêm yết rõ ràng chi phí và thời lượng để bạn dễ dàng chủ động thời gian.'
+        },
+        {
+          title: 'Chọn ngày giờ và địa điểm phục vụ',
+          desc: 'Xem lịch trực tiếp trên hệ thống để chọn khung giờ bắt đầu còn trống. Bạn có thể chọn trang điểm tại studio của Hoàn hoặc yêu cầu phục vụ tận nơi tại địa chỉ của bạn.',
+          tip: 'Khung giờ sáng sớm cho tiệc cưới hoặc sự kiện quan trọng nên được đặt trước từ 2-4 tuần để giữ được giờ đẹp nhất.'
+        },
+        {
+          title: 'Cung cấp thông tin và ảnh phong cách mong muốn',
+          desc: 'Điền tên, số điện thoại liên hệ và đính kèm tối đa 3 ảnh tone trang điểm hoặc kiểu tóc bạn yêu thích. Nếu bạn có làn da nhạy cảm, hãy ghi chú lại để Hoàn chuẩn bị mỹ phẩm phù hợp.',
+          tip: 'Ảnh tham khảo giúp Hoàn định hình phong cách và chuẩn bị phụ kiện chu đáo ngay từ trước buổi hẹn.'
+        },
+        {
+          title: 'Nhận mã lịch và chuyển khoản đặt cọc',
+          desc: 'Sau khi gửi yêu cầu, hệ thống sẽ cấp một Mã lịch hẹn riêng. Bạn chuyển khoản tiền cọc để chính thức khóa khung giờ độc quyền trên lịch của Hoàn.',
+          tip: 'Bạn có thể theo dõi tiến độ duyệt lịch bất kỳ lúc nào tại trang Tra cứu lịch.'
+        }
+      ],
+      cta: {
+        primaryText: 'BẮT ĐẦU ĐẶT LỊCH',
+        primaryHref: '#/booking/service',
+        secondaryText: 'TRA CỨU LỊCH HẸN',
+        secondaryHref: '#/lookup'
+      },
+      related: ['lookup', 'deposit', 'preparation']
+    },
+    lookup: {
+      category: 'Đặt & quản lý lịch',
+      badge: 'QUẢN LÝ HỒ SƠ',
+      summary: 'Trang tra cứu trực tuyến giúp bạn kiểm tra toàn bộ thông tin lịch hẹn, tình trạng thanh toán và gửi các yêu cầu thay đổi khi cần.',
+      steps: [
+        {
+          title: 'Mở trang Tra cứu lịch hẹn',
+          desc: 'Nhấn vào mục Tra cứu lịch ở chân trang hoặc thanh điều hướng để mở giao diện quản lý hồ sơ buổi hẹn.',
+          tip: 'Bạn có thể lưu lại liên kết trang tra cứu vào trình duyệt trên điện thoại để kiểm tra nhanh chóng.'
+        },
+        {
+          title: 'Nhập Mã lịch hẹn và Số điện thoại',
+          desc: 'Điền chính xác Mã lịch hẹn (được cung cấp khi gửi yêu cầu) cùng Số điện thoại bạn đã đăng ký để hệ thống bảo mật thông tin.',
+          tip: 'Nếu quên mã lịch hẹn, bạn có thể kiểm tra lại tin nhắn xác nhận hoặc liên hệ trực tiếp để Hoàn hỗ trợ tìm lại.'
+        },
+        {
+          title: 'Kiểm tra trạng thái và quản lý buổi hẹn',
+          desc: 'Tại đây bạn sẽ thấy chi tiết ngày giờ, địa điểm, trạng thái đối soát cọc, biên nhận thanh toán, cũng như các nút yêu cầu Đổi lịch hoặc Hủy lịch linh hoạt.',
+          tip: 'Mọi thay đổi về trạng thái lịch hẹn đều được cập nhật thời gian thực trên trang hồ sơ này.'
+        }
+      ],
+      cta: {
+        primaryText: 'ĐẾN TRANG TRA CỨU',
+        primaryHref: '#/lookup',
+        secondaryText: 'LIÊN HỆ HOÀN',
+        secondaryHref: '#/contact'
+      },
+      related: ['booking', 'receipt', 'reschedule']
+    },
+    deposit: {
+      category: 'Đặt cọc & thanh toán',
+      badge: 'TÀI CHÍNH & ĐẶT CỌC',
+      summary: 'Khoản tiền cọc là cam kết giữ khung giờ độc quyền cho bạn và được trừ 100% vào tổng chi phí dịch vụ khi hoàn thành buổi hẹn.',
+      steps: [
+        {
+          title: 'Kiểm tra thông tin chi phí và mức cọc',
+          desc: 'Mức cọc tiêu chuẩn là 200.000đ/lượt (hoặc theo thỏa thuận với lịch trình đặc biệt). Kiểm tra tổng chi phí và thông tin tài khoản thụ hưởng của Hoàn.',
+          tip: 'Khoản cọc được trừ trực tiếp vào hóa đơn cuối cùng, bạn chỉ cần thanh toán phần còn lại sau khi hoàn tất makeup.'
+        },
+        {
+          title: 'Chuyển khoản với nội dung là Mã lịch hẹn',
+          desc: 'Thực hiện chuyển khoản qua ngân hàng điện tử và bắt buộc ghi nội dung chuyển khoản là Mã lịch hẹn của bạn để hệ thống tự động nhận diện.',
+          tip: 'Ví dụ cú pháp nội dung chuyển khoản: HM-123456. Tránh ghi nội dung khác khiến việc đối soát kéo dài.'
+        },
+        {
+          title: 'Hệ thống xác nhận và cấp biên nhận',
+          desc: 'Sau khi nhận biến động số dư, Hoàn sẽ đối soát và chuyển trạng thái lịch hẹn sang "Đã xác nhận", đồng thời xuất biên nhận đặt cọc điện tử.',
+          tip: 'Thời gian đối soát thường diễn ra trong vòng 15-30 phút sau khi bạn thực hiện giao dịch.'
+        }
+      ],
+      cta: {
+        primaryText: 'TRA CỨU TRẠNG THÁI CỌC',
+        primaryHref: '#/lookup',
+        secondaryText: 'XEM CHÍNH SÁCH CỌC',
+        secondaryHref: '#/policies/deposit'
+      },
+      related: ['verification', 'receipt', 'cancel']
+    },
+    verification: {
+      category: 'Đặt cọc & thanh toán',
+      badge: 'ĐỐI SOÁT GIAO DỊCH',
+      summary: 'Hướng dẫn xử lý khi bạn đã thực hiện chuyển khoản nhưng trạng thái lịch hẹn chưa chuyển sang Đã xác nhận.',
+      steps: [
+        {
+          title: 'Kiểm tra lại thời gian và ngân hàng chuyển',
+          desc: 'Vào các khung giờ cao điểm hoặc ngày cuối tuần, giao dịch chuyển khoản liên ngân hàng có thể mất thêm từ 5 đến 15 phút để đến tài khoản của Hoàn.',
+          tip: 'Bạn không cần chuyển lại tiền lần hai khi đang trong quá trình chờ ngân hàng xử lý.'
+        },
+        {
+          title: 'Kiểm tra nội dung chuyển khoản',
+          desc: 'Xác nhận lại xem trên ứng dụng ngân hàng, nội dung chuyển tiền đã bao gồm đúng Mã lịch hẹn hay chưa.',
+          tip: 'Nếu quên ghi mã lịch, đừng lo lắng, Hoàn sẽ đối soát thủ công theo số tiền và thời gian chuyển của bạn.'
+        },
+        {
+          title: 'Gửi ảnh biên lai giao dịch cho Hoàn',
+          desc: 'Bạn có thể chụp màn hình giao dịch thành công và gửi trực tiếp qua trang Tra cứu lịch hoặc nhắn tin qua Zalo/Facebook để Hoàn duyệt ngay lập tức.',
+          tip: 'Hoàn sẽ kiểm tra và xác nhận thủ công ngay khi nhận được ảnh biên lai của bạn.'
+        }
+      ],
+      cta: {
+        primaryText: 'MỞ TRANG TRA CỨU',
+        primaryHref: '#/lookup',
+        secondaryText: 'NHẮN TIN VỚI HOÀN',
+        secondaryHref: '#/contact'
+      },
+      related: ['deposit', 'receipt', 'lookup']
+    },
+    receipt: {
+      category: 'Đặt cọc & thanh toán',
+      badge: 'BIÊN NHẬN ĐIỆN TỬ',
+      summary: 'Cách xem, kiểm tra và tải về biên nhận thanh toán đặt cọc chính thức dạng tài liệu điện tử.',
+      steps: [
+        {
+          title: 'Mở chi tiết lịch hẹn tại trang Tra cứu',
+          desc: 'Đăng nhập vào trang Tra cứu lịch bằng Mã lịch hẹn và số điện thoại đã đăng ký dịch vụ.',
+          tip: 'Biên nhận chỉ xuất hiện khi khoản cọc đã được Hoàn xác minh thành công.'
+        },
+        {
+          title: 'Bấm chọn nút Xem biên nhận',
+          desc: 'Trong khung thông tin thanh toán, nhấn nút "Xem biên nhận" để mở giao diện hóa đơn dịch vụ chi tiết.',
+          tip: 'Biên nhận hiển thị đầy đủ thông tin dịch vụ, ngày giờ, số tiền cọc đã nhận và số tiền còn lại cần thanh toán.'
+        },
+        {
+          title: 'Lưu hoặc in biên nhận ra PDF / hình ảnh',
+          desc: 'Sử dụng nút "In / Lưu PDF" tích hợp sẵn trên trình duyệt để lưu lại hồ sơ trên điện thoại hoặc máy tính của bạn.',
+          tip: 'Biên nhận điện tử có giá trị xác nhận dịch vụ chính thức từ HOÀN Makeup Artist.'
+        }
+      ],
+      cta: {
+        primaryText: 'TRA CỨU VÀ TẢI BIÊN NHẬN',
+        primaryHref: '#/lookup',
+        secondaryText: 'ĐẶT LỊCH DỊCH VỤ',
+        secondaryHref: '#/booking/service'
+      },
+      related: ['deposit', 'verification', 'lookup']
+    },
+    reschedule: {
+      category: 'Đổi, hủy & hoàn cọc',
+      badge: 'THAY ĐỔI LỊCH HẸN',
+      summary: 'Chính sách hỗ trợ đổi ngày giờ hẹn miễn phí, linh hoạt và bảo lưu khoản cọc trọn vẹn cho khách hàng.',
+      steps: [
+        {
+          title: 'Thời hạn thông báo dời ngày giờ hẹn',
+          desc: 'Hoàn hỗ trợ dời ngày hẹn hoàn toàn miễn phí nếu bạn thông báo trước giờ hẹn từ 24 giờ trở lên.',
+          tip: 'Khoản cọc đã đóng sẽ được bảo lưu trọn vẹn 100% sang lịch mới trong vòng 60 ngày.'
+        },
+        {
+          title: 'Gửi yêu cầu đổi lịch trực tuyến',
+          desc: 'Vào trang Tra cứu lịch, chọn "Yêu cầu đổi lịch", chọn ngày giờ mong muốn mới và ghi rõ lý do cần điều chỉnh.',
+          tip: 'Khung giờ hiện tại vẫn được giữ an toàn cho bạn trong khi Hoàn kiểm tra và sắp xếp khung giờ mới.'
+        },
+        {
+          title: 'Hoàn xác nhận lịch trình mới',
+          desc: 'Hoàn sẽ kiểm tra thời gian biểu và nhắn tin xác nhận ngày giờ mới trong vòng 2-4 giờ làm việc.',
+          tip: 'Nếu khung giờ mới bị trùng, Hoàn sẽ chủ động liên hệ để đề xuất các khung giờ kế cận phù hợp nhất cho bạn.'
+        }
+      ],
+      cta: {
+        primaryText: 'GỬI YÊU CẦU ĐỔI LỊCH',
+        primaryHref: '#/lookup',
+        secondaryText: 'XEM CHÍNH SÁCH ĐỔI LỊCH',
+        secondaryHref: '#/policies/change'
+      },
+      related: ['cancel', 'deposit', 'lookup']
+    },
+    cancel: {
+      category: 'Đổi, hủy & hoàn cọc',
+      badge: 'HỦY LỊCH & CHÍNH SÁCH',
+      summary: 'Quy trình và quy định hủy buổi hẹn trang điểm khi phát sinh lịch trình đột xuất hoặc trường hợp bất khả kháng.',
+      steps: [
+        {
+          title: 'Mở hồ sơ lịch hẹn cần hủy',
+          desc: 'Truy cập trang Tra cứu lịch, mở lịch hẹn của bạn và chọn nút "Yêu cầu hủy / hoàn cọc".',
+          tip: 'Hãy xem lại chính sách hủy trước để nắm rõ quyền lợi hoàn cọc tương ứng với thời gian thông báo.'
+        },
+        {
+          title: 'Ghi rõ lý do và gửi yêu cầu',
+          desc: 'Điền thông tin lý do hủy buổi hẹn để Hoàn nắm bắt tình hình và có hướng hỗ trợ tốt nhất cho bạn.',
+          tip: 'Trong các tình huống đặc biệt (sức khỏe, sự cố gia đình...), Hoàn luôn ưu tiên sự thấu hiểu và hỗ trợ tối đa.'
+        },
+        {
+          title: 'Theo dõi phản hồi và đối soát',
+          desc: 'Hệ thống ghi nhận yêu cầu hủy và Hoàn sẽ phản hồi về việc giải quyết khoản cọc trên trang hồ sơ trong vòng 24 giờ.',
+          tip: 'Bạn có thể lựa chọn hoàn tiền hoặc bảo lưu khoản cọc vô thời hạn cho các sự kiện tiếp theo.'
+        }
+      ],
+      cta: {
+        primaryText: 'TRA CỨU HỒ SƠ LỊCH HẸN',
+        primaryHref: '#/lookup',
+        secondaryText: 'XEM CHÍNH SÁCH HỦY & HOÀN',
+        secondaryHref: '#/policies/cancel'
+      },
+      related: ['refund', 'reschedule', 'deposit']
+    },
+    refund: {
+      category: 'Đổi, hủy & hoàn cọc',
+      badge: 'THEO DÕI HOÀN TIỀN',
+      summary: 'Cách theo dõi tiến độ xử lý và thời gian nhận lại tiền hoàn cọc vào tài khoản ngân hàng của bạn.',
+      steps: [
+        {
+          title: 'Điều kiện xét duyệt hoàn cọc',
+          desc: 'Yêu cầu hủy được gửi trước 48 giờ sẽ được hoàn 100% tiền cọc (hoặc bảo lưu theo nguyện vọng của bạn).',
+          tip: 'Trong vòng 48 giờ trước buổi hẹn, khoản cọc thường không hoàn lại do khung giờ đã khóa độc quyền.'
+        },
+        {
+          title: 'Cung cấp số tài khoản nhận hoàn tiền',
+          desc: 'Xác nhận thông tin số tài khoản ngân hàng chính chủ của bạn trong tin nhắn phản hồi với Hoàn.',
+          tip: 'Vui lòng cung cấp đúng tên chủ tài khoản trùng với tên người đã đặt lịch để đảm bảo bảo mật.'
+        },
+        {
+          title: 'Thời gian hoàn tiền về tài khoản',
+          desc: 'Sau khi yêu cầu được duyệt, Hoàn sẽ chuyển khoản hoàn cọc trong vòng 1 đến 2 ngày làm việc và cập nhật mã giao dịch.',
+          tip: 'Bạn luôn có thể tra cứu trạng thái giải quyết hoàn cọc bất cứ lúc nào trên trang hồ sơ trực tuyến.'
+        }
+      ],
+      cta: {
+        primaryText: 'TRA CỨU TRẠNG THÁI HOÀN CỌC',
+        primaryHref: '#/lookup',
+        secondaryText: 'TRAO ĐỔI VỚI HOÀN',
+        secondaryHref: '#/contact'
+      },
+      related: ['cancel', 'deposit', 'reschedule']
+    },
+    preparation: {
+      category: 'Chuẩn bị cho buổi hẹn',
+      badge: 'CHĂM SÓC TRƯỚC MAKEUP',
+      summary: 'Những bí quyết chuẩn bị làn da và không gian để buổi trang điểm diễn ra thuận lợi, lớp nền mướt mịn và bền màu suốt cả ngày.',
+      steps: [
+        {
+          title: 'Làm sạch và dưỡng ẩm cơ bản',
+          desc: 'Trước giờ hẹn khoảng 30-45 phút, hãy rửa mặt sạch bằng sữa rửa mặt dịu nhẹ, thoa toner và một lớp kem dưỡng ẩm mỏng nhẹ.',
+          tip: 'Không nên tẩy da chết hóa học nồng độ cao hoặc dùng sản phẩm peel da trong vòng 48 giờ trước ngày trang điểm.'
+        },
+        {
+          title: 'Chuẩn bị trang phục phù hợp',
+          desc: 'Nên mặc áo có cúc cài phía trước hoặc áo có khóa kéo để khi thay trang phục tiệc cưới/dạ tiệc không làm chạm vào tóc và lớp trang điểm.',
+          tip: 'Nếu trang điểm cô dâu, hãy chuẩn bị sẵn váy cưới và phụ kiện trang sức tại không gian makeup.'
+        },
+        {
+          title: 'Chuẩn bị không gian và ánh sáng',
+          desc: 'Nếu trang điểm tại nhà hoặc khách sạn, vui lòng chọn vị trí gần cửa sổ có ánh sáng tự nhiên tốt và có ổ cắm điện cho máy làm tóc.',
+          tip: 'Một chiếc ghế tựa thoải mái và nhiệt độ phòng mát mẻ sẽ giúp bạn thư giãn tối đa trong suốt thời gian makeup.'
+        },
+        {
+          title: 'Thông báo về tình trạng da đặc biệt',
+          desc: 'Báo trước cho Hoàn nếu da bạn đang bị dị ứng, có vết thương hở hoặc cực kỳ nhạy cảm với bất kỳ thành phần mỹ phẩm nào.',
+          tip: 'Hoàn sẽ lựa chọn dòng mỹ phẩm lành tính, chuyên biệt để bảo vệ làn da của bạn tối ưu.'
+        }
+      ],
+      cta: {
+        primaryText: 'ĐẶT LỊCH DỊCH VỤ',
+        primaryHref: '#/booking/service',
+        secondaryText: 'GỬI ẢNH THAM KHẢO',
+        secondaryHref: '#/support/reference'
+      },
+      related: ['reference', 'booking', 'deposit']
+    },
+    reference: {
+      category: 'Chuẩn bị cho buổi hẹn',
+      badge: 'ĐỊNH HÌNH PHONG CÁCH',
+      summary: 'Hướng dẫn lựa chọn và gửi ảnh tone makeup, kiểu tóc tham khảo để nghệ nhân thấu hiểu trọn vẹn mong muốn của bạn.',
+      steps: [
+        {
+          title: 'Tìm nguồn cảm hứng phong cách',
+          desc: 'Bạn có thể tham khảo mục Bộ sưu tập trên website của Hoàn, hoặc tìm ảnh trên Pinterest, Instagram theo tone mong muốn (tự nhiên, nàng thơ, quyến rũ, cô dâu cổ điển...).',
+          tip: 'Ưu tiên chọn những bức ảnh có góc mặt và tone da gần tương đồng với bạn để lớp makeup lên chân thực nhất.'
+        },
+        {
+          title: 'Đính kèm ảnh khi gửi yêu cầu đặt lịch',
+          desc: 'Tại bước điền thông tin đặt lịch, bạn có thể tải lên tối đa 3 bức ảnh phong cách trang điểm hoặc kiểu tóc yêu thích.',
+          tip: 'Nếu bạn có trang phục đã chọn cho buổi tiệc, hãy gửi kèm ảnh trang phục để Hoàn tư vấn tone màu ăn ý nhất.'
+        },
+        {
+          title: 'Ghi chú chi tiết điểm bạn tâm đắc',
+          desc: 'Ghi chú thêm điểm bạn thích nhất trong ảnh tham khảo: dáng lông mày nhẹ nhàng, màu mắt cam đào, son bóng căng mọng hay kiểu búi tóc thanh lịch.',
+          tip: 'Hoàn sẽ kết hợp hài hòa giữa mong muốn của bạn và đường nét khuôn mặt tự nhiên để tạo nên diện mạo rạng rỡ nhất.'
+        }
+      ],
+      cta: {
+        primaryText: 'XEM BỘ SƯU TẬP ẢNH',
+        primaryHref: '#/gallery',
+        secondaryText: 'BẮT ĐẦU ĐẶT LỊCH',
+        secondaryHref: '#/booking/service'
+      },
+      related: ['preparation', 'booking', 'lookup']
+    }
+  };
+
   function pageSupport() {
-    const q=new URLSearchParams(location.hash.split('?')[1]).get('q')||'';
-    return ctPage('support','Trung tâm hỗ trợ',`<p class="ct-subtitle">Chọn nội dung bạn cần hướng dẫn.</p><form class="ct-search-form" data-form="support-search">${icon('search')}<input name="q" aria-label="Tìm hướng dẫn" placeholder="Tìm hướng dẫn…" value="${esc(q)}"><button class="btn">Tìm kiếm</button></form><section class="ct-help-grid">${helpSections.map(([ic,title,links])=>`<article><h2>${icon(ic)} ${title}</h2>${links.filter(x=>x[1].toLocaleLowerCase('vi').includes(q.toLocaleLowerCase('vi'))).map(([id,t])=>`<a href="#/support/${id}">${t} ${icon('arrow')}</a>`).join('')}</article>`).join('')}</section><div class="ct-center-cta"><span>Chưa tìm thấy câu trả lời?</span><a class="btn" href="#/contact">ĐẾN TRANG LIÊN HỆ ${icon('arrow')}</a></div>`,'Hỗ trợ');
+    const q = new URLSearchParams(location.hash.split('?')[1]).get('q') || '';
+    const qClean = q.trim().toLocaleLowerCase('vi');
+    
+    let totalMatches = 0;
+    const filteredSections = helpSections.map(([ic, title, links, code, desc]) => {
+      const matchedLinks = links.filter(([id, t, teaser]) => {
+        if (!qClean) return true;
+        const textToMatch = `${t} ${teaser || ''} ${title}`.toLocaleLowerCase('vi');
+        return textToMatch.includes(qClean);
+      });
+      totalMatches += matchedLinks.length;
+      return [ic, title, matchedLinks, code, desc];
+    });
+
+    return ctPage(
+      'support',
+      '',
+      `<div class="ct-support-concierge-wrap">
+        <!-- Hero Header -->
+        <header class="ct-support-hero">
+          <span class="support-overline">HOÀN MAKEUP ARTIST · CLIENT CARE & CONCIERGE</span>
+          <h1 class="support-hero-title">Chỉ dẫn & Hỗ trợ dịch vụ</h1>
+          <p class="support-hero-lead">Không gian hướng dẫn chu đáo từ quy trình đặt lịch, đối soát tiền cọc an tâm đến chuẩn bị trọn vẹn cho buổi hẹn.</p>
+
+          <!-- Couture Search Bar -->
+          <form class="ct-support-search-bar" data-form="support-search">
+            <span class="search-bar-icon" aria-hidden="true">${icon('search')}</span>
+            <input name="q" aria-label="Tìm kiếm hướng dẫn" placeholder="Tìm hướng dẫn nhanh (đặt lịch, đối soát cọc, đổi ngày, chuẩn bị da...)" value="${esc(q)}">
+            <button class="btn btn-dark" type="submit">TÌM KIẾM</button>
+          </form>
+
+
+
+          ${qClean ? `
+            <div class="support-search-status">
+              <span>Tìm thấy <b>${totalMatches}</b> hướng dẫn phù hợp với "<em>${esc(q)}</em>"</span>
+              <a class="clear-search-link" href="#/support">✕ Xóa tìm kiếm (Xem tất cả)</a>
+            </div>
+          ` : ''}
+        </header>
+
+        <!-- 4 Dossier Pillars (Grid 2 cột) -->
+        <section class="ct-support-pillars-grid" aria-label="Các chuyên đề hỗ trợ">
+          ${filteredSections.map(([ic, title, links, code, desc]) => {
+            if (qClean && links.length === 0) return '';
+            return `
+              <article class="ct-dossier-card">
+                <header class="dossier-header">
+                  <div class="dossier-top-meta">
+                    <span class="dossier-tag">${esc(code || 'CHUYÊN ĐỀ')}</span>
+                    <span class="dossier-icon-wrap" aria-hidden="true">${icon(ic)}</span>
+                  </div>
+                  <h2 class="dossier-title">${esc(title)}</h2>
+                  <p class="dossier-desc">${esc(desc || '')}</p>
+                </header>
+
+                <div class="dossier-articles-list">
+                  ${links.map(([id, t, teaser]) => `
+                    <a class="dossier-article-link" href="#/support/${id}">
+                      <div class="article-link-info">
+                        <strong class="article-link-title">${esc(t)}</strong>
+                        <span class="article-link-desc">${esc(teaser || '')}</span>
+                      </div>
+                      <span class="article-link-arrow" aria-hidden="true">→</span>
+                    </a>
+                  `).join('')}
+                </div>
+              </article>
+            `;
+          }).join('')}
+        </section>
+
+        ${qClean && totalMatches === 0 ? `
+          <div class="support-empty-state">
+            <p>Không tìm thấy hướng dẫn nào phù hợp với từ khóa "<b>${esc(q)}</b>".</p>
+            <div class="empty-state-actions">
+              <a class="btn btn-dark" href="#/support">Xem tất cả hướng dẫn</a>
+              <a class="btn" href="#/contact">Nhắn tin trực tiếp với Hoàn</a>
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- Bottom Assistance Note -->
+        <div class="ct-protocol-bottom-note">
+          <div class="note-copy">
+            <span class="hero-overline" style="margin-bottom:8px;">HỖ TRỢ TRỰC TIẾP TỪ STUDIO</span>
+            <h3>Bạn có câu hỏi riêng hoặc cần hỗ trợ đặc biệt?</h3>
+            <p>Nếu bạn có trường hợp khẩn cấp, cần sắp xếp khung giờ sáng sớm hoặc cần tư vấn phong cách theo trang phục riêng, đừng ngần ngại trao đổi trực tiếp cùng Hoàn.</p>
+          </div>
+          <div class="note-btns">
+            <a class="btn btn-dark" href="#/contact">NHẮN TIN VỚI HOÀN</a>
+            <a class="btn" href="#/lookup">TRA CỨU LỊCH HẸN</a>
+          </div>
+        </div>
+      </div>`,
+      'Hỗ trợ',
+      true
+    );
   }
+
   function pageHelpArticle(id) {
-    const label=helpSections.flatMap(x=>x[2]).find(x=>x[0]===id)?.[1];if(!label)return pageSupport();
-    const articles={booking:['Chọn dịch vụ phù hợp và xem giá, thời lượng.','Chọn ngày, giờ còn trống và nhập địa điểm phục vụ.','Điền thông tin, mong muốn trang điểm và ảnh tham khảo nếu có.','Kiểm tra chi phí, hướng dẫn đặt cọc và gửi yêu cầu. Theo dõi trạng thái tại trang lịch hẹn.'],lookup:['Mở trang Tra cứu lịch và nhập mã lịch cùng số điện thoại đã đặt.','Chọn lịch để xem trạng thái, khoản cọc và các thao tác quản lý.'],deposit:['Kiểm tra tổng chi phí, mức cọc và thông tin người nhận trước khi chuyển khoản.','Chuyển khoản đúng nội dung gắn với mã lịch.','Thông báo đã chuyển khoản tại trang lịch hẹn. Khoản cọc chỉ được ghi nhận sau khi kiểm tra giao dịch.'],verification:['Kiểm tra mã lịch và nội dung chuyển khoản.','Bổ sung thông tin giao dịch tại trang lịch hoặc liên hệ Hoàn. Không cần chuyển lại khi đang chờ đối soát.'],receipt:['Tra cứu và mở lịch hẹn của bạn.','Khi khoản cọc đã được xác minh, chọn Xem biên nhận.','Dùng In / Lưu PDF để lưu biên nhận trên thiết bị.'],reschedule:['Tra cứu lịch hiện tại, chọn Yêu cầu đổi lịch.','Chọn ngày giờ mới và nhập lý do.','Hoàn kiểm tra khả năng sắp xếp trước khi cập nhật lịch.'],cancel:['Mở lịch hẹn và chọn Yêu cầu hủy / hoàn cọc.','Đọc điều kiện áp dụng và nhập lý do.','Gửi yêu cầu, theo dõi phản hồi trong lịch hẹn.'],refund:['Mở lịch hẹn đã gửi yêu cầu hủy.','Theo dõi phản hồi của Hoàn về khoản cọc và phương thức hoàn.','Khoản hoàn chỉ được ghi nhận khi giao dịch đã thực hiện.'],preparation:['Giữ da sạch và dưỡng ẩm nhẹ trước buổi hẹn.','Chuẩn bị trang phục và ảnh phong cách tham khảo.','Báo trước tình trạng da hoặc dị ứng mỹ phẩm để Hoàn chuẩn bị.'],reference:['Ở bước Thông tin, chọn tối đa 3 ảnh phong cách tham khảo.','Ghi rõ điểm bạn thích: lớp nền, màu mắt, môi hoặc kiểu tóc.','Ảnh được gửi kèm yêu cầu để Hoàn trao đổi cùng bạn.']};
-    return ctPage('support',label,`<article class="ct-article"><ol>${(articles[id]||[]).map(t=>`<li>${t}</li>`).join('')}</ol><div class="ct-actions"><a class="btn btn-dark" href="#/${id==='booking'?'booking/service':'lookup'}">${id==='booking'?'BẮT ĐẦU ĐẶT LỊCH':'TRA CỨU LỊCH'}</a><a class="btn" href="#/contact">LIÊN HỆ HOÀN</a></div><a class="link" href="#/support">${icon('back')} Tất cả hướng dẫn</a></article>`,'Hỗ trợ / '+label);
+    const sectionEntry = helpSections.find(s => s[2].some(x => x[0] === id));
+    const label = sectionEntry ? sectionEntry[2].find(x => x[0] === id)?.[1] : null;
+    if (!label) return pageSupport();
+
+    const categoryTitle = sectionEntry ? sectionEntry[1] : 'Hỗ trợ';
+    const art = helpArticlesData[id] || {
+      category: categoryTitle,
+      badge: 'HƯỚNG DẪN DỊCH VỤ',
+      summary: 'Quy trình hướng dẫn chi tiết dành cho khách hàng của HOÀN Makeup Artist.',
+      steps: [
+        {
+          title: 'Chi tiết hướng dẫn',
+          desc: 'Vui lòng làm theo các chỉ dẫn dưới đây hoặc liên hệ trực tiếp để được hỗ trợ tốt nhất.',
+          tip: 'Hoàn luôn sẵn sàng hỗ trợ bạn bất cứ lúc nào.'
+        }
+      ],
+      cta: {
+        primaryText: id === 'booking' ? 'BẮT ĐẦU ĐẶT LỊCH' : 'TRA CỨU LỊCH',
+        primaryHref: id === 'booking' ? '#/booking/service' : '#/lookup',
+        secondaryText: 'LIÊN HỆ HOÀN',
+        secondaryHref: '#/contact'
+      },
+      related: []
+    };
+
+    const relatedLinks = (art.related || []).map(rId => {
+      const s = helpSections.find(sec => sec[2].some(x => x[0] === rId));
+      const link = s ? s[2].find(x => x[0] === rId) : null;
+      if (!link) return null;
+      return { id: rId, title: link[1], teaser: link[2] || '' };
+    }).filter(Boolean);
+
+    return ctPage(
+      'support',
+      '',
+      `<div class="ct-support-article-wrap">
+        <header class="article-dossier-hero">
+          <span class="article-category-badge">HƯỚNG DẪN DỊCH VỤ · ${esc(art.category.toUpperCase())}</span>
+          <h1 class="article-main-title">${esc(label)}</h1>
+
+          <div class="article-takeaway-card">
+            <span class="takeaway-lbl">TÓM TẮT CỐT LÕI</span>
+            <p class="takeaway-text">${esc(art.summary)}</p>
+          </div>
+        </header>
+
+        <!-- Step-by-step Cards -->
+        <section class="article-steps-section" aria-label="Các bước thực hiện">
+          ${art.steps.map((st, i) => `
+            <article class="article-step-card">
+              <span class="step-card-num">BƯỚC 0${i + 1}</span>
+              <h2 class="step-card-title">${esc(st.title)}</h2>
+              <p class="step-card-desc">${esc(st.desc)}</p>
+              ${st.tip ? `
+                <div class="step-card-tip">
+                  <b>Lưu ý từ Hoàn:</b> <span>${esc(st.tip)}</span>
+                </div>
+              ` : ''}
+            </article>
+          `).join('')}
+        </section>
+
+        <!-- Action Strip -->
+        <div class="article-actions-strip">
+          <a class="btn btn-dark" href="${esc(art.cta.primaryHref)}">${esc(art.cta.primaryText)}</a>
+          <a class="btn" href="${esc(art.cta.secondaryHref)}">${esc(art.cta.secondaryText)}</a>
+        </div>
+
+        ${relatedLinks.length > 0 ? `
+          <!-- Related Guides -->
+          <section class="article-related-guides">
+            <h3 class="related-heading">Chỉ dẫn liên quan có thể bạn quan tâm</h3>
+            <div class="related-grid">
+              ${relatedLinks.map(rel => `
+                <a class="related-card" href="#/support/${rel.id}">
+                  <div>
+                    <strong class="related-card-title">${esc(rel.title)}</strong>
+                    <p class="related-card-sub">${esc(rel.teaser)}</p>
+                  </div>
+                  <span class="related-card-link">Xem hướng dẫn →</span>
+                </a>
+              `).join('')}
+            </div>
+          </section>
+        ` : ''}
+      </div>`,
+      [{ label: 'Hỗ trợ', href: '#/support' }, { label: label }],
+      true
+    );
   }
   function pagePolicies(tab) {
     const b = state.brand || {};
     const s = state.settings || {};
     const depositStandard = money(Number(s.deposit || 200000));
-    const title = b.policiesPageTitle || 'Chính sách dịch vụ';
-    const subtitle = b.policiesPageSubtitle || 'Chọn mục để xem đầy đủ điều kiện áp dụng.';
-    if(!tab)return ctPage('policies',title,`<p class="ct-subtitle">${esc(subtitle)}</p><section class="ct-policy-list">${policySections.map(([id,pTitle,pDesc],i)=>`<a href="#/policies/${id}"><span class="ct-index">0${i+1}</span><div><h2>${pTitle}</h2><p>${pDesc}</p></div>${icon('arrow')}</a>`).join('')}</section><div class="ct-center-cta">Cần giải thích thêm? <a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a></div>`,'Chính sách');
-    const policy=policySections.find(p=>p[0]===tab);if(!policy)return pagePolicies();
-    const content={
-      booking:[
-        b.policyBooking1 || 'Chọn dịch vụ, ngày giờ và địa điểm. Giá dịch vụ và phí di chuyển được hiển thị trước khi gửi yêu cầu.',
-        b.policyBooking2 || 'Yêu cầu được lưu vào hệ thống. Lịch chỉ được xác nhận sau khi Hoàn kiểm tra thông tin và khoản cọc theo thỏa thuận.'
-      ],
-      deposit:[
-        b.policyDeposit || `Mức cọc tiêu chuẩn hiện tại: ${depositStandard}. Khoản cọc được trừ vào tổng chi phí.`,
-        'Thông báo chuyển khoản không đồng nghĩa đã nhận tiền. Hoàn kiểm tra giao dịch thực tế trước khi ghi nhận.',
-        'Số tiền còn lại hiển thị trên trang lịch hẹn và được thanh toán sau buổi hẹn.'
-      ],
-      change:[
-        b.policyChange || 'Bạn có thể gửi yêu cầu đổi ngày giờ trong trang quản lý lịch.',
-        'Yêu cầu trước giờ hẹn ít nhất 24 giờ được xem xét đổi miễn phí một lần, tùy lịch còn trống. Khoản cọc được chuyển sang lịch mới khi yêu cầu được duyệt.'
-      ],
-      cancel:[
-        b.policyCancel || 'Yêu cầu hủy trước 48 giờ được xem xét hoàn cọc. Trong vòng 48 giờ, khoản cọc có thể không được hoàn.',
-        'Số tiền và phương thức hoàn được Hoàn trao đổi trước khi xử lý. Trường hợp bất khả kháng được xem xét riêng.'
-      ],
-      late:[
-        b.policyLate || 'Hãy liên hệ Hoàn nếu bạn dự kiến đến muộn hoặc cần thay đổi thời gian.',
-        'Nếu muộn quá 15 phút, thời lượng dịch vụ có thể cần điều chỉnh theo lịch tiếp theo.'
-      ],
-      travel:[
-        b.policyTravel || 'Hoàn phục vụ tại địa chỉ khách cung cấp trong khu vực đã thống nhất.',
-        'Phí di chuyển được thông báo trước khi đặt cọc. Nếu địa điểm thay đổi, chi phí cần được kiểm tra lại.'
-      ],
-      privacy:[
-        b.policyPrivacy || 'Thông tin liên hệ, địa điểm, lịch hẹn và mong muốn trang điểm được dùng để tổ chức buổi hẹn và hỗ trợ khách hàng.',
-        'Thông tin tình trạng da, dị ứng và ảnh tham khảo do bạn cung cấp giúp chuẩn bị dịch vụ.',
-        'Bạn có thể liên hệ Hoàn để yêu cầu kiểm tra, cập nhật hoặc xóa thông tin của mình.'
-      ]
+    const title = b.policiesPageTitle || 'Chính sách & Quy định dịch vụ';
+    const subtitle = b.policiesPageSubtitle || 'Để mỗi buổi hẹn diễn ra trọn vẹn và chu đáo, Hoàn xin chia sẻ rõ ràng các quy định về đặt lịch, đặt cọc và chính sách hỗ trợ.';
+
+    const policyDetails = {
+      booking: {
+        title: 'Chính sách đặt lịch',
+        shortDesc: 'Quy trình tạo yêu cầu, khóa giờ độc quyền và xác nhận lịch hẹn.',
+        summary: [
+          'Bạn có thể chủ động chọn phong cách makeup, ngày giờ và địa điểm phục vụ trực tiếp trên website.',
+          'Chi phí dịch vụ và phí di chuyển (nếu có) được thông báo minh bạch trước khi bạn gửi yêu cầu.',
+          'Khung giờ chỉ chính thức được khóa sau khi Hoàn đối soát thông tin và nhận khoản tiền cọc.'
+        ],
+        sections: [
+          {
+            title: 'Lựa chọn phong cách & khung giờ phù hợp',
+            content: b.policyBooking1 || 'Bạn có thể chọn dịch vụ trang điểm mong muốn (cá nhân, dự tiệc, cô dâu...), ngày và khung giờ bắt đầu còn trống trên lịch. Mọi chi phí dịch vụ và thời lượng thực hiện đều được hiển thị rõ ràng để bạn dễ dàng cân đối thời gian.',
+            note: 'Nếu bạn đã có tone makeup hoặc kiểu tóc yêu thích, hãy đính kèm ảnh tham khảo khi đặt lịch để Hoàn chuẩn bị chu đáo nhất.'
+          },
+          {
+            title: 'Xác nhận lịch và khóa khung giờ riêng cho bạn',
+            content: b.policyBooking2 || 'Sau khi bạn gửi yêu cầu, hệ thống sẽ cấp một Mã lịch hẹn riêng. Hoàn sẽ kiểm tra thông tin, liên hệ trao đổi chi tiết và xác nhận chính thức ngay khi nhận được khoản tiền cọc theo thỏa thuận.',
+            note: 'Khi lịch đã xác nhận, khung giờ đó sẽ được khóa độc quyền và Hoàn sẽ không nhận bất kỳ khách nào khác.'
+          },
+          {
+            title: 'Nhắc lịch và chuẩn bị trước buổi hẹn',
+            content: 'Trước buổi hẹn khoảng 24 giờ, Hoàn sẽ nhắn tin nhắc lịch và trao đổi thêm về trang phục hoặc lưu ý chăm sóc da. Bạn vui lòng giữ liên lạc để buổi trang điểm diễn ra đúng giờ và thuận lợi nhất.',
+            note: 'Vui lòng làm sạch da cơ bản, dưỡng ẩm nhẹ và báo trước nếu da bạn thuộc nhóm da nhạy cảm hoặc dễ kích ứng.'
+          }
+        ]
+      },
+      deposit: {
+        title: 'Đặt cọc & thanh toán',
+        shortDesc: 'Mức tiền cọc giữ lịch, phương thức chuyển khoản và thanh toán số tiền còn lại.',
+        summary: [
+          `Mức cọc tiêu chuẩn hiện tại là ${depositStandard} / lượt hẹn để giữ lịch riêng cho bạn.`,
+          'Khoản cọc được trừ trực tiếp 100% vào tổng chi phí dịch vụ của buổi hẹn.',
+          'Số tiền còn lại được thanh toán sau khi hoàn thành buổi trang điểm.'
+        ],
+        sections: [
+          {
+            title: 'Mức cọc tiêu chuẩn & Mục đích giữ lịch',
+            content: b.policyDeposit || `Mức cọc tiêu chuẩn là ${depositStandard}. Khoản cọc này giúp Hoàn chắc chắn về lịch trình, từ chối các yêu cầu trùng giờ khác và chuẩn bị chu đáo mỹ phẩm, phụ kiện riêng cho bạn. Toàn bộ tiền cọc sẽ được trừ thẳng vào tổng chi phí cuối cùng.`,
+            note: 'Với dịch vụ cô dâu trọn gói hoặc sự kiện xa, mức cọc sẽ được thỏa thuận cụ thể theo lịch trình thực tế.'
+          },
+          {
+            title: 'Hình thức chuyển khoản và đối soát chính chủ',
+            content: 'Bạn chuyển khoản theo thông tin tài khoản ngân hàng chính chủ của Hoàn kèm nội dung là Mã lịch hẹn. Sau khi nhận được thông báo biến động số dư, Hoàn sẽ cập nhật ngay trạng thái lịch hẹn sang "Đã xác nhận".',
+            note: 'Bạn luôn có thể xem lại biên nhận đặt cọc bất cứ lúc nào tại trang tra cứu lịch hẹn.'
+          },
+          {
+            title: 'Thanh toán số tiền còn lại sau buổi hẹn',
+            content: 'Phần chi phí còn lại (sau khi đã trừ tiền cọc) sẽ được thanh toán sau khi buổi trang điểm hoàn thành bằng tiền mặt hoặc chuyển khoản ngân hàng.',
+            note: 'Hoàn cam kết không phát sinh bất kỳ khoản phụ thu hay chi phí nào ngoài những gì đã thống nhất trước.'
+          }
+        ]
+      },
+      change: {
+        title: 'Chính sách đổi lịch hẹn',
+        shortDesc: 'Điều kiện, thời hạn thông báo và cách hỗ trợ chuyển ngày giờ mới.',
+        summary: [
+          'Hỗ trợ đổi ngày, giờ miễn phí nếu bạn thông báo trước giờ hẹn từ 24 giờ trở lên.',
+          'Khoản tiền cọc đã đóng được bảo lưu trọn vẹn và chuyển sang lịch hẹn mới trong vòng 60 ngày.',
+          'Bạn có thể gửi yêu cầu đổi lịch trực tiếp trên trang Tra cứu lịch hoặc nhắn tin cho Hoàn.'
+        ],
+        sections: [
+          {
+            title: 'Thời gian thông báo khi cần đổi lịch',
+            content: b.policyChange || 'Nếu có thay đổi đột xuất trong kế hoạch, bạn vui lòng báo cho Hoàn sớm nhất có thể. Yêu cầu đổi lịch trước tối thiểu 24 giờ so với giờ hẹn ban đầu sẽ được hỗ trợ đổi ngày giờ mới hoàn toàn miễn phí, tùy thuộc vào khung giờ còn trống.',
+            note: 'Bạn có thể gửi yêu cầu đổi trực tiếp tại trang Tra cứu lịch hoặc nhắn tin trực tiếp qua Zalo / Facebook.'
+          },
+          {
+            title: 'Bảo lưu tiền cọc sang lịch hẹn mới',
+            content: 'Khi đổi lịch thành công, toàn bộ số tiền cọc bạn đã thanh toán sẽ được giữ nguyên và tự động chuyển sang lịch hẹn mới trong vòng 60 ngày kể từ ngày hẹn ban đầu.',
+            note: 'Mã lịch hẹn và các thông tin dịch vụ vẫn được giữ nguyên vẹn để tiện theo dõi.'
+          },
+          {
+            title: 'Trường hợp đổi lịch sát giờ (dưới 24 giờ)',
+            content: 'Nếu bạn cần đổi lịch trong vòng 24 giờ trước giờ hẹn, Hoàn sẽ cố gắng tối đa để sắp xếp một khung giờ khác còn trống trong cùng ngày. Nếu không thể sắp xếp được giờ thay thế, lịch hẹn cũ có thể cần áp dụng theo chính sách hủy lịch.',
+            note: 'Hãy chia sẻ thẳng thắn tình huống của bạn, Hoàn sẽ luôn tìm cách hỗ trợ linh hoạt nhất có thể.'
+          }
+        ]
+      },
+      cancel: {
+        title: 'Hủy lịch & hoàn cọc',
+        shortDesc: 'Quy định xem xét hoàn cọc theo thời gian thông báo và các trường hợp bất khả kháng.',
+        summary: [
+          'Hủy trước 48 giờ: Được hoàn lại 100% tiền cọc hoặc bảo lưu điểm dịch vụ trong 60 ngày.',
+          'Hủy trong vòng 48 giờ: Khoản cọc không hoàn lại nhằm bù đắp chi phí giữ lịch độc quyền.',
+          'Các trường hợp bất khả kháng (sức khỏe, việc gia đình đột xuất) luôn được Hoàn thấu hiểu và hỗ trợ linh hoạt.'
+        ],
+        sections: [
+          {
+            title: 'Quy định hoàn cọc theo mốc thời gian',
+            content: b.policyCancel || 'Yêu cầu hủy lịch được gửi trước từ 48 giờ trở lên sẽ được hoàn lại 100% tiền cọc hoặc bảo lưu để sử dụng cho lần sau tùy mong muốn của bạn. Nếu thông báo hủy trong vòng 48 giờ trước buổi hẹn, khoản cọc sẽ không được hoàn lại vì Hoàn đã từ chối nhận các khách khác và chuẩn bị trang thiết bị.',
+            note: 'Sự thông cảm này giúp Hoàn duy trì được chất lượng phục vụ và sự công bằng cho tất cả khách hàng.'
+          },
+          {
+            title: 'Quy trình và thời gian nhận lại tiền cọc',
+            content: 'Sau khi xác nhận đồng ý hủy lịch và hoàn cọc, Hoàn sẽ chuyển khoản lại số tiền cọc về tài khoản ngân hàng của bạn trong vòng 1 đến 2 ngày làm việc.',
+            note: 'Thông tin đối soát và trạng thái hoàn cọc sẽ được hiển thị công khai trên hồ sơ lịch hẹn trực tuyến.'
+          },
+          {
+            title: 'Chính sách chia sẻ đối với lý do bất khả kháng',
+            content: 'Trong các trường hợp bất khả kháng như sức khỏe đột xuất, sự cố gia đình, thời tiết cực đoan... Hoàn luôn đặt sự thấu hiểu và sẻ chia lên hàng đầu để hỗ trợ hoàn tiền hoặc bảo lưu lịch hẹn vô thời hạn cho bạn.',
+            note: 'Đừng ngần ngại nhắn tin riêng cho Hoàn nếu bạn gặp phải tình huống không mong muốn.'
+          }
+        ]
+      },
+      late: {
+        title: 'Đúng giờ & Thời lượng buổi hẹn',
+        shortDesc: 'Cách xử lý thời gian linh hoạt để đảm bảo lớp trang điểm đạt độ hoàn thiện cao nhất.',
+        summary: [
+          'Vui lòng có mặt đúng giờ để Hoàn có đủ thời gian hoàn thiện lớp nền và từng chi tiết tỉ mỉ nhất.',
+          'Nếu có nguy cơ đến muộn, hãy nhắn tin hoặc gọi điện ngay cho Hoàn để chủ động điều chỉnh.',
+          'Chuyên viên cam kết luôn có mặt đúng giờ hoặc sớm hơn 5-10 phút tại địa điểm phục vụ.'
+        ],
+        sections: [
+          {
+            title: 'Tầm quan trọng của việc bắt đầu đúng giờ',
+            content: b.policyLate || 'Mỗi buổi trang điểm đều được Hoàn phân bổ thời lượng vừa vặn (từ 60 đến 90 phút) để chăm chút từng bước: từ dưỡng ẩm, tạo khối, tán nền đến đánh mắt và tạo kiểu tóc. Bắt đầu đúng giờ giúp lớp trang điểm đạt độ bền đẹp nhất và bạn kịp thời gian tham dự sự kiện.',
+            note: 'Nếu bạn có hẹn chụp hình hoặc giờ xuất hành cố định, hãy báo trước để Hoàn tính toán thời gian lùi lại hợp lý.'
+          },
+          {
+            title: 'Xử lý khi bạn có việc đột xuất đến muộn',
+            content: 'Nếu bạn dự kiến đến muộn, xin vui lòng báo sớm cho Hoàn. Trễ dưới 15 phút, Hoàn sẽ tăng tốc các khâu phụ trợ để kịp tiến độ. Nếu trễ quá 15 phút, thời lượng buổi hẹn có thể phải rút ngắn một số chi tiết phụ để không ảnh hưởng đến khách hàng ở khung giờ kế tiếp.',
+            note: 'Hoàn sẽ luôn tư vấn tone makeup phù hợp nhất để dù thời gian gấp gáp, diện mạo của bạn vẫn tươi tắn và rạng rỡ.'
+          },
+          {
+            title: 'Cam kết trách nhiệm từ phía Hoàn Makeup Artist',
+            content: 'Nếu vì lý do khách quan (kẹt xe, thời tiết) khiến Hoàn đến muộn hơn so với giờ hẹn, Hoàn sẽ thông báo trước ngay lập tức, đồng thời nỗ lực hoàn thành đúng hạn hoặc miễn phí di chuyển để tạ lỗi cùng bạn.',
+            note: 'Hoàn luôn trân trọng từng phút giây của khách hàng và cam kết phục vụ chu đáo nhất.'
+          }
+        ]
+      },
+      travel: {
+        title: 'Khu vực & Phí di chuyển',
+        shortDesc: 'Phạm vi phục vụ tận nơi và nguyên tắc tính phí minh bạch trước khi đặt lịch.',
+        summary: [
+          'Hoàn nhận phục vụ tận nơi tại tư gia, khách sạn, studio hoặc địa điểm tổ chức tiệc.',
+          'Phí di chuyển (nếu có) được thông báo minh bạch ngay khi bạn chọn địa điểm trước khi cọc.',
+          'Nhận đi tỉnh và các chuyến công tác xa theo thỏa thuận lịch trình riêng.'
+        ],
+        sections: [
+          {
+            title: 'Phạm vi phục vụ tận nơi',
+            content: b.policyTravel || 'Hoàn nhận trang điểm tận nơi tại tất cả các quận huyện thuộc TP.HCM cũng như các tỉnh thành lân cận. Ekip mang theo đầy đủ vali đèn chuyên dụng, ghế makeup di động và bộ mỹ phẩm cao cấp để bạn có trải nghiệm thoải mái nhất ngay tại không gian của mình.',
+            note: 'Không gian phục vụ chỉ cần có ánh sáng cơ bản và ổ cắm điện cho các thiết bị làm tóc.'
+          },
+          {
+            title: 'Minh bạch chi phí di chuyển',
+            content: 'Phí di chuyển được tính toán dựa trên khoảng cách thực tế và hiển thị công khai ở Bước 3 (Địa điểm) của quy trình đặt lịch. Các khu vực gần studio thường được miễn phí hoặc hỗ trợ chi phí tối đa.',
+            note: 'Không có bất kỳ khoản phụ thu ngoài dự kiến nào sau khi đã thống nhất.'
+          },
+          {
+            title: 'Lịch trình ngoại tỉnh và tiệc cưới xa',
+            content: 'Đối với tiệc cưới ở tỉnh xa hoặc quay chụp ngoại cảnh nhiều ngày, Hoàn sẽ trao đổi chi tiết về phương tiện di chuyển và thời gian xuất phát để đảm bảo sức khỏe và phong độ tốt nhất cho buổi làm việc.',
+            note: 'Chi phí đi tỉnh luôn được báo trọn gói rõ ràng trước ngày hẹn.'
+          }
+        ]
+      },
+      privacy: {
+        title: 'Quyền riêng tư & Hình ảnh',
+        shortDesc: 'Cam kết bảo mật thông tin cá nhân và chỉ sử dụng hình ảnh khi có sự đồng ý của bạn.',
+        summary: [
+          'Thông tin cá nhân, số điện thoại và địa chỉ chỉ được sử dụng để tổ chức buổi hẹn.',
+          'Đặc điểm làn da và ảnh phong cách tham khảo được bảo mật tuyệt đối.',
+          'Hình ảnh hoàn thiện chỉ được đăng tải lên portfolio khi nhận được sự đồng ý vui vẻ của bạn.'
+        ],
+        sections: [
+          {
+            title: 'Mục đích sử dụng thông tin cá nhân',
+            content: b.policyPrivacy || 'Thông tin liên hệ (họ tên, số điện thoại), địa chỉ và ghi chú đặc biệt chỉ được Hoàn sử dụng duy nhất cho mục đích liên lạc, xác nhận lịch hẹn và phục vụ buổi trang điểm của bạn.',
+            note: 'Tuyệt đối không chia sẻ hoặc cung cấp thông tin của bạn cho bất kỳ bên thứ ba nào khác.'
+          },
+          {
+            title: 'Bảo mật thông tin làn da và hình ảnh tham khảo',
+            content: 'Ảnh chân dung tham khảo và các lưu ý về dị ứng da bạn cung cấp chỉ được lưu hành nội bộ để Hoàn chuẩn bị mỹ phẩm phù hợp và an toàn nhất cho làn da của bạn.',
+            note: 'Dữ liệu được lưu trữ an toàn và bảo mật trên hệ thống riêng.'
+          },
+          {
+            title: 'Tôn trọng quyền hình ảnh của khách hàng',
+            content: 'Sau khi hoàn thành makeup, Hoàn có thể xin phép chụp một vài bức ảnh kỷ niệm. Những hình ảnh này chỉ được đăng tải lên trang cá nhân hoặc website để làm portfolio khi bạn vui vẻ đồng ý. Bạn hoàn toàn có quyền yêu cầu không chụp ảnh hoặc gỡ bỏ hình ảnh bất cứ lúc nào.',
+            note: 'Hoàn luôn trân trọng sự thoải mái và riêng tư của bạn trước tiên.'
+          }
+        ]
+      }
     };
-    return ctPage('policies',policy[1],`<article class="ct-article">${(content[tab]||[]).map((t,i)=>`<section><h2>0${i+1}</h2><p>${t}</p></section>`).join('')}<div class="ct-actions"><a class="btn" href="#/policies">TẤT CẢ CHÍNH SÁCH</a><a class="btn" href="#/contact">LIÊN HỆ HOÀN</a></div></article>`,'Chính sách / '+policy[1]);
+
+    if (!tab) {
+      return ctPage(
+        'policies',
+        '',
+        `<div class="ct-policy-atelier-wrap">
+          <!-- Split Hero Banner -->
+          <section class="ct-policy-hero-split">
+            <div class="hero-split-copy">
+              <span class="hero-overline">HOÀN MAKEUP ARTIST · STUDIO PROTOCOL</span>
+              <h1 class="hero-title">${esc(title)}</h1>
+              <p class="hero-lead">${esc(subtitle)}</p>
+              
+              <!-- Key Commitments (Khối cam kết nổi bật) -->
+              <div class="hero-commitment-grid">
+                <div class="commitment-item">
+                  <strong class="commitment-val">${depositStandard}</strong>
+                  <span class="commitment-lbl">Cọc tiêu chuẩn để khóa giờ riêng</span>
+                </div>
+                <div class="commitment-item">
+                  <strong class="commitment-val">24 GIỜ</strong>
+                  <span class="commitment-lbl">Đổi ngày hẹn miễn phí linh hoạt</span>
+                </div>
+                <div class="commitment-item">
+                  <strong class="commitment-val">48 GIỜ</strong>
+                  <span class="commitment-lbl">Hoàn 100% cọc khi báo trước</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="hero-split-media">
+              <div class="hero-image-frame">
+                <img src="/assets/contact-brushes.jpg" alt="Dụng cụ cọ và mỹ phẩm cao cấp Hoàn Makeup" loading="lazy">
+                <div class="hero-image-caption">
+                  <span>Dụng cụ & mỹ phẩm highend chuẩn bị chu đáo cho từng khách hàng</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Interactive Studio Protocol List (Accordion) -->
+          <section class="ct-protocol-accordion-list" aria-label="Chi tiết các chính sách dịch vụ">
+            ${policySections.map(([id, pTitle, pDesc], i) => {
+              const p = policyDetails[id] || {};
+              const isOpen = i === 0;
+              return `
+                <article class="ct-protocol-item ${isOpen ? 'is-open' : ''}" id="policy-${id}">
+                  <header class="protocol-header" data-action="policy-toggle" data-id="${id}" role="button" aria-expanded="${isOpen}" tabindex="0">
+                    <span class="protocol-index">0${i + 1}</span>
+                    <div class="protocol-title-group">
+                      <h2 class="protocol-title">${esc(p.title || pTitle)}</h2>
+                      <p class="protocol-short">${esc(p.shortDesc || pDesc)}</p>
+                    </div>
+                    <div class="protocol-toggle-indicator" aria-hidden="true">
+                      <span class="toggle-icon">${isOpen ? '−' : '+'}</span>
+                    </div>
+                  </header>
+
+                  <div class="protocol-body" ${isOpen ? '' : 'hidden'}>
+                    <div class="protocol-body-inner">
+                      <!-- Summary Highlights -->
+                      <div class="protocol-takeaway-box">
+                        <span class="takeaway-badge">TÓM TẮT ĐIỀU KHOẢN</span>
+                        <ul class="takeaway-list">
+                          ${(p.summary || []).map(item => `<li>${esc(item)}</li>`).join('')}
+                        </ul>
+                      </div>
+
+                      <!-- Detailed Points -->
+                      <div class="protocol-points-list">
+                        ${(p.sections || []).map((sec, idx) => `
+                          <div class="protocol-point-row">
+                            <h3 class="point-heading"><span class="point-num">0${idx + 1}.</span> ${esc(sec.title)}</h3>
+                            <p class="point-desc">${esc(sec.content)}</p>
+                            ${sec.note ? `
+                              <div class="point-tip-box">
+                                <b>Lưu ý nhỏ:</b> <span>${esc(sec.note)}</span>
+                              </div>
+                            ` : ''}
+                          </div>
+                        `).join('')}
+                      </div>
+
+                      <!-- Footer with Permalink -->
+                      <div class="protocol-action-strip">
+                        <a class="protocol-permalink" href="#/policies/${id}">Xem trang điều khoản riêng ↗</a>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              `;
+            }).join('')}
+          </section>
+
+          <!-- Bottom Human Note -->
+          <div class="ct-protocol-bottom-note">
+            <div class="note-copy">
+              <h3>Bạn có yêu cầu riêng hoặc lịch trình đặc biệt?</h3>
+              <p>Mỗi buổi hẹn và sự kiện đều có tính chất riêng. Nếu bạn có bất kỳ băn khoăn nào về chính sách hoặc cần sắp xếp thời gian linh hoạt, hãy nhắn tin trực tiếp để Hoàn hỗ trợ bạn chu đáo nhất.</p>
+            </div>
+            <div class="note-btns">
+              <a class="btn btn-dark" href="#/contact">NHẮN TIN VỚI HOÀN</a>
+              <a class="btn" href="#/booking/service">ĐẶT LỊCH TRANG ĐIỂM</a>
+            </div>
+          </div>
+        </div>`,
+        'Chính sách',
+        true
+      );
+    }
+
+    const policyIndex = policySections.findIndex(p => p[0] === tab);
+    if (policyIndex === -1) return pagePolicies();
+    const policy = policySections[policyIndex];
+    const pData = policyDetails[tab] || {};
+    const prevPolicy = policyIndex > 0 ? policySections[policyIndex - 1] : null;
+    const nextPolicy = policyIndex < policySections.length - 1 ? policySections[policyIndex + 1] : null;
+
+    return ctPage(
+      'policies',
+      '',
+      `<div class="ct-policy-atelier-wrap">
+        <header class="ct-policy-direct-hero">
+          <div class="direct-hero-top">
+            <span class="direct-hero-meta">QUY ĐỊNH DỊCH VỤ · 0${policyIndex + 1}</span>
+          </div>
+          <h1 class="direct-hero-title">${esc(pData.title || policy[1])}</h1>
+          <p class="direct-hero-lead">${esc(pData.shortDesc || policy[2])}</p>
+        </header>
+
+        <article class="ct-protocol-item is-open is-focused-view" id="policy-${tab}">
+          <div class="protocol-body">
+            <div class="protocol-body-inner">
+              <!-- Summary Highlights -->
+              <div class="protocol-takeaway-box">
+                <span class="takeaway-badge">TÓM TẮT ĐIỀU KHOẢN CỐT LÕI</span>
+                <ul class="takeaway-list">
+                  ${(pData.summary || []).map(item => `<li>${esc(item)}</li>`).join('')}
+                </ul>
+              </div>
+
+              <!-- Detailed Points -->
+              <div class="protocol-points-list">
+                ${(pData.sections || []).map((sec, idx) => `
+                  <div class="protocol-point-row">
+                    <h3 class="point-heading"><span class="point-num">0${idx + 1}.</span> ${esc(sec.title)}</h3>
+                    <p class="point-desc">${esc(sec.content)}</p>
+                    ${sec.note ? `
+                      <div class="point-tip-box">
+                        <b>Lưu ý nhỏ:</b> <span>${esc(sec.note)}</span>
+                      </div>
+                    ` : ''}
+                  </div>
+                `).join('')}
+              </div>
+
+              <!-- Chapter Navigation -->
+              <nav class="direct-policy-pagination" aria-label="Điều hướng chính sách">
+                ${prevPolicy ? `
+                  <a class="paging-link prev" href="#/policies/${prevPolicy[0]}">
+                    <small class="paging-sub">← CHÍNH SÁCH TRƯỚC</small>
+                    <span class="paging-title">${esc(prevPolicy[1])}</span>
+                  </a>
+                ` : '<div class="paging-spacer"></div>'}
+                ${nextPolicy ? `
+                  <a class="paging-link next" href="#/policies/${nextPolicy[0]}">
+                    <small class="paging-sub">CHÍNH SÁCH TIẾP THEO →</small>
+                    <span class="paging-title">${esc(nextPolicy[1])}</span>
+                  </a>
+                ` : '<div class="paging-spacer"></div>'}
+              </nav>
+
+              <!-- Footer with Quick CTAs -->
+              <div class="protocol-action-strip">
+                <a class="btn btn-dark" href="#/booking/service">ĐẶT LỊCH DỊCH VỤ</a>
+                <a class="btn" href="#/contact">NHẮN TIN VỚI HOÀN</a>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Other policies quick jumps -->
+        <section class="ct-policy-other-jumps">
+          <h3>Các chính sách dịch vụ khác</h3>
+          <div class="other-jumps-grid">
+            ${policySections.filter(x => x[0] !== tab).map(([oId, oTitle, oDesc], i) => `
+              <a class="other-jump-card" href="#/policies/${oId}">
+                <span class="other-jump-title">${esc(oTitle)}</span>
+                <span class="other-jump-desc">${esc(oDesc)}</span>
+                <span class="other-jump-arrow">Chi tiết →</span>
+              </a>
+            `).join('')}
+          </div>
+        </section>
+      </div>`,
+      [{ label: 'Chính sách', href: '#/policies' }, { label: policy[1] }],
+      true
+    );
   }
   function pageContact() {
     const b = state.brand;
@@ -992,8 +1774,15 @@
     const stepRoutes = ['/booking/service', '/booking/time', '/booking/location', '/booking/info', '/booking/deposit', '/booking/confirm'];
     return `<nav class="booking-progress ct-progress mockup-progress" aria-label="Tiến trình đặt lịch">${names.map((t,i)=>`${i>0?'<span class="step-connector"></span>':''}<div class="progress-step ${i+1===step?'active':''}${i+1<step?' done':''}" ${i+1===step?'aria-current="step"':''} data-action="go-step" data-target="${stepRoutes[i]}" style="cursor:pointer;" title="${t}"><b class="step-num">${i+1}</b><span class="step-label">${t}</span></div>`).join('')}</nav>`;
   }
+  function bookingFooterPrice(step) {
+    const s = service();
+    if (s.contact) return 'Tư vấn riêng';
+    // Travel fee is unknown until the customer picks a location (step 3); keep card and booking prices identical before that.
+    const travel = step >= 3 ? Number(state.booking.travelFee || 0) : 0;
+    return travel ? `${money(s.price + travel)} <small class="muted">(gồm ${money(travel)} di chuyển)</small>` : money(s.price);
+  }
   function bookingShell(step,body,nextPath,nextLabel,summary='',hasCustomFooter=false) {
-    return `<div class="page couture">${publicHeader()}<main id="main" class="ct-main ct-booking">${progress(step)}${body}${hasCustomFooter?'':`<footer class="ct-booking-footer"><div>${summary||`${esc(service().name)} · ${service().contact?'Tư vấn riêng':money(currentTotal())}`}</div><div class="ct-actions"><button class="btn" data-action="booking-back" data-step="${step}">Quay lại</button>${nextPath?`<button class="btn btn-dark" data-action="ct-next" data-next="${nextPath}" data-step="${step}">${nextLabel}</button>`:''}</div></footer>`}</main>${publicFooter()}</div>`;
+    return `<div class="page couture">${publicHeader()}<main id="main" class="ct-main ct-booking">${progress(step)}${body}${hasCustomFooter?'':`<footer class="ct-booking-footer"><div>${summary||`${esc(service().name)} · ${bookingFooterPrice(step)}`}</div><div class="ct-actions"><button class="btn" data-action="booking-back" data-step="${step}">Quay lại</button>${nextPath?`<button class="btn btn-dark" data-action="ct-next" data-next="${nextPath}" data-step="${step}">${nextLabel}</button>`:''}</div></footer>`}</main>${publicFooter()}</div>`;
   }
   function pageBookingService() {
     return bookingShell(1,`<h1 class="ct-title">Chọn dịch vụ trang điểm</h1><p class="ct-subtitle">Lựa chọn dành cho khoảnh khắc của bạn.</p><section class="ct-service-grid ct-select-services">${state.services.filter(s=>s.enabled).map(s=>`<button class="ct-service-option ${s.id===state.booking.serviceId?'selected':''}" data-action="booking-service" data-id="${s.id}"><img src="/assets/${imageFor(s)}" alt="${esc(s.name)}"><h2>${esc(s.name)}</h2><p>${s.contact?'Tư vấn riêng':`${money(s.price)} · ${s.duration} phút`}</p><span>${s.id===state.booking.serviceId?'✓ Đã chọn':'Chọn dịch vụ'}</span></button>`).join('')}</section>`,'/booking/time','TIẾP TỤC · THỜI GIAN');
@@ -1366,7 +2155,7 @@
             <div class="mockup-select-wrapper">
               <select class="mockup-select" name="style" required>
                 <option value="" disabled ${!state.booking.style ? 'selected' : ''}>Chọn phong cách trang điểm</option>
-                ${['Tự nhiên · Trong trẻo', 'Thanh lịch · Cuốn hút', 'Hiện đại · Cá tính', 'Cô dâu lộng lẫy', 'Theo ảnh tham khảo'].map(s => `<option value="${s}" ${state.booking.style === s ? 'selected' : ''}>${s}</option>`).join('')}
+                ${[...new Set([state.booking.style, 'Tự nhiên · Trong trẻo', 'Thanh lịch · Cuốn hút', 'Hiện đại · Cá tính', 'Cô dâu lộng lẫy', 'Theo ảnh tham khảo'].filter(Boolean))].map(s => `<option value="${esc(s)}" ${state.booking.style === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}
               </select>
               ${chevronSvg}
             </div>
@@ -1806,10 +2595,10 @@
       ['HỆ THỐNG',['reports','permissions','audit','settings']],
       ['KHÁCH TRUY CẬP',['visitors']]
     ];
-    const headHtml = active === 'schedule' ? '' : `<header class="admin-head"><div>${active==='overview'?'<div class="admin-kicker">TRUNG TÂM VẬN HÀNH</div>':''}<h1>${title}</h1><p>${subtitle}</p></div><div class="admin-head-actions">${actions}</div></header>`;
+    const headHtml = active === 'schedule' ? '' : `<header class="admin-head"><div><h1>${title}</h1><p>${subtitle}</p></div><div class="admin-head-actions">${actions}</div></header>`;
     const unreadNotifications = (state.notifications || []).filter(notification => notification.status === 'unread').length;
     const notificationBadge = unreadNotifications ? `<b>${unreadNotifications > 99 ? '99+' : unreadNotifications}</b>` : '';
-    return `<div class="admin-page"><header class="admin-top"><a class="admin-brand" href="#/admin">HOÀN <small>QUẢN TRỊ VẬN HÀNH</small></a><label class="admin-search-wrap">${icon('search')}<input class="admin-search" id="admin-global-search" placeholder="Tìm lịch hẹn, khách hàng hoặc giao dịch..."></label><div class="admin-user"><a class="admin-view-site-btn" href="#/" target="_blank" title="Xem website khách đặt lịch"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg><span>Xem website</span></a><button class="admin-notification" aria-label="Thông báo${unreadNotifications ? `, ${unreadNotifications} chưa đọc` : ''}" data-action="goto-notifications" title="${unreadNotifications ? `${unreadNotifications} thông báo chưa đọc` : 'Không có thông báo mới'}">${icon('bell')}${notificationBadge}</button><span class="system-label"><i class="status-dot"></i> Hệ thống ổn định</span><span class="admin-profile" data-action="goto-profile" title="Hoàn Nguyễn - Quản trị viên"><i>HN</i><span>Hoàn Nguyễn<small>Quản trị viên</small></span></span></div></header><div class="admin-layout"><aside class="admin-sidebar">${groups.map(g=>`<div class="admin-group-title">${g[0]}</div>${g[1].map(key=>{const l=adminLinks.find(x=>x[0]===key);return `<a class="admin-link ${active===key?'active':''}" href="#/admin/${key==='overview'?'':key}">${icon(l[1],l[2])}<span>${l[2]}</span></a>`}).join('')}`).join('')}</aside><main id="main" class="admin-content" data-admin-page="${active}">${headHtml}${body}</main></div></div>`;
+    return `<div class="admin-page"><header class="admin-top"><a class="admin-brand" href="#/admin">HOÀN <small>QUẢN TRỊ VẬN HÀNH</small></a><label class="admin-search-wrap">${icon('search')}<input class="admin-search" id="admin-global-search" placeholder="Tìm lịch hẹn, khách hàng hoặc giao dịch..."></label><div class="admin-user"><a class="admin-view-site-btn" href="#/" target="_blank" title="Xem website khách đặt lịch"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg><span>Xem website</span></a><button class="admin-notification" aria-label="Thông báo${unreadNotifications ? `, ${unreadNotifications} chưa đọc` : ''}" data-action="goto-notifications" title="${unreadNotifications ? `${unreadNotifications} thông báo chưa đọc` : 'Không có thông báo mới'}">${icon('bell')}${notificationBadge}</button><span class="admin-profile" data-action="goto-profile" title="Hoàn Nguyễn - Quản trị viên"><i>HN</i><span>Hoàn Nguyễn<small>Quản trị viên</small></span></span></div></header><div class="admin-layout"><aside class="admin-sidebar">${groups.map(g=>`<div class="admin-group-title">${g[0]}</div>${g[1].map(key=>{const l=adminLinks.find(x=>x[0]===key);return `<a class="admin-link ${active===key?'active':''}" href="#/admin/${key==='overview'?'':key}">${icon(l[1],l[2])}<span>${l[2]}</span></a>`}).join('')}`).join('')}</aside><main id="main" class="admin-content" data-admin-page="${active}">${headHtml}${body}</main></div></div>`;
   }
 
   function adminOverview() {
@@ -2383,7 +3172,7 @@
         <button class="filter-btn ${filter==='party'?'active':''}" data-action="filter-admin-gallery" data-val="party">Dự tiệc</button>
         <button class="filter-btn ${filter==='personal'?'active':''}" data-action="filter-admin-gallery" data-val="personal">Tự nhiên</button>
         <button class="filter-btn ${filter==='photo'?'active':''}" data-action="filter-admin-gallery" data-val="photo">Chụp ảnh</button>
-        <button class="btn btn-dark" style="margin-left:auto" data-action="open-add-portfolio-modal">+ Tải ảnh thật lên</button>
+        <button class="btn btn-dark" style="margin-left:auto" data-action="open-add-portfolio-modal">+ Thêm ảnh</button>
       </div>
       <div class="admin-card-grid" id="admin-gallery">
         ${filtered.map((g,i)=>`
@@ -2403,7 +3192,7 @@
         `).join('')}
       </div>
     `;
-    return adminShell('gallery',body,'Bộ sưu tập & Ảnh thực tế','Quản lý toàn bộ ảnh mẫu và ảnh khách hàng hiển thị trên Website.',`<a class="btn" href="#/gallery">Xem trên website</a>`);
+    return adminShell('gallery',body,'Bộ sưu tập','Quản lý hình ảnh hiển thị theo từng dịch vụ.',`<a class="btn" href="#/gallery">Xem trên website</a>`);
   }
 
   function adminContent() {
@@ -3154,6 +3943,7 @@
   function modal(title, content, confirmLabel = 'Lưu', onConfirm = '', confirmClass = 'btn-dark') {
     const isWide = content.includes('admin-preview-grid');
     $('#modal-root').innerHTML = `<div class="modal-backdrop" role="presentation" data-action="modal-backdrop"><section class="modal ${isWide ? 'modal-wide' : ''}" role="dialog" aria-modal="true" aria-labelledby="modal-title"><h2 id="modal-title">${title}</h2><div>${content}</div><div class="modal-actions"><button class="btn" data-action="close-modal">Hủy</button><button class="btn ${confirmClass}" data-action="modal-confirm" data-confirm="${onConfirm}">${confirmLabel}</button></div></section></div>`;
+    bindAdminRecordForm();
     setTimeout(() => $('.modal input, .modal select, .modal textarea')?.focus(), 0);
   }
   const closeModal = () => { $('#modal-root').innerHTML = ''; };
@@ -3260,7 +4050,10 @@
     const parts = path.split('/').filter(Boolean);
     if (path.startsWith('/pages/')) return siteTools?.customPageHtml(path) || '';
     if (path === '/') return pageHome();
-    if (path === '/services') return pageServices();
+    if (path === '/services') {
+      const legacyService = query.get('filter');
+      return legacyService && legacyService !== 'all' ? pageServiceDetail(legacyService) : pageServices();
+    }
     if (parts[0] === 'services' && parts[1]) return pageServiceDetail(parts[1], parts[2]);
     if (path === '/gallery') return pageGallery(query.get('filter') || 'all');
     if (parts[0] === 'look') return pageLook(parts[1]);
@@ -3295,7 +4088,9 @@
     const query = new URLSearchParams(queryString);
     const parts = path.split('/').filter(Boolean);
     const appRoot = $('#app');
-    const routeChanged = path !== lastRenderedPath;
+    const serviceFilter = path === '/services' ? query.get('filter') : null;
+    const routeKey = serviceFilter && serviceFilter !== 'all' ? `/services/${serviceFilter}` : path;
+    const routeChanged = routeKey !== lastRenderedPath;
     const previousScroll = { x: window.scrollX, y: window.scrollY };
     const activeField = typeof appRoot?.contains === 'function' && appRoot.contains(document.activeElement) && document.activeElement?.matches?.('input, textarea, select')
       ? document.activeElement
@@ -3334,7 +4129,7 @@
       else html = `<div class="page">${publicHeader()}<main class="help-wrap"><h1>Không tìm thấy trang</h1><a class="btn btn-dark" href="#/">Về trang chủ</a></main></div>`;
     }
     appRoot.innerHTML = html;
-    lastRenderedPath = path;
+    lastRenderedPath = routeKey;
     siteTools?.mount(path);
     if (path === '/admin/appointments' && query.get('code')) {
       setTimeout(() => document.querySelector(`[data-action="admin-view-appointment"][data-code="${CSS.escape(query.get('code'))}"]`)?.click(), 0);
@@ -3346,7 +4141,7 @@
     }
     document.title = path.startsWith('/admin') ? 'Quản trị — HOÀN' : 'HOÀN — Makeup Artist';
     if (routeChanged) {
-      window.scrollTo(0, 0);
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     } else {
       if (focusState) {
         const field = focusState.id
@@ -4221,137 +5016,44 @@
     if (event.target.matches('[data-location-search]')) refreshLocationDatalist(event.target);
   });
 
-  function renderCardMockupForm({ title = '', desc = '', price = 450000, duration = 60, image = 'natural.png', tag = 'Tự nhiên', isService = true }) {
-    const preview = image?.startsWith('/') || image?.startsWith('http') ? image : ('/assets/' + (image || 'natural.png'));
-    const priceDisplay = typeof price === 'number' ? price.toLocaleString('vi-VN') + 'đ' : (price || '450.000đ');
-    return `
-      <div class="admin-preview-grid">
-        <!-- Left: Admin Form Fields -->
-        <div class="admin-fields-column">
-          <div class="field">
-            <label>${isService ? 'Tên dịch vụ / Phong cách' : 'Tiêu đề ảnh / Lookbook'}</label>
-            <input id="${isService ? 'modal-service-name' : 'modal-port-title'}" value="${esc(title)}" placeholder="Ví dụ: Trang điểm cá nhân" required oninput="const el=document.getElementById('card-live-preview-title');if(el)el.textContent=this.value||'Tiêu đề';">
-            <small style="color:var(--muted);font-size:12px;margin-top:4px;display:block;">Tên gói sẽ hiển thị ở tiêu đề thẻ trên website.</small>
-          </div>
+  function renderAdminRecordForm({ title = '', desc = '', price = 450000, duration = 60, image = 'natural.png', tag = 'Tự nhiên', serviceId = '', isService = true }) {
+    const input = (id, label, value, attrs = '') => `<label class="record-field" for="${id}"><span>${label}</span><input id="${id}" value="${esc(value)}" ${attrs}></label>`;
+    if (isService) return `<div class="admin-record-form" data-record-kind="service">
+      ${input('modal-service-name', 'Tên dịch vụ', title, 'required maxlength="140" placeholder="Nhập tên dịch vụ"')}
+      <label class="record-field" for="modal-service-desc"><span>Mô tả</span><textarea id="modal-service-desc" rows="4" maxlength="3000" placeholder="Nội dung giới thiệu dịch vụ">${esc(desc)}</textarea></label>
+      <div class="record-field-grid">${input('modal-service-price','Giá (VNĐ)',price,'type="number" min="0" step="1" required')}${input('modal-service-duration','Thời lượng (phút)',duration,'type="number" min="1" max="1440" step="1" required')}</div>
+    </div>`;
+    return `<div class="admin-preview-grid admin-record-form" data-record-kind="portfolio"><div>
+      ${input('modal-port-title', 'Tên ảnh', title, 'required maxlength="140" placeholder="Nhập tên ảnh hoặc phong cách"')}
+      <label class="record-field" for="modal-port-note"><span>Mô tả</span><textarea id="modal-port-note" rows="4" maxlength="3000" placeholder="Ghi chú về phong cách hoặc bộ ảnh">${esc(desc)}</textarea></label>
+      <div class="record-field-grid"><label class="record-field" for="modal-port-tag"><span>Phong cách</span><select id="modal-port-tag">${['Cô dâu','Dự tiệc','Tự nhiên','Chụp ảnh'].map(value => `<option ${value === tag ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label class="record-field" for="modal-port-service"><span>Dịch vụ</span><select id="modal-port-service">${state.services.map(service => `<option value="${esc(service.id)}" ${service.id === serviceId ? 'selected' : ''}>${esc(service.name)}</option>`).join('')}</select></label></div>
+      <div class="record-image-tools"><span>Ảnh bộ sưu tập</span><label class="btn">Tải ảnh lên<input type="file" id="modal-card-file-upload" accept="image/png,image/jpeg,image/webp" hidden></label><small>JPG, PNG, WebP · Tối đa 5 MB</small><p id="card-upload-file-status" role="status">${esc(image?.split('/').pop() || '')}</p></div>
+      <details class="record-image-library"><summary>Chọn ảnh có sẵn</summary><div>${[['natural.png','Tự nhiên'],['evening.png','Dự tiệc'],['bridal-new.png','Cô dâu'],['campaign.png','Chụp ảnh']].map(([src,label]) => `<button type="button" data-record-image="${src}" aria-label="${label}"><img src="/assets/${src}" alt=""><span>${label}</span></button>`).join('')}</div></details>
+      <input id="modal-port-img" type="hidden" value="${esc(image)}">
+    </div><figure class="record-image-preview"><img id="card-live-preview-img" src="${esc(assetUrl(image || 'natural.png'))}" alt="Ảnh bộ sưu tập"><figcaption>Ảnh đã chọn</figcaption></figure></div>`;
+  }
 
-          <div class="field" style="margin-top:14px;">
-            <label>Mô tả diện mạo & phong cách</label>
-            <textarea id="${isService ? 'modal-service-desc' : 'modal-port-note'}" rows="3" placeholder="Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày." oninput="const el=document.getElementById('card-live-preview-note');if(el)el.textContent=this.value||'Mô tả...';">${esc(desc)}</textarea>
-            <small style="color:var(--muted);font-size:12px;margin-top:4px;display:block;">Đoạn văn ngắn giới thiệu đặc trưng diện mạo.</small>
-          </div>
-
-          ${isService ? `
-            <div class="form-grid" style="margin-top:14px;">
-              <div class="field">
-                <label>Giá niêm yết (VNĐ)</label>
-                <input id="modal-service-price" type="number" value="${price || 450000}" placeholder="450000" oninput="const el=document.getElementById('card-live-preview-price');if(el)el.textContent=Number(this.value).toLocaleString('vi-VN')+'đ';">
-              </div>
-              <div class="field">
-                <label>Thời lượng (phút)</label>
-                <input id="modal-service-duration" type="number" value="${duration || 60}" placeholder="60" oninput="const el=document.getElementById('card-live-preview-duration');if(el)el.textContent=this.value+' phút';">
-              </div>
-            </div>
-          ` : `
-            <div class="form-grid" style="margin-top:14px;">
-              <div class="field">
-                <label>Tag phong cách</label>
-                <select id="modal-port-tag" onchange="const el=document.getElementById('card-live-preview-tag');if(el)el.textContent=this.value;">
-                  ${['Cô dâu', 'Dự tiệc', 'Tự nhiên', 'Chụp ảnh'].map(t => `<option ${tag===t?'selected':''}>${t}</option>`).join('')}
-                </select>
-              </div>
-              <div class="field">
-                <label>Dịch vụ liên kết</label>
-                <select id="modal-port-service">
-                  ${state.services.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}
-                </select>
-              </div>
-            </div>
-            <input id="modal-port-img" value="${esc(image || 'bridal-new.png')}" style="display:none;">
-          `}
-
-          <div class="field" style="margin-top:16px;">
-            <label>Hình ảnh đại diện</label>
-            <div style="background:#f8f7f5;border:1px solid #e7e3dc;border-radius:4px;padding:12px 14px;margin-top:6px;">
-              <div style="margin-bottom:10px;">
-                <label class="btn btn-dark" style="cursor:pointer; display:inline-flex; align-items:center; gap:8px; padding:9px 16px; font-size:12.5px; font-weight:700; background:var(--wine,#7A1832); border-color:var(--wine,#7A1832); color:#fff; border-radius:3px;">
-                  <span>📷 + TẢI / THÊM ẢNH MỚI TỪ MÁY TÍNH</span>
-                  <input type="file" id="modal-card-file-upload" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="
-                    const f=this.files[0];
-                    if(f){
-                      const u=URL.createObjectURL(f);
-                      const p=document.getElementById('card-live-preview-img');
-                      if(p)p.src=u;
-                      const inImg=document.getElementById('${isService ? 'modal-service-img' : 'modal-port-img'}');
-                      if(inImg)inImg.value=u;
-                      const st=document.getElementById('card-upload-file-status');
-                      if(st)st.innerHTML='<span style=\\'color:#0a7a3b;font-weight:600;\\'>✓ Đã chọn ảnh mới: '+f.name+'</span>';
-                      toast('Đã cập nhật ảnh mới vào khung mẫu');
-                      const d=new FormData();d.append('files',f);
-                      fetch('/api/uploads',{method:'POST',body:d,headers:typeof adminHeaders==='function'?adminHeaders():{}}).then(r=>r.json()).then(res=>{if(res.paths&&res.paths[0]&&inImg)inImg.value=res.paths[0];}).catch(()=>{});
-                    }
-                  ">
-                </label>
-                <div id="card-upload-file-status" style="font-size:12px;color:#555;margin-top:6px;">
-                  Ảnh hiện tại: <b>${esc(image || 'natural.png')}</b>
-                </div>
-              </div>
-
-              <div style="font-size:11.5px;color:#666;font-weight:600;margin-bottom:6px;">Hoặc chọn nhanh ảnh mẫu trong thư viện:</div>
-              <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                ${['natural.png','evening.png','bridal-new.png','natural-detail.png','campaign.png'].map(imgName => `
-                  <button type="button" class="btn btn-sm ${imgName===(image||'natural.png')?'btn-dark':''}" onclick="document.querySelectorAll('.sample-chip-btn').forEach(b=>b.classList.remove('btn-dark'));this.classList.add('btn-dark');document.getElementById('card-live-preview-img').src='/assets/${imgName}';const el=document.getElementById('${isService ? 'modal-service-img' : 'modal-port-img'}');if(el)el.value='${imgName}';const st=document.getElementById('card-upload-file-status');if(st)st.innerHTML='Ảnh mẫu: <b>${imgName}</b>';" class="sample-chip-btn">${imgName}</button>
-                `).join('')}
-              </div>
-              <input id="modal-service-img" value="${esc(image || 'natural.png')}" style="display:none;">
-            </div>
-          </div>
-        </div>
-
-        <!-- Right: Live Preview Card Frame -->
-        <div class="admin-preview-column" style="background:#fbfaf8;border:1px solid #e5e5e5;border-radius:4px;padding:16px;">
-          <div style="margin-bottom:12px;">
-            <span style="color:var(--wine,#7A1832);font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">KHUNG MẪU HIỂN THỊ THỰC TẾ</span>
-            <h4 style="margin:2px 0 0;font-size:13.5px;color:#181818;">Xem trước giao diện thẻ website (Chỉnh đến đâu hiện đến đấy)</h4>
-          </div>
-
-          <div style="background:#fff;border:1px solid #dedede;border-radius:4px;box-shadow:0 6px 18px rgba(0,0,0,0.06);overflow:hidden;">
-            <div style="position:relative;width:100%;aspect-ratio:4/3;max-height:200px;background:#ece6e0;overflow:hidden;cursor:pointer;" onclick="document.getElementById('modal-card-file-upload')?.click();" title="Nhấp vào để đổi ảnh mới">
-              <img id="card-live-preview-img" src="${esc(preview)}" alt="Ảnh xem trước" style="width:100%;height:100%;object-fit:cover;display:block;">
-              <div style="position:absolute;bottom:6px;left:6px;background:rgba(0,0,0,0.65);color:#fff;font-size:10.5px;padding:2px 8px;border-radius:10px;backdrop-filter:blur(3px);">
-                📷 Nhấp đổi ảnh
-              </div>
-              <div style="position:absolute;top:8px;right:8px;background:rgba(0,0,0,0.7);color:#fff;font-size:10px;font-weight:600;padding:2px 6px;border-radius:3px;">
-                LIVE PREVIEW
-              </div>
-            </div>
-            <div style="padding:16px 18px 18px;">
-              <h4 id="card-live-preview-title" style="margin:0 0 6px;font-family:var(--serif,'Tinos',Georgia,serif);font-size:20px;font-weight:400;color:#181818;line-height:1.2;">
-                ${esc(title || 'Trang điểm cá nhân')}
-              </h4>
-              <p id="card-live-preview-note" style="margin:0 0 12px;font-size:13px;color:#555;line-height:1.5;min-height:38px;">
-                ${esc(desc || 'Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.')}
-              </p>
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;font-size:13px;">
-                <div style="display:flex;align-items:center;gap:6px;color:#222;">
-                  <b id="card-live-preview-price" style="font-weight:600;color:#181818;">${esc(priceDisplay)}</b>
-                  <span>·</span>
-                  <span id="card-live-preview-duration" style="color:#666;">${esc(duration || 60)} phút</span>
-                </div>
-                <span id="card-live-preview-tag" style="font-size:11px;font-weight:600;color:var(--wine,#7A1832);background:rgba(122,24,50,0.08);padding:3px 8px;border-radius:12px;">
-                  ${esc(tag || 'Tự nhiên')}
-                </span>
-              </div>
-              <div style="margin-bottom:14px;font-size:13px;text-decoration:underline;text-underline-offset:3px;color:#181818;">
-                Xem ảnh thực tế & Chi tiết →
-              </div>
-              <div style="width:100%;border:1px solid #181818;background:#fff;color:#181818;font-weight:700;font-size:11.5px;letter-spacing:0.12em;text-transform:uppercase;padding:10px;text-align:center;border-radius:2px;box-sizing:border-box;">
-                CHỌN DỊCH VỤ
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
+  function bindAdminRecordForm() {
+    const form = document.querySelector('.admin-record-form');
+    if (!form) return;
+    const input = form.querySelector('#modal-port-img'), preview = form.querySelector('#card-live-preview-img'), status = form.querySelector('#card-upload-file-status');
+    form.querySelectorAll('[data-record-image]').forEach(button => button.addEventListener('click', () => {
+      input.value = button.dataset.recordImage; preview.src = assetUrl(input.value); status.textContent = 'Ảnh đã chọn: ' + button.getAttribute('aria-label');
+    }));
+    form.querySelector('#modal-card-file-upload')?.addEventListener('change', async event => {
+      const file = event.target.files[0]; if (!file) return;
+      if (file.size > 5 * 1024 * 1024 || !['image/jpeg','image/png','image/webp'].includes(file.type)) { status.textContent = 'Chọn ảnh JPG, PNG hoặc WebP, tối đa 5 MB.'; event.target.value = ''; return; }
+      const controls = [...form.querySelectorAll('[data-record-image], #modal-card-file-upload'), document.querySelector('.modal [data-action="modal-confirm"]')];
+      form.dataset.uploading = '1'; controls.forEach(button => { button.disabled = true; }); status.textContent = 'Đang tải ảnh…';
+      try {
+        const data = new FormData(); data.append('files', file);
+        let token = ''; try { token = localStorage.getItem('hoanAdminToken') || sessionStorage.getItem('hoanAdminToken') || ''; } catch {}
+        const response = await fetch('/api/uploads', { method:'POST', body:data, headers:token ? { Authorization:'Bearer ' + token } : {} });
+        const result = await response.json(); if (!response.ok || !result.paths?.[0]) throw new Error(result.error || 'Không tải được ảnh.');
+        input.value = result.paths[0]; preview.src = input.value; status.textContent = 'Đã tải ảnh: ' + file.name;
+      } catch (error) { status.textContent = error.message; }
+      finally { delete form.dataset.uploading; controls.forEach(button => { button.disabled = false; }); event.target.value = ''; }
+    });
   }
 
   document.addEventListener('click', async (event) => {
@@ -4359,7 +5061,16 @@
     if (!el) return;
     const action = el.dataset.action;
     if (action === 'mobile-menu') {const on=$('#site-header')?.classList.toggle('menu-open');el.setAttribute('aria-expanded',String(!!on));}
-    else if (action === 'choose-service' || action === 'booking-service') { state.booking.serviceId = el.dataset.id; if (el.dataset.style) state.booking.style = el.dataset.style; saveState(); route(action==='choose-service'?(service().contact?'/contact':'/booking/time'):'/booking/service'); render(); }
+    else if (action === 'choose-service' || action === 'booking-service') {
+      const selected = state.services.find(s => s.id === el.dataset.id && s.enabled);
+      if (!selected) return toast('Dịch vụ hiện không khả dụng. Vui lòng chọn dịch vụ khác.');
+      if (state.booking.serviceId !== selected.id) state.booking.style = '';
+      state.booking.serviceId = selected.id;
+      if (el.dataset.style) state.booking.style = el.dataset.style;
+      saveState();
+      route(action === 'choose-service' ? (selected.contact ? '/contact' : '/booking/time') : '/booking/service');
+      render();
+    }
     else if (action === 'go-step') {
       const form = document.querySelector('.ct-booking form');
       if (form) {
@@ -4564,7 +5275,33 @@
     else if (action === 'save-look') { el.textContent = '♥ Đã lưu phong cách'; toast('Đã lưu phong cách vào lịch đặt'); }
     else if (action === 'gallery-filter') route('/gallery?filter='+el.dataset.filter);
     else if (action === 'accordion') { const open = el.getAttribute('aria-expanded')==='true'; el.setAttribute('aria-expanded', String(!open)); el.lastElementChild.textContent = open?'+':'−'; el.nextElementSibling.classList.toggle('open',!open); }
+    else if (action === 'policy-toggle') {
+      const item = el.closest('.ct-protocol-item');
+      if (item) {
+        const isOpen = item.classList.toggle('is-open');
+        el.setAttribute('aria-expanded', String(isOpen));
+        const indicator = el.querySelector('.toggle-icon');
+        if (indicator) indicator.textContent = isOpen ? '−' : '+';
+        const body = item.querySelector('.protocol-body');
+        if (body) body.hidden = !isOpen;
+      }
+    }
     else if (action === 'policy-tab') route('/policies?tab='+el.dataset.tab);
+    else if (action === 'filter-policy') {
+      const cat = el.dataset.cat || 'all';
+      document.querySelectorAll('.ct-policy-filter-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.cat === cat));
+      document.querySelectorAll('.ct-policy-card').forEach(card => {
+        const match = cat === 'all' || card.dataset.category === cat;
+        card.style.display = match ? '' : 'none';
+      });
+    }
+    else if (action === 'copy-policy-link') {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(location.href).then(() => toast('Đã sao chép liên kết chính sách')).catch(() => toast('Liên kết: ' + location.href));
+      } else {
+        toast('Liên kết: ' + location.href);
+      }
+    }
     else if (action === 'download-policy') downloadText('chinh-sach-hoan-makeup.txt','CHÍNH SÁCH ĐẶT LỊCH HOÀN MAKEUP\\n\\nCọc tiêu chuẩn: 200.000đ. Đổi lịch miễn phí trước 24 giờ. Yêu cầu hủy trước 48 giờ được xem xét hoàn cọc.');
     else if (action === 'support-lookup') route('/booking/'+($('#support-code')?.value || bookingCode));
     else if (action === 'add-calendar') { const s=service(); const start=state.booking.date.replaceAll('-','')+'T'+state.booking.time.replace(':','')+'00'; location.href=`data:text/calendar;charset=utf-8,BEGIN:VCALENDAR%0AVERSION:2.0%0ABEGIN:VEVENT%0ADTSTART:${start}%0ASUMMARY:${encodeURIComponent(s.name+' - HOÀN')}%0AEND:VEVENT%0AEND:VCALENDAR`; }
@@ -4626,7 +5363,7 @@
     else if (action === 'toggle-service') { const s=service(el.dataset.id); try{const result=await api({action:'saveService',...s,enabled:!s.enabled});Object.assign(s,result.service);toast('Đã cập nhật trạng thái dịch vụ');render();}catch(error){toast(error.message)} }
     else if (action === 'edit-service') {
       const s = service(el.dataset.id);
-      modal('Khung mẫu: Chỉnh sửa dịch vụ', renderCardMockupForm({
+      modal('Chỉnh sửa dịch vụ', renderAdminRecordForm({
         title: s.name,
         desc: s.description,
         price: s.price,
@@ -4636,14 +5373,14 @@
       }), 'Lưu thay đổi', 'edit-service:' + s.id);
     }
     else if (action === 'add-service') {
-      modal('Khung mẫu: Thêm dịch vụ mới', renderCardMockupForm({
-        title: 'Trang điểm cá nhân',
-        desc: 'Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.',
-        price: 450000,
+      modal('Thêm dịch vụ', renderAdminRecordForm({
+        title: '',
+        desc: '',
+        price: '',
         duration: 60,
         image: 'natural.png',
         isService: true
-      }), 'Thêm dịch vụ vào Website', 'add-service');
+      }), 'Thêm dịch vụ', 'add-service');
     }
     else if (action === 'delete-service') { if(state.services.length<=1)return toast('Cần giữ ít nhất một dịch vụ');try{await api({action:'deleteService',id:el.dataset.id});state.services=state.services.filter(s=>s.id!==el.dataset.id);toast('Đã xóa dịch vụ');render();}catch(error){toast(error.message)} }
     else if (action === 'edit-customer') { const c=state.customers[Number(el.dataset.index)]; modal('Chỉnh sửa khách hàng',`<div class="field"><label>Họ tên</label><input id="modal-customer-name" value="${c.name}"></div><div class="field"><label>Ghi chú</label><textarea id="modal-customer-note">${c.note}</textarea></div>`,'Lưu','edit-customer:'+el.dataset.index); }
@@ -4657,9 +5394,9 @@
       render();
     }
     else if (action === 'open-add-portfolio-modal') {
-      modal('Khung mẫu: Thêm ảnh thật & Lookbook', renderCardMockupForm({
-        title: 'Cô dâu Thu Thảo - Tone Hồng Đào',
-        desc: 'Lớp nền mướt mịn, mi tơ tự nhiên, layout tiệc tối',
+      modal('Thêm ảnh vào bộ sưu tập', renderAdminRecordForm({
+        title: '',
+        desc: '',
         image: 'bridal-new.png',
         tag: 'Cô dâu',
         isService: false
@@ -4677,11 +5414,12 @@
       const id = el.dataset.id;
       const p = (state.portfolio || []).find(x => x.id === id);
       if (p) {
-        modal('Khung mẫu: Chỉnh sửa ảnh thật & Lookbook', renderCardMockupForm({
+        modal('Chỉnh sửa ảnh bộ sưu tập', renderAdminRecordForm({
           title: p.title,
           desc: p.note,
           image: p.image,
           tag: p.tag,
+          serviceId: p.serviceId,
           isService: false
         }), 'Lưu thay đổi', 'edit-portfolio-confirm:' + id);
       }
@@ -4855,6 +5593,14 @@
   });
 
   async function handleModalConfirm(action) {
+    const recordForm = document.querySelector('.admin-record-form');
+    if (recordForm) {
+      if (recordForm.dataset.uploading) return toast('Đang tải ảnh. Vui lòng đợi ảnh tải xong.');
+      for (const field of recordForm.querySelectorAll('input:not([type="hidden"]):not([type="file"]), textarea, select')) {
+        if (field.required && field.type === 'text') field.value = field.value.trim();
+        if (!field.reportValidity()) return;
+      }
+    }
     if (action.startsWith('update-req-status:')) {
       const id = action.split(':')[1];
       const newStatus = $('#modal-req-status')?.value || 'pending';

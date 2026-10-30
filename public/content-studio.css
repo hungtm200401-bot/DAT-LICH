@@ -1,7 +1,7 @@
 /* Content Studio: all overrides are scoped to the editor. */
 .admin-main:has(.cms-studio) { padding:20px 24px !important; }
 .admin-head:has(~ * .cms-studio), .admin-head:has(~ .cms-studio) { margin-bottom:16px; padding-bottom:16px; }
-body:has(.cms-studio) .admin-head h1 { font-size:30px !important; }
+body:has(.cms-studio) .admin-head h1 { font-size:26px; }
 body:has(.cms-studio) .content-header-modes { margin-bottom:16px; }
 .cms-studio { --studio-wine:#7a1832; border:1px solid #e5e0dd; border-radius:12px; background:#fff; overflow:clip; box-shadow:0 8px 32px #30201908; }
 .cms-studio .cms-live-main-form { gap:0 !important; }

@@ -1,3 +1,15 @@
+import { packEditorHtml, bindPackEditor } from './cms/pack-editor.js';
+import { workspaceHtml, packManagerHtml } from './cms/workspace.js';
+import { outlineHtml } from './cms/outline.js';
+import { createCmsApi } from './cms/api.js';
+import { createPreviewBridge } from './cms/preview.js';
+import { createBlockEditor } from './cms/block-editor.js';
+import { studioMediaCatalog } from './cms/media.js';
+import { createContentLibrary } from './cms/library-ui.js';
+import { inspectPage, publishReportHtml } from './cms/publish.js';
+import { resolveBlock } from './cms/resources.js';
+import { createPageFields, pageDialogHtml, collectPageEntries } from './cms/pages.js';
+import { createContentPersistence } from './cms/persistence.js';
 // Shared CMS preview and first-party pseudonymous visit analytics. No Meta pixel,
 // fingerprinting, IP storage, form-field harvesting, or inferred identity.
 import { openImageEditor, bindImagePan, positionValue, setImagePosition } from './image-editor.js';
@@ -15,7 +27,9 @@ export const publicPages = [
 
 export function createSiteTools(ctx) {
   const { esc, toast, icon } = ctx;
-  const q = selector => document.querySelector(selector);
+  const q = selector => selector === '#cms-block-modal-container'
+    ? document.querySelector('body > #cms-block-modal-container') || document.querySelector(selector)
+    : document.querySelector(selector);
   const markDraftStatus = () => { const status = q('#cms-status'); if (status) status.textContent = 'Đang có thay đổi · khách chưa thấy'; };
   const currentPath = () => (location.hash.slice(1) || '/').split('?')[0];
   const isPreview = window.parent !== window && new URLSearchParams(location.search).get('cmsPreview') === '1';
@@ -27,6 +41,8 @@ export function createSiteTools(ctx) {
   let pages = {}, serverDrafts = {}, selected = '/', draft = {}, revision = '', dirty = false, descriptors = [], framePath = '', isApplyingPreview = false;
   let pageSectionSlots = [], activeBlockId = '', blockInsertSlot = 40, previewDevice = 'desktop', draftTimer = 0, savingDraft = false, cmsHistory = [], draggedBlockId = '';
   let undoStack = [], redoStack = [];
+  let studioView = 'pages', studioSidebarView = 'content';
+  let studioOutlineHidden = false;
   let report = null, reportError = '', reportLoading = false, offset = 0, days = '7', source = '', onlyActive = false;
   const VISIT_PAGE_SIZE = 10;
   let detailSession = '', detailOffset = 0;
@@ -43,12 +59,43 @@ export function createSiteTools(ctx) {
   function drawStudioOutline() {
     try { drawStudioNavigation(); } catch (e) {}
   }
-  async function request(url, data, admin = false) {
-    const response = await fetch(url, { cache: 'no-store', ...(data ? { method: 'POST', body: JSON.stringify(data) } : {}), headers: { ...(data ? { 'Content-Type': 'application/json' } : {}), ...(admin ? adminHeaders() : {}) } });
-    const result = await response.json();
-    if (!response.ok) throw Object.assign(new Error(result.error || 'Không thể kết nối máy chủ.'), { status: response.status });
-    return result;
-  }
+  const request = createCmsApi(adminHeaders);
+  const library = createContentLibrary({
+    request, esc, toast, isAdmin, getState: ctx.getState, builtinMedia: studioMediaCatalog, adminHeaders,
+    getContext: () => ({ pages, drafts: serverDrafts, path: selected, fields: draft, blocks: getBlocks() }),
+    onChange: () => { contentSaved(); sendPreview(); },
+    onInsert: (type, values = {}) => {
+      setStudioView('pages'); setStudioSidebar('content');
+      const blocks = getBlocks();
+      const additions = values.blocks || [{ ...createContentBlock(type, newBlockId, pageSectionSlots.length), ...values }];
+      if (blocks.length + additions.length > 30) throw new Error('Mỗi trang tối đa 30 khối.');
+      recordDraftEdit(); writeBlocks([...blocks, ...additions]); drawStudioNavigation();
+    },
+    onSelectMedia: (image, target) => {
+      setStudioView('pages'); setStudioSidebar('content');
+      recordDraftEdit();
+      if (target?.blockId) {
+        const blocks = getBlocks(), block = blocks.find(item => item.id === target.blockId);
+        if (!block) throw new Error('Khối không còn tồn tại.');
+        if (target.index !== undefined) Object.assign(block.images[target.index], { src: image.src, alt: image.alt || image.title });
+        else Object.assign(block, { image: image.src, alt: image.alt || image.title });
+        writeBlocks(blocks); openBlockEditor(block.id);
+      } else {
+        const blocks = getBlocks();
+        if (blocks.length >= 30) throw new Error('Mỗi trang tối đa 30 khối.');
+        const block = createContentBlock('image', newBlockId, pageSectionSlots.length);
+        Object.assign(block, { image: image.src, alt: image.alt || image.title, title: image.title });
+        writeBlocks([...blocks, block]);
+      }
+    },
+  });
+  const persistence = createContentPersistence({
+    request, toast,
+    snapshot: () => ({ path: selected, fields: { ...draft }, revision, dirty }),
+    setBusy: value => { savingDraft = value; },
+    onStatus: (message, saved) => { if (saved.path === selected && q('#cms-status')) q('#cms-status').textContent = message; },
+    onDraft: (saved, value) => { serverDrafts[saved.path] = value; drawStudioNavigation(); },
+  });
   async function loadPages() {
     const admin = isAdmin();
     const result = await request('/api/site-content' + (admin ? '?admin=1' : ''), undefined, admin);
@@ -96,28 +143,7 @@ export function createSiteTools(ctx) {
     return clean.replace(/^\//, '') || 'Trang chủ';
   };
   const frame = () => q('#cms-real-preview');
-  function sendPreview(overrides = {}, frameScrollY) {
-    frame()?.contentWindow?.postMessage({
-      type: 'hoan:preview', brand: ctx.getState().brand, settings: ctx.getState().settings,
-      path: selected, fields: { ...draft, ...overrides },
-      ...(frameScrollY !== undefined ? { scrollY: frameScrollY } : {})
-    }, location.origin);
-    if (dirty && isAdmin()) queueDraftSave();
-  }
-
-  const studioMediaCatalog = [
-    { src: '/assets/bridal-user.png', title: 'Cô dâu thanh lịch (Tone Hàn Quốc VIP)', category: 'bridal', tag: 'Ảnh mới tải', ratio: '3:4', desc: 'Chân dung cô dâu góc nghiêng sang trọng tinh tế' },
-    { src: '/assets/campaign.png', title: 'Chiến dịch chính (Hero Fashion)', category: 'campaign', tag: 'Banner chính', ratio: '16:9', desc: 'Ảnh chất lượng cao cho đầu trang web' },
-    { src: '/assets/bridal-new.png', title: 'Cô dâu Haute Couture', category: 'bridal', tag: 'Cô dâu', ratio: '3:4', desc: 'Váy cưới lộng lẫy phong cách sang trọng' },
-    { src: '/assets/bridal.png', title: 'Cô dâu Studio truyền thống', category: 'bridal', tag: 'Cô dâu', ratio: '4:5', desc: 'Tone trang điểm cô dâu nhẹ nhàng' },
-    { src: '/assets/evening.png', title: 'Trang điểm Dạ hội & Dự tiệc', category: 'party', tag: 'Dự tiệc', ratio: '3:4', desc: 'Tone makeup quyến rũ cho tiệc đêm' },
-    { src: '/assets/natural.png', title: 'Trang điểm Tự nhiên Trong trẻo', category: 'natural', tag: 'Tự nhiên', ratio: '3:4', desc: 'Phong cách makeup Hàn Quốc hàng ngày' },
-    { src: '/assets/hero.png', title: 'Chân dung nghệ thuật Studio', category: 'portrait', tag: 'Chân dung', ratio: '1:1', desc: 'Chân dung cận cảnh ánh sáng studio' },
-    { src: '/assets/about-process.png', title: 'Quy trình tư vấn chuyên nghiệp', category: 'process', tag: 'Quy trình', ratio: '16:9', desc: 'Góc tư vấn cọ và màu trang điểm' },
-    { src: '/assets/about-brushes.png', title: 'Bộ cọ chuyên nghiệp cao cấp', category: 'process', tag: 'Dụng cụ', ratio: '4:3', desc: 'Dụng cụ và mỹ phẩm chính hãng' },
-    { src: '/assets/about-eye.png', title: 'Điểm nhấn chi tiết ánh nhìn', category: 'natural', tag: 'Chi tiết', ratio: '4:3', desc: 'Makeup mắt và lông mày tinh tế' },
-    { src: '/assets/contact-brushes.jpg', title: 'Không gian Studio & Bàn phấn', category: 'campaign', tag: 'Không gian', ratio: '16:9', desc: 'Không gian đón tiếp khách hàng sang trọng' },
-  ];
+  const sendPreview = createPreviewBridge({ frame, snapshot: () => ({ path: selected, fields: draft, ...ctx.getState(), shared: library.shared(), dirty: dirty && isAdmin() }), onChange: queueDraftSave });
 
   const newBlockId = () => 'blk-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
   function getBlocks(fields = draft) {
@@ -183,7 +209,7 @@ export function createSiteTools(ctx) {
   function renderExtraBlocks(path, fields = pages[path]?.fields || {}) {
     const main = q('#main');
     if (!main || path.startsWith('/admin')) return;
-    renderContentBlocks(main, getBlocks(fields));
+    renderContentBlocks(main, getBlocks(fields).map(block => resolveBlock(block, library.shared(), ctx.getState().services)));
   }
   function drawBlockManager() {
     const root = q('#cms-block-manager');
@@ -210,14 +236,16 @@ export function createSiteTools(ctx) {
           </div>
           <div class="cms-block-row-actions">
             <button type="button" class="btn btn-sm" data-action="edit-cms-block" data-id="${esc(block.id)}">Sửa</button>
-            <button type="button" class="btn btn-sm" data-action="toggle-cms-block" data-id="${esc(block.id)}">${block.hidden ? 'Hiện' : 'Ẩn'}</button>
-            <button type="button" class="btn btn-sm" data-action="duplicate-cms-block" data-id="${esc(block.id)}" title="Nhân bản">Nhân bản</button>
-            <button type="button" class="cms-icon-action" data-action="move-cms-block" data-dir="-1" data-id="${esc(block.id)}" ${index === 0 ? 'disabled' : ''} title="Đưa lên">↑</button>
-            <button type="button" class="cms-icon-action" data-action="move-cms-block" data-dir="1" data-id="${esc(block.id)}" ${index === blocks.length - 1 ? 'disabled' : ''} title="Đưa xuống">↓</button>
-            <button type="button" class="cms-icon-action cms-danger-btn" data-action="delete-cms-block" data-id="${esc(block.id)}" title="Xóa">×</button>
+            <details class="studio-block-menu"><summary aria-label="Tùy chọn khối ${esc(block.title || typeName(block.type))}">⋯</summary><div>
+              <button type="button" class="btn btn-sm" data-action="toggle-cms-block" data-id="${esc(block.id)}">${block.hidden ? 'Hiện nội dung' : 'Ẩn nội dung'}</button>
+              <button type="button" class="btn btn-sm" data-action="duplicate-cms-block" data-id="${esc(block.id)}">Nhân bản</button>
+              <button type="button" class="btn btn-sm" data-action="move-cms-block" data-dir="-1" data-id="${esc(block.id)}" ${index === 0 ? 'disabled' : ''}>Di chuyển lên</button>
+              <button type="button" class="btn btn-sm" data-action="move-cms-block" data-dir="1" data-id="${esc(block.id)}" ${index === blocks.length - 1 ? 'disabled' : ''}>Di chuyển xuống</button>
+              <button type="button" class="btn btn-sm cms-danger-btn" data-action="delete-cms-block" data-id="${esc(block.id)}">Xóa nội dung</button>
+            </div></details>
           </div>
         </article>
-      `).join('')}</div>` : '<div class="cms-block-empty"><b>Thêm nội dung theo mẫu</b><span>Chọn một mẫu đã được thiết kế sẵn cho website HOÀN.</span></div>'}
+      `).join('')}</div>` : '<div class="cms-block-empty"><span>Chưa có nội dung bổ sung.</span><button type="button" class="studio-add-content-link" data-action="open-block-picker">Thêm từ mẫu</button></div>'}
     `;
   }
 
@@ -228,6 +256,7 @@ export function createSiteTools(ctx) {
       container = document.createElement('div');
       container.id = 'cms-block-modal-container';
     }
+    document.querySelectorAll('#cms-block-modal-container').forEach(other => { if (other !== container) other.remove(); });
     if (container.parentElement !== document.body) document.body.append(container);
     return container;
   }
@@ -240,318 +269,20 @@ export function createSiteTools(ctx) {
 
   function openSectionTemplatesPicker(slot = pageSectionSlots.length) {
     blockInsertSlot = Number.isFinite(Number(slot)) ? Number(slot) : pageSectionSlots.length;
-    const container = blockModalContainer();
-    container.innerHTML = `
-      <div class="cms-modal-overlay cms-section-overlay" data-action="close-block-modal">
-        <div class="cms-section-dialog" role="dialog" aria-modal="true" aria-labelledby="cms-block-picker-title" style="max-width:760px;width:95%;">
-          <header style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid #e5e7eb;padding-bottom:14px;margin-bottom:16px;">
-            <div>
-              <span class="cms-dialog-kicker">THƯ VIỆN KHUNG MẪU SECTION</span>
-              <h2 id="cms-block-picker-title" style="margin:4px 0 4px;font-size:22px;font-weight:600;">Thêm phần nội dung vào trang</h2>
-              <p style="margin:0;font-size:13px;color:#666;">Chọn một mẫu có sẵn cấu trúc, font và responsive tối ưu cho website.</p>
-            </div>
-            <button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng">&times;</button>
-          </header>
-          <div style="margin-bottom:16px;display:flex;gap:10px;align-items:center;">
-            <button type="button" class="btn btn-dark btn-sm" data-action="switch-to-pack-template" style="background:var(--wine,#7A1832);border-color:var(--wine,#7A1832);color:#fff;font-weight:500;">
-              ⭐ Khung mẫu: Thêm Pack / Phong cách makeup
-            </button>
-            <span style="font-size:12.5px;color:#777;">(Dành riêng cho trang Dịch vụ & Bộ sưu tập)</span>
-          </div>
-          <div class="cms-template-grid">
-            ${CONTENT_BLOCK_TEMPLATES.map(template => `<button type="button" class="cms-template-card" data-action="choose-block-template" data-type="${template.type}"><span class="cms-template-preview">${template.preview}</span><b>${esc(template.name)}</b><small>${esc(template.description)}</small></button>`).join('')}
-          </div>
-        </div>
-      </div>`;
+    const groups = [['Giới thiệu & câu chuyện', ['text', 'split', 'features']], ['Hình ảnh & trải nghiệm', ['image', 'gallery', 'testimonial']], ['Tư vấn & đặt lịch', ['services', 'process', 'faq', 'cta']]];
+    blockModalContainer().innerHTML = `<div class="cms-modal-overlay cms-section-overlay"><section class="cms-section-dialog cms-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="cms-block-picker-title"><header><div><span class="cms-dialog-kicker">NỘI DUNG TRANG</span><h2 id="cms-block-picker-title">Thêm phần nội dung</h2><p>Chọn loại nội dung bạn muốn thêm vào trang.</p></div><button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng">×</button></header><div class="cms-picker-groups">${groups.map(([label, types]) => `<section class="cms-picker-group"><h3>${label}</h3><div class="cms-template-grid">${CONTENT_BLOCK_TEMPLATES.filter(template => types.includes(template.type)).map(template => `<button type="button" class="cms-template-card" data-action="choose-block-template" data-type="${template.type}"><span class="cms-template-preview">${template.preview}</span><b>${esc(template.name)}</b><small>${esc(template.description)}</small></button>`).join('')}</div></section>`).join('')}</div><div class="cms-picker-callout"><button type="button" class="btn btn-sm" data-action="open-content-library" data-tab="templates">Mẫu đã lưu</button><button type="button" class="btn btn-sm" data-action="switch-to-pack-template">Thêm gói dịch vụ →</button></div></section></div>`;
   }
 
   function openPackModal(packToEdit = null) {
     const container = blockModalContainer();
-    if (!container) return;
-
-    const state = ctx.getState ? ctx.getState() : (typeof window !== 'undefined' ? window.state : {});
-    const packs = (state && state.portfolio) ? state.portfolio : [];
-
-    let currentService = 'personal';
-    if (packToEdit) {
-      currentService = packToEdit.serviceId || 'personal';
-    } else {
-      try {
-        const hash = frame()?.contentWindow?.location?.hash || '';
-        if (hash.includes('party')) currentService = 'party';
-        else if (hash.includes('bridal')) currentService = 'bridal';
-        else if (hash.includes('photo')) currentService = 'photo';
-        else if (hash.includes('personal')) currentService = 'personal';
-      } catch (e) {}
+    let serviceId = packToEdit?.serviceId || q('#studio-pack-category')?.value || 'personal';
+    if (!packToEdit && studioView === 'pages') {
+      const match = selected.match(/^\/services\/(personal|party|bridal|photo)$/);
+      if (match) serviceId = match[1];
     }
-
-    const titleVal = packToEdit ? packToEdit.title : (currentService === 'party' ? 'Trang điểm dự tiệc' : currentService === 'bridal' ? 'Trang điểm cô dâu' : currentService === 'photo' ? 'Trang điểm chụp ảnh' : 'Trang điểm cá nhân');
-    const tagVal = packToEdit ? packToEdit.tag : (currentService === 'party' ? 'Dự tiệc' : currentService === 'bridal' ? 'Cô dâu' : currentService === 'photo' ? 'Chụp ảnh' : 'Tự nhiên');
-    const noteVal = packToEdit ? (packToEdit.note || '') : (currentService === 'party' ? 'Sắc nét vừa đủ, bền đẹp dưới nhiều điều kiện ánh sáng.' : currentService === 'bridal' ? 'Thiết kế diện mạo, thử phong cách và đồng hành trong ngày cưới.' : currentService === 'photo' ? 'Tối ưu lớp nền, đường nét và màu sắc trước ống kính.' : 'Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.');
-    const priceVal = packToEdit ? (packToEdit.price || (currentService === 'bridal' ? 'Tư vấn riêng' : currentService === 'party' ? '650.000đ' : currentService === 'photo' ? '850.000đ' : '450.000đ')) : (currentService === 'bridal' ? 'Tư vấn riêng' : currentService === 'party' ? '650.000đ' : currentService === 'photo' ? '850.000đ' : '450.000đ');
-    const durationVal = packToEdit ? (packToEdit.duration || (currentService === 'bridal' ? '150 phút' : currentService === 'party' ? '90 phút' : currentService === 'photo' ? '120 phút' : '60 phút')) : (currentService === 'bridal' ? '150 phút' : currentService === 'party' ? '90 phút' : currentService === 'photo' ? '120 phút' : '60 phút');
-    const imgVal = packToEdit ? packToEdit.image : (currentService === 'party' ? 'evening.png' : currentService === 'bridal' ? 'bridal-new.png' : currentService === 'photo' ? 'campaign.png' : 'natural.png');
-    const previewSrc = imgVal.startsWith('/') || imgVal.startsWith('http') ? imgVal : '/assets/' + imgVal;
-
-    container.innerHTML = `
-      <div class="cms-modal-overlay cms-section-overlay" data-action="close-block-modal" style="background:rgba(18,16,14,0.68);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;position:fixed;inset:0;z-index:99999;padding:20px;overflow-y:auto;">
-        <div class="cms-section-dialog cms-block-editor" role="dialog" aria-modal="true" aria-labelledby="cms-block-picker-title" style="width:min(980px, calc(100vw - 32px)); max-height:calc(100dvh - 48px); background:#fff; border:1px solid #d8d8d8; box-shadow:0 24px 70px rgba(0,0,0,.22); display:flex; flex-direction:column; overflow:hidden; border-radius:4px;">
-          
-          <header style="position:sticky; top:0; z-index:2; display:flex; justify-content:space-between; align-items:flex-start; gap:20px; padding:18px 24px 14px; border-bottom:1px solid #e5e5e5; background:#fff;">
-            <div>
-              <span class="cms-dialog-kicker" style="color:var(--wine,#7A1832); font-size:10.5px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase;">QUẢN TRỊ DỊCH VỤ & GÓI TRANG ĐIỂM · HOÀN WEB ADMIN</span>
-              <h2 id="cms-block-picker-title" style="margin:2px 0 3px; font-size:21px; font-weight:600; color:#181818;">
-                ${packToEdit ? 'Chỉnh sửa gói dịch vụ trên khung mẫu' : 'Khung Mẫu Chuẩn: Thêm / Chỉnh Sửa Pack Dịch Vụ'}
-              </h2>
-              <p style="margin:0; font-size:12.5px; color:#666;">
-                Chỉnh đến đâu thông tin hiện đến đấy — Viết text và chọn ảnh, khung mẫu thẻ bên phải sẽ cập nhật tức thì.
-              </p>
-            </div>
-            <button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng" style="font-size:24px; border:none; background:transparent; cursor:pointer; color:#888;">&times;</button>
-          </header>
-
-          <!-- Category selector tabs (Admin pills style, NO emojis!) -->
-          <div style="background:#faf8f5; border-bottom:1px solid #ebe5df; padding:10px 24px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-            <div style="display:flex; align-items:center; gap:8px;">
-              <span style="font-size:12px; font-weight:700; color:#444; text-transform:uppercase; letter-spacing:0.04em;">Chọn phân loại:</span>
-              <div class="card-template-tabs" style="display:flex; gap:6px; flex-wrap:wrap;">
-                <button type="button" class="btn btn-sm card-category-tab ${currentService==='personal'?'btn-dark active':''}" data-cat="personal">Trang điểm cá nhân</button>
-                <button type="button" class="btn btn-sm card-category-tab ${currentService==='party'?'btn-dark active':''}" data-cat="party">Trang điểm dự tiệc</button>
-                <button type="button" class="btn btn-sm card-category-tab ${currentService==='bridal'?'btn-dark active':''}" data-cat="bridal">Trang điểm cô dâu</button>
-                <button type="button" class="btn btn-sm card-category-tab ${currentService==='photo'?'btn-dark active':''}" data-cat="photo">Trang điểm chụp ảnh</button>
-              </div>
-            </div>
-            <select id="modal-new-pack-service" style="display:none;">
-              <option value="personal" ${currentService==='personal'?'selected':''}>Trang điểm cá nhân</option>
-              <option value="party" ${currentService==='party'?'selected':''}>Trang điểm dự tiệc</option>
-              <option value="bridal" ${currentService==='bridal'?'selected':''}>Trang điểm cô dâu</option>
-              <option value="photo" ${currentService==='photo'?'selected':''}>Trang điểm chụp ảnh</option>
-            </select>
-          </div>
-
-          ${packs.length ? `
-            <!-- Quick Pack Manager Bar with Delete Button -->
-            <div style="background:#fff; border-bottom:1px solid #ebe5df; padding:8px 24px; display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:12px; overflow-x:auto;">
-              <div style="display:flex; align-items:center; gap:8px; white-space:nowrap; flex-wrap:nowrap; width:100%;">
-                <span style="font-weight:700; color:var(--wine,#7A1832); text-transform:uppercase; font-size:11px; letter-spacing:0.04em; flex-shrink:0;">Pack đã thêm (${packs.length}):</span>
-                <div style="display:flex; align-items:center; gap:6px; overflow-x:auto; padding:2px 0; flex:1;">
-                  ${packs.map(p => `
-                    <span style="display:inline-flex; align-items:center; gap:6px; background:#f4f2ee; border:1px solid #e0dbd3; padding:2px 8px; border-radius:3px; font-size:11.5px; flex-shrink:0;">
-                      <span style="max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(p.title)}">${esc(p.title)}</span>
-                      <button type="button" class="btn btn-sm" data-action="edit-pack-item" data-id="${esc(p.id)}" style="padding:1px 6px; font-size:10px; line-height:1.2; border:none; background:#e2ded8; cursor:pointer;" title="Chỉnh sửa pack này">Sửa</button>
-                      <button type="button" class="btn btn-sm btn-danger" data-action="delete-pack-item" data-id="${esc(p.id)}" style="padding:1px 6px; font-size:10px; line-height:1.2; border:none; background:#fee2e2; color:#b91c1c; font-weight:700; cursor:pointer;" title="Xóa pack này khỏi website">🗑 Xóa</button>
-                    </span>
-                  `).join('')}
-                </div>
-              </div>
-            </div>
-          ` : ''}
-
-          <!-- Scrollable Body: 2-Column Responsive Layout -->
-          <div style="flex:1; overflow-y:auto; padding:20px 24px; background:#f4f2ee;">
-            <form id="cms-new-pack-form" ${packToEdit ? `data-edit-id="${esc(packToEdit.id)}"` : ''} style="display:grid; grid-template-columns:repeat(auto-fit, minmax(360px, 1fr)); gap:24px; align-items:start;">
-              
-              <!-- LEFT COLUMN: EDITING INPUTS & PROMINENT PHOTO UPLOAD -->
-              <div style="background:#fff; border:1px solid #dedede; border-radius:4px; padding:20px; box-shadow:0 4px 16px rgba(0,0,0,0.04);">
-                
-                <div style="margin-bottom:14px;">
-                  <label style="font-size:11px; font-weight:700; letter-spacing:0.08em; color:#7A1832; text-transform:uppercase; display:block; margin-bottom:5px;">
-                    Tên gói / Phong cách Makeup (Viết text vào đây)
-                  </label>
-                  <input id="modal-new-pack-title" value="${esc(titleVal)}" placeholder="Ví dụ: Trang điểm cá nhân tự nhiên" required style="width:100%; font-size:15px; font-weight:600; color:#181818; padding:9px 12px; border:1px solid #d5d5d5; border-radius:3px; background:#fff; box-sizing:border-box; transition:border-color 0.2s;" onfocus="this.style.borderColor='#181818';" onblur="this.style.borderColor='#d5d5d5';">
-                  <small style="color:#666; font-size:11.5px; margin-top:4px; display:block;">Gõ text đến đâu, tiêu đề thẻ bên phải hiển thị ngay đến đấy.</small>
-                </div>
-
-                <div style="margin-bottom:14px;">
-                  <label style="font-size:11px; font-weight:700; letter-spacing:0.08em; color:#7A1832; text-transform:uppercase; display:block; margin-bottom:5px;">
-                    Mô tả diện mạo & layout (Viết text vào đây)
-                  </label>
-                  <textarea id="modal-new-pack-note" rows="3" placeholder="Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày..." style="width:100%; font-size:13.5px; color:#333; line-height:1.6; padding:9px 12px; border:1px solid #d5d5d5; border-radius:3px; background:#fff; box-sizing:border-box; resize:vertical; transition:border-color 0.2s;" onfocus="this.style.borderColor='#181818';" onblur="this.style.borderColor='#d5d5d5';">${esc(noteVal)}</textarea>
-                  <small style="color:#666; font-size:11.5px; margin-top:4px; display:block;">Gõ text đến đâu, đoạn mô tả thẻ bên phải hiển thị ngay đến đấy.</small>
-                </div>
-
-                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:18px;">
-                  <div>
-                    <label style="font-size:10.5px; font-weight:700; color:#555; text-transform:uppercase; display:block; margin-bottom:4px;">Giá niêm yết</label>
-                    <input id="modal-new-pack-price" value="${esc(priceVal)}" placeholder="450.000đ" style="width:100%; font-weight:600; font-size:13.5px; color:#181818; padding:7px 10px; border:1px solid #d5d5d5; border-radius:3px; background:#fff; box-sizing:border-box;">
-                  </div>
-                  <div>
-                    <label style="font-size:10.5px; font-weight:700; color:#555; text-transform:uppercase; display:block; margin-bottom:4px;">Thời lượng</label>
-                    <input id="modal-new-pack-duration" value="${esc(durationVal)}" placeholder="60 phút" style="width:100%; font-size:13.5px; color:#444; padding:7px 10px; border:1px solid #d5d5d5; border-radius:3px; background:#fff; box-sizing:border-box;">
-                  </div>
-                  <div>
-                    <label style="font-size:10.5px; font-weight:700; color:#7A1832; text-transform:uppercase; display:block; margin-bottom:4px;">Tag phong cách</label>
-                    <input id="modal-new-pack-tag" value="${esc(tagVal)}" placeholder="Tự nhiên" style="width:100%; font-size:13px; font-weight:600; color:#7A1832; padding:7px 10px; border:1px solid #d5d5d5; border-radius:3px; background:#fff; box-sizing:border-box;">
-                  </div>
-                </div>
-
-                <!-- DEDICATED & PROMINENT PHOTO UPLOAD SECTION -->
-                <div style="background:#faf8f5; border:1px solid #e8e3dc; border-radius:4px; padding:14px 16px;">
-                  <label style="font-size:11px; font-weight:700; letter-spacing:0.08em; color:#7A1832; text-transform:uppercase; display:block; margin-bottom:8px;">
-                    HÌNH ẢNH ĐẠI DIỆN GÓI
-                  </label>
-                  
-                  <!-- Prominent Upload Button -->
-                  <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
-                    <label class="btn btn-dark" style="cursor:pointer; display:inline-flex; align-items:center; gap:8px; padding:10px 18px; font-size:12.5px; font-weight:700; letter-spacing:0.03em; border-radius:3px; background:#7A1832; border-color:#7A1832; color:#fff; box-shadow:0 3px 10px rgba(122,24,50,0.22); transition:all 0.2s;" onmouseover="this.style.background='#5f1226';" onmouseout="this.style.background='#7A1832';">
-                      <span>📷 + TẢI / THÊM ẢNH MỚI TỪ MÁY TÍNH</span>
-                      <input type="file" id="modal-pack-file-upload" accept="image/png,image/jpeg,image/webp" style="display:none;">
-                    </label>
-                    <span style="font-size:12px; color:#666;">Hỗ trợ PNG, JPG, WEBP (Tối đa 5MB)</span>
-                  </div>
-
-                  <!-- Status badge: Live file indicator -->
-                  <div id="pack-upload-filename-badge" style="font-size:12px; color:#333; background:#fff; border:1px solid #ddd; border-radius:3px; padding:7px 12px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between;">
-                    <span>Ảnh đang chọn: <b id="pack-upload-active-filename">${esc(imgVal)}</b></span>
-                    <span id="pack-upload-status-pill" style="color:#0a7a3b; font-weight:600; font-size:11.5px;">✓ Hiển thị ngay tức thì</span>
-                  </div>
-
-                  <!-- Quick sample library -->
-                  <div style="font-size:11.5px; color:#666; font-weight:600; margin-bottom:6px;">Hoặc chọn nhanh ảnh mẫu có sẵn:</div>
-                  <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                    <button type="button" class="btn btn-sm ${imgVal==='natural.png'?'btn-dark':''}" data-action="pick-pack-sample" data-img="natural.png">natural.png</button>
-                    <button type="button" class="btn btn-sm ${imgVal==='evening.png'?'btn-dark':''}" data-action="pick-pack-sample" data-img="evening.png">evening.png</button>
-                    <button type="button" class="btn btn-sm ${imgVal==='bridal-new.png'?'btn-dark':''}" data-action="pick-pack-sample" data-img="bridal-new.png">bridal-new.png</button>
-                    <button type="button" class="btn btn-sm ${imgVal==='natural-detail.png'?'btn-dark':''}" data-action="pick-pack-sample" data-img="natural-detail.png">natural-detail.png</button>
-                    <button type="button" class="btn btn-sm ${imgVal==='campaign.png'?'btn-dark':''}" data-action="pick-pack-sample" data-img="campaign.png">campaign.png</button>
-                    <input id="modal-new-pack-img" value="${esc(imgVal)}" style="display:none;">
-                  </div>
-                </div>
-              </div>
-
-              <!-- RIGHT COLUMN: KHUNG MẪU HIỂN THỊ THỰC TẾ (REAL-TIME CARD PREVIEW) -->
-              <div style="position:sticky; top:0;">
-                <div style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
-                  <div>
-                    <span style="color:#7A1832; font-size:10px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase;">KHUNG MẪU HIỂN THỊ THỰC TẾ</span>
-                    <h4 style="margin:2px 0 0; font-size:13.5px; color:#181818;">Xem trước giao diện thẻ website (Chỉnh đến đâu hiện đến đấy)</h4>
-                  </div>
-                  <span style="font-size:10px; background:#181818; color:#fff; font-weight:700; padding:2px 8px; border-radius:3px;">LIVE 0ms</span>
-                </div>
-
-                <!-- THE CARD MOCKUP FRAME -->
-                <article class="ct-service-card card-mockup-frame" style="background:#fff; border:1px solid #dedede; border-radius:4px; box-shadow:0 8px 30px rgba(0,0,0,0.08); overflow:hidden;">
-                  
-                  <!-- Photo Box with Click-to-upload & Drag-and-drop -->
-                  <div id="modal-pack-photo-container" style="position:relative; width:100%; height:260px; background:#e8e3dc; overflow:hidden; cursor:pointer;" title="Nhấp vào đây hoặc nút bên trái để đổi ảnh mới">
-                    <img id="modal-pack-preview-img" src="${esc(previewSrc)}" alt="Ảnh đại diện gói" style="width:100%; height:100%; object-fit:cover; display:block; transition:transform 0.3s;">
-                    <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 40%, rgba(0,0,0,0.2) 100%); pointer-events:none;"></div>
-                    <div style="position:absolute; bottom:10px; left:10px; background:rgba(0,0,0,0.7); color:#fff; font-size:11px; font-weight:500; padding:4px 12px; border-radius:14px; backdrop-filter:blur(4px); pointer-events:none;">
-                      📷 Nhấp vào ảnh để tải ảnh mới từ máy
-                    </div>
-                    <div style="position:absolute; top:10px; right:10px; background:rgba(122,24,50,0.85); color:#fff; font-size:10px; font-weight:700; padding:3px 8px; border-radius:3px; letter-spacing:0.04em;">
-                      MẪU THỰC TẾ
-                    </div>
-                    ${packToEdit ? `
-                      <button type="button" class="btn btn-sm btn-danger" data-action="delete-pack-from-modal" data-id="${esc(packToEdit.id)}" style="position:absolute; top:10px; left:10px; z-index:3; background:rgba(185,28,28,0.92); border:none; color:#fff; font-size:11px; font-weight:700; padding:4px 10px; border-radius:3px; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,0.35);" title="Xóa pack này khỏi website">
-                        🗑 Xóa pack này
-                      </button>
-                    ` : ''}
-                  </div>
-
-                  <!-- Card Content with Live Reactive Text -->
-                  <div style="padding:20px 22px 22px; background:#fff;">
-                    <h3 id="card-preview-live-title" style="margin:0 0 8px; font-family:var(--serif,'Tinos',Georgia,serif); font-size:24px; font-weight:400; color:#181818; line-height:1.2;">
-                      ${esc(titleVal || 'Tên gói dịch vụ')}
-                    </h3>
-                    <p id="card-preview-live-note" style="margin:0 0 14px; font-size:13.5px; color:#555; line-height:1.6; min-height:44px;">
-                      ${esc(noteVal || 'Mô tả diện mạo & phong cách...')}
-                    </p>
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; font-size:13.5px; padding-bottom:12px; border-bottom:1px solid #f0ece6;">
-                      <div style="display:flex; align-items:center; gap:6px;">
-                        <b id="card-preview-live-price" style="font-weight:600; color:#181818;">${esc(priceVal || '450.000đ')}</b>
-                        <span>·</span>
-                        <span id="card-preview-live-duration" style="color:#666;">${esc(durationVal || '60 phút')}</span>
-                      </div>
-                      <span id="card-preview-live-tag" style="font-size:11px; font-weight:600; color:#7A1832; background:rgba(122,24,50,0.08); padding:3px 10px; border-radius:12px;">
-                        ${esc(tagVal || 'Tự nhiên')}
-                      </span>
-                    </div>
-                    <div style="margin-bottom:16px; font-size:13.5px; text-decoration:underline; text-underline-offset:3px; color:#181818;">
-                      Xem ảnh thực tế & Chi tiết →
-                    </div>
-                    <button type="submit" class="btn btn-wide" style="display:block; width:100%; border:1px solid #181818; background:#181818; color:#fff; font-weight:700; font-size:12.5px; letter-spacing:0.12em; text-transform:uppercase; padding:13px 16px; text-align:center; border-radius:2px; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.background='#333';" onmouseout="this.style.background='#181818';">
-                      ${packToEdit ? '✓ LƯU THAY ĐỔI VÀO WEBSITE' : 'CHỌN DỊCH VỤ · LƯU VÀO WEBSITE'}
-                    </button>
-                  </div>
-                </article>
-              </div>
-            </form>
-          </div>
-
-          <!-- Sticky Footer -->
-          <footer style="position:sticky; bottom:0; z-index:2; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 24px; border-top:1px solid #e5e5e5; background:#fff;">
-            <div style="display:flex; align-items:center; gap:12px;">
-              <button type="button" class="btn btn-sm" data-action="show-section-templates" style="color:#666; background:transparent; border:none; cursor:pointer;">
-                ← Xem các mẫu Section khác
-              </button>
-              <span style="color:#888; font-size:12px;">Mọi thông tin chỉnh sửa trên khung mẫu được lưu trực tiếp vào website.</span>
-            </div>
-            <div style="display:flex; align-items:center; gap:10px;">
-              ${packToEdit ? `
-                <button type="button" class="btn btn-danger" data-action="delete-pack-from-modal" data-id="${esc(packToEdit.id)}" style="background:#fee2e2; border-color:#fca5a5; color:#b91c1c; font-weight:600; padding:8px 16px; border-radius:3px; cursor:pointer;">
-                  🗑 Xóa pack này
-                </button>
-              ` : ''}
-              <button type="button" class="btn" data-action="close-block-modal">Hủy bỏ</button>
-              <button type="button" class="btn btn-dark" onclick="document.querySelector('#cms-new-pack-form')?.requestSubmit();">${packToEdit ? '✓ Lưu thay đổi' : '✓ Lưu gói vào Website'}</button>
-            </div>
-          </footer>
-        </div>
-      </div>
-    `;
-
-    // Real-time live text sync: "chỉnh đến đâu thông tin hiện đến đấy luôn"
-    const liveTitle = container.querySelector('#card-preview-live-title');
-    const liveNote = container.querySelector('#card-preview-live-note');
-    const livePrice = container.querySelector('#card-preview-live-price');
-    const liveDur = container.querySelector('#card-preview-live-duration');
-    const liveTag = container.querySelector('#card-preview-live-tag');
-
-    container.querySelector('#modal-new-pack-title')?.addEventListener('input', (e) => {
-      if (liveTitle) liveTitle.textContent = e.target.value.trim() || 'Tên gói dịch vụ';
-    });
-    container.querySelector('#modal-new-pack-note')?.addEventListener('input', (e) => {
-      if (liveNote) liveNote.textContent = e.target.value.trim() || 'Mô tả diện mạo & phong cách...';
-    });
-    container.querySelector('#modal-new-pack-price')?.addEventListener('input', (e) => {
-      if (livePrice) livePrice.textContent = e.target.value.trim() || '450.000đ';
-    });
-    container.querySelector('#modal-new-pack-duration')?.addEventListener('input', (e) => {
-      if (liveDur) liveDur.textContent = e.target.value.trim() || '60 phút';
-    });
-    container.querySelector('#modal-new-pack-tag')?.addEventListener('input', (e) => {
-      if (liveTag) liveTag.textContent = e.target.value.trim() || 'Tự nhiên';
-    });
-
-    // Wire drag & drop and click on photo container for instant photo update
-    const photoContainer = container.querySelector('#modal-pack-photo-container');
-    const fileInput = container.querySelector('#modal-pack-file-upload');
-    if (photoContainer && fileInput) {
-      photoContainer.addEventListener('click', () => {
-        fileInput.click();
-      });
-      photoContainer.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        photoContainer.style.filter = 'brightness(1.15)';
-      });
-      photoContainer.addEventListener('dragleave', (e) => {
-        e.preventDefault();
-        photoContainer.style.filter = '';
-      });
-      photoContainer.addEventListener('drop', (e) => {
-        e.preventDefault();
-        photoContainer.style.filter = '';
-        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-          fileInput.files = e.dataTransfer.files;
-          fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      });
-    }
-
-    container.querySelector('#modal-new-pack-title')?.focus();
+    container.innerHTML = packEditorHtml({ pack: packToEdit, serviceId, services: ctx.getState().services || [], esc });
+    bindPackEditor(container);
   }
-  if (typeof window !== 'undefined') window.openPackModal = openPackModal;
 
   function openBlockPicker(slot = pageSectionSlots.length) {
     blockInsertSlot = Number.isFinite(Number(slot)) ? Number(slot) : pageSectionSlots.length;
@@ -562,91 +293,41 @@ export function createSiteTools(ctx) {
     }
   }
 
-  function blockCommonFields(block) {
-    const showEyebrow = ['split', 'gallery', 'features', 'process', 'testimonial', 'faq', 'cta'].includes(block.type);
-    const showTitle = block.type !== 'testimonial';
-    const showText = block.type !== 'image';
-    const showImage = ['image', 'split'].includes(block.type);
-    const showButton = ['split', 'cta'].includes(block.type);
-    return `
-      ${showEyebrow ? `<label class="cms-field">Dòng dẫn nhỏ<input data-block-field="eyebrow" data-block-id="${esc(block.id)}" value="${esc(block.eyebrow)}" maxlength="80" placeholder="Ví dụ: CÂU CHUYỆN"></label>` : ''}
-      ${showTitle ? `<label class="cms-field">Tiêu đề<input data-block-field="title" data-block-id="${esc(block.id)}" value="${esc(block.title)}" maxlength="140"><small>Tối đa 140 ký tự để bảo toàn bố cục.</small></label>` : ''}
-      ${showText ? `<label class="cms-field">Nội dung<textarea data-block-field="text" data-block-id="${esc(block.id)}" rows="5" maxlength="3000">${esc(block.text)}</textarea></label>` : ''}
-      ${showImage ? `<div class="cms-editor-image"><img src="${esc(block.image || '/assets/campaign.png')}" alt=""><div><label class="cms-field">Đường dẫn ảnh<input data-block-field="image" data-block-id="${esc(block.id)}" value="${esc(block.image)}"></label><label class="btn btn-sm cms-btn-upload">Tải ảnh từ máy<input type="file" data-block-upload="${esc(block.id)}" accept="image/png,image/jpeg,image/webp" hidden></label></div></div><label class="cms-field">Mô tả ảnh<input data-block-field="alt" data-block-id="${esc(block.id)}" value="${esc(block.alt)}" maxlength="300"></label><label class="cms-field">Chú thích<input data-block-field="caption" data-block-id="${esc(block.id)}" value="${esc(block.caption)}" maxlength="300"></label>` : ''}
-      ${block.type === 'testimonial' ? `<label class="cms-field">Tên khách hàng / nguồn<input data-block-field="caption" data-block-id="${esc(block.id)}" value="${esc(block.caption)}" maxlength="120"></label>` : ''}
-      ${showButton ? `<div class="cms-editor-grid two"><label class="cms-field">Nhãn nút<input data-block-field="buttonLabel" data-block-id="${esc(block.id)}" value="${esc(block.buttonLabel)}" maxlength="60"></label><label class="cms-field">Liên kết<input data-block-field="buttonHref" data-block-id="${esc(block.id)}" value="${esc(block.buttonHref)}" placeholder="#/booking/service"></label></div>` : ''}
-    `;
-  }
-
-  function blockCollectionFields(block) {
-    if (block.type === 'gallery') return `
-      <div class="cms-collection-head"><b>Ảnh trong bộ sưu tập</b><button type="button" class="btn btn-sm" data-action="add-block-image" data-id="${esc(block.id)}">+ Thêm ảnh</button></div>
-      <div class="cms-collection-list">${block.images.map((image, index) => `<div class="cms-collection-row image-row"><img src="${esc(image.src || '/assets/campaign.png')}" alt=""><div><input data-block-image-field="src" data-block-id="${esc(block.id)}" data-index="${index}" value="${esc(image.src)}" placeholder="Đường dẫn ảnh"><input data-block-image-field="alt" data-block-id="${esc(block.id)}" data-index="${index}" value="${esc(image.alt)}" placeholder="Mô tả ảnh"></div><label class="cms-icon-action" title="Tải ảnh">↑<input type="file" data-block-gallery-upload="${esc(block.id)}" data-index="${index}" accept="image/png,image/jpeg,image/webp" hidden></label><button type="button" class="cms-icon-action cms-danger-btn" data-action="remove-block-image" data-id="${esc(block.id)}" data-index="${index}">×</button></div>`).join('')}</div>`;
-    if (!['features', 'process', 'faq'].includes(block.type)) return '';
-    return `
-      <div class="cms-collection-head"><b>${block.type === 'faq' ? 'Câu hỏi' : 'Các mục nội dung'}</b><button type="button" class="btn btn-sm" data-action="add-block-item" data-id="${esc(block.id)}">+ Thêm mục</button></div>
-      <div class="cms-collection-list">${block.items.map((item, index) => `<div class="cms-collection-row"><span>${String(index + 1).padStart(2, '0')}</span><div><input data-block-item-field="title" data-block-id="${esc(block.id)}" data-index="${index}" value="${esc(item.title)}" placeholder="${block.type === 'faq' ? 'Câu hỏi' : 'Tiêu đề'}"><textarea data-block-item-field="text" data-block-id="${esc(block.id)}" data-index="${index}" rows="2" placeholder="Nội dung">${esc(item.text)}</textarea></div><button type="button" class="cms-icon-action cms-danger-btn" data-action="remove-block-item" data-id="${esc(block.id)}" data-index="${index}">×</button></div>`).join('')}</div>`;
-  }
-
-  function openBlockEditor(id) {
-    const block = getBlocks().find(item => item.id === id);
-    const container = blockModalContainer();
-    if (!block || !container) return;
-    activeBlockId = id;
-    const template = CONTENT_BLOCK_TEMPLATES.find(item => item.type === block.type);
-    container.innerHTML = `
-      <div class="cms-modal-overlay cms-section-overlay" data-action="close-block-modal">
-        <div class="cms-section-dialog cms-block-editor" role="dialog" aria-modal="true" aria-labelledby="cms-block-editor-title">
-          <header><div><span class="cms-dialog-kicker">${esc(template?.name || 'NỘI DUNG')}</span><h2 id="cms-block-editor-title">Chỉnh sửa phần nội dung</h2><p>Thay đổi hiển thị ngay trong khung xem trước.</p></div><button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng">&times;</button></header>
-          <div class="cms-block-editor-body">
-            <section><h3>Nội dung</h3>${blockCommonFields(block)}${blockCollectionFields(block)}</section>
-            <aside><h3>Trình bày</h3>
-              <label class="cms-field">Vị trí trong trang<select data-block-setting="slot" data-block-id="${esc(block.id)}">${blockSlotOptions(block.slot)}</select></label>
-              <label class="cms-field">Chiều rộng<select data-block-setting="width" data-block-id="${esc(block.id)}">${option('narrow','Hẹp',block.settings.width)}${option('standard','Tiêu chuẩn',block.settings.width)}${option('wide','Rộng',block.settings.width)}${option('full','Toàn màn hình',block.settings.width)}</select></label>
-              <label class="cms-field">Khoảng cách<select data-block-setting="spacing" data-block-id="${esc(block.id)}">${option('compact','Nhỏ',block.settings.spacing)}${option('normal','Vừa',block.settings.spacing)}${option('airy','Lớn',block.settings.spacing)}</select></label>
-              <label class="cms-field">Nền<select data-block-setting="theme" data-block-id="${esc(block.id)}">${option('white','Trắng',block.settings.theme)}${option('soft','Sáng nhẹ',block.settings.theme)}${option('dark','Đen',block.settings.theme)}${option('wine','Đỏ rượu',block.settings.theme)}</select></label>
-              <label class="cms-field">Căn nội dung<select data-block-setting="align" data-block-id="${esc(block.id)}">${option('left','Trái',block.settings.align)}${option('center','Giữa',block.settings.align)}</select></label>
-              ${['image','split','gallery'].includes(block.type) ? `<label class="cms-field">Tỷ lệ ảnh<select data-block-setting="ratio" data-block-id="${esc(block.id)}">${option('auto','Tự nhiên',block.settings.ratio)}${option('landscape','Ngang 16:9',block.settings.ratio)}${option('portrait','Dọc 4:5',block.settings.ratio)}${option('square','Vuông 1:1',block.settings.ratio)}</select></label>` : ''}
-              ${block.type === 'split' ? `<label class="cms-field">Vị trí ảnh<select data-block-setting="imagePosition" data-block-id="${esc(block.id)}">${option('left','Bên trái',block.settings.imagePosition)}${option('right','Bên phải',block.settings.imagePosition)}${option('top','Phía trên trên mobile',block.settings.imagePosition)}</select></label>` : ''}
-              ${['gallery','features','process'].includes(block.type) ? `<label class="cms-field">Số cột<select data-block-setting="columns" data-block-id="${esc(block.id)}">${option('2','2 cột',block.settings.columns)}${option('3','3 cột',block.settings.columns)}${option('4','4 cột',block.settings.columns)}</select></label>` : ''}
-            </aside>
-          </div>
-          <footer><span>Mọi kiểu chữ và kích thước được khóa theo giao diện HOÀN.</span><button type="button" class="btn btn-dark" data-action="close-block-modal">Xong</button></footer>
-        </div>
-      </div>`;
-    container.querySelector('.cms-block-editor input, .cms-block-editor textarea')?.focus();
-  }
+  const { openBlockEditor } = createBlockEditor({ esc, getBlocks, blockModalContainer, blockSlotOptions, option, sourceFields: block => library.sourceFields(block), onActive: id => { activeBlockId = id; } });
 
   function detectSection(node, path) {
+    if (node.closest('.ct-campaign')) return { id: 'sec-cover', title: 'Ảnh bìa & giới thiệu', icon: '' };
+    if (node.closest('.ct-bridal-story')) return { id: 'sec-bridal', title: 'Câu chuyện cô dâu', icon: '' };
+    if (node.closest('.ct-evening')) return { id: 'sec-evening', title: 'Phong cách dự tiệc', icon: '' };
     if (node.closest('header, .ct-editorial > header, .hero, .booking-art, .ct-hero')) {
       return { id: 'sec-hero', title: 'Đầu trang', icon: '' };
     }
     if (node.closest('.ct-process, .ct-philosophy, .ct-story, .ct-about, .ct-intro')) {
-      return { id: 'sec-intro', title: 'Giới thiệu & Triết lý nghệ thuật', icon: '' };
+      return { id: 'sec-intro', title: 'Giới thiệu', icon: '' };
     }
     if (node.closest('.couture-gallery, .fashion-photo, .ct-gallery, .ct-look, .ct-media')) {
-      return { id: 'sec-gallery', title: 'Bộ sưu tập & Hình ảnh thực tế', icon: '' };
+      return { id: 'sec-gallery', title: 'Bộ sưu tập & hình ảnh', icon: '' };
     }
     if (node.closest('.ct-services, .ct-card, .ct-pricing')) {
-      return { id: 'sec-services', title: 'Dịch vụ & Bảng giá', icon: '' };
+      return { id: 'sec-services', title: 'Dịch vụ & bảng giá', icon: '' };
     }
     if (node.closest('footer, .couture-footer, .ct-contact, .visit-policy, .ct-policy')) {
-      return { id: 'sec-footer', title: 'Chân trang & Thông tin hỗ trợ', icon: '' };
+      return { id: 'sec-footer', title: 'Liên hệ & hỗ trợ', icon: '' };
     }
     let prev = node.previousElementSibling;
     while (prev) {
       if (prev.matches('h2, h1')) {
-        const txt = prev.textContent.trim().slice(0, 32);
-        if (txt) return { id: 'sec-' + txt.toLowerCase().replace(/[^a-z0-9]+/g, '-'), title: `Mục: "${txt}"`, icon: '' };
+        const txt = prev.textContent.trim().replace(/\s+/g, ' ').slice(0, 60);
+        if (txt) return { id: 'sec-' + txt.toLowerCase().replace(/[^a-z0-9]+/g, '-'), title: txt, icon: '' };
       }
       prev = prev.previousElementSibling;
     }
     const parentHeading = node.parentElement?.querySelector('h2, h1');
     if (parentHeading && parentHeading !== node) {
-      const txt = parentHeading.textContent.trim().slice(0, 32);
-      if (txt) return { id: 'sec-' + txt.toLowerCase().replace(/[^a-z0-9]+/g, '-'), title: `Mục: "${txt}"`, icon: '' };
+      const txt = parentHeading.textContent.trim().replace(/\s+/g, ' ').slice(0, 60);
+      if (txt) return { id: 'sec-' + txt.toLowerCase().replace(/[^a-z0-9]+/g, '-'), title: txt, icon: '' };
     }
-    return { id: 'sec-content', title: 'Nội dung chi tiết trang', icon: '' };
+    return { id: 'sec-content', title: 'Nội dung chính', icon: '' };
   }
 
   function detectRole(node, type) {
@@ -688,7 +369,7 @@ export function createSiteTools(ctx) {
         { key: `alt-${index}`, label: 'Mô tả ảnh · ' + index, original: original.alt, node, attr: 'alt', section, role: { tag: 'ALT', roleName: 'Mô tả ảnh (Alt)', badgeClass: 'role-alt' } },
         { key: `pos-${index}`, label: 'Góc nhìn ảnh · ' + index, original: original.position, node, attr: 'objectPosition', section, role: { tag: 'GÓC', roleName: 'Góc nhìn ảnh', badgeClass: 'role-pos' } },
       ];
-      return [{ key: `txt-${type}-${index}`, label: ({ h1: 'Tiêu đề trang', h2: 'Tiêu đề mục', h3: 'Tiêu đề nhỏ', p: 'Đoạn văn', li: 'Nội dung danh sách' }[type] || 'Nội dung') + ' · ' + index, original: original.text, node, section, role }];
+      return [{ key: path.startsWith('/pages/') && type === 'h1' ? 'page-title' : `txt-${type}-${index}`, label: ({ h1: 'Tiêu đề trang', h2: 'Tiêu đề mục', h3: 'Tiêu đề nhỏ', p: 'Đoạn văn', li: 'Nội dung danh sách' }[type] || 'Nội dung') + ' · ' + index, original: original.text, node, section, role }];
     });
   }
   function editableNodes(path) {
@@ -821,10 +502,7 @@ export function createSiteTools(ctx) {
   let activeEditorMode = 'all';
 
   function pageEntries() {
-    const custom = [...new Set([...Object.keys(pages), ...Object.keys(serverDrafts)])]
-      .filter(path => /^\/pages\/[a-z0-9-]+$/.test(path))
-      .map(path => [path, serverDrafts[path]?.fields?.['page-title'] || pages[path]?.fields?.['page-title'] || path]);
-    return [...publicPages, ...custom];
+    return collectPageEntries(publicPages, pages, serverDrafts);
   }
   function customPageHtml(path) {
     const fields = pages[path]?.fields;
@@ -848,6 +526,7 @@ export function createSiteTools(ctx) {
     ['custom', 'Trang tự tạo', 'Các trang chiến dịch của riêng bạn'],
   ];
   function drawStudioNavigation() {
+    drawPackManager();
     const root = q('#studio-page-list');
     if (!root) return;
     const term = (q('#studio-page-search')?.value || '').toLocaleLowerCase('vi');
@@ -869,37 +548,11 @@ export function createSiteTools(ctx) {
     }).join('') || '<p class="studio-sidebar-tip">Không tìm thấy trang phù hợp.</p>';
     const select = q('#cms-page-select');
     if (select) select.innerHTML = entries.map(([path,name]) => `<option value="${esc(path)}" ${path === selected ? 'selected' : ''}>${esc(name)}</option>`).join('');
-    const selectedName = pageName(selected);
+    const selectedName = entries.find(([path]) => path === selected)?.[1] || pageName(selected);
     if (q('#studio-path')) q('#studio-path').textContent = selectedName;
     if (q('#studio-current-page')) q('#studio-current-page').textContent = selectedName;
     const outline = q('#studio-outline');
     if (outline) {
-      let packsHtml = '';
-      {
-        const state = ctx.getState ? ctx.getState() : (typeof window !== 'undefined' ? window.state : {});
-        const packs = (state && state.portfolio) ? state.portfolio : [];
-        const sName = (id) => id === 'personal' ? 'Cá nhân' : id === 'party' ? 'Dự tiệc' : id === 'bridal' ? 'Cô dâu' : 'Chụp ảnh';
-        packsHtml = `
-          <div class="studio-packs-card" style="margin:0 0 14px;padding:12px;background:#fff8f9;border:1px solid #f3d5da;border-radius:6px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-              <b style="font-size:12px;color:var(--wine,#7A1832);letter-spacing:0.04em;">CÁC PACK PHONG CÁCH (${packs.length})</b>
-              <button type="button" class="btn btn-sm btn-dark" data-action="open-add-pack-template" style="font-size:11px;padding:3px 9px;background:var(--wine,#7A1832);border-color:var(--wine,#7A1832);color:#fff;">+ Thêm Pack</button>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:5px;max-height:170px;overflow-y:auto;">
-              ${packs.map(p => `
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 10px;background:#fff;border:1px solid #e8e8e8;border-radius:4px;font-size:12px;">
-                  <span style="font-weight:600;color:#666;font-size:10px;padding:2px 5px;background:#f0f0f0;border-radius:3px;flex-shrink:0;">${sName(p.serviceId)}</span>
-                  <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;" title="${esc(p.title)}">${esc(p.title)}</span>
-                  <div style="display:flex;align-items:center;gap:4px;">
-                    <button type="button" class="btn btn-sm" data-action="edit-pack-item" data-id="${esc(p.id)}" style="padding:2px 8px;font-size:11px;">Sửa</button>
-                    <button type="button" class="btn btn-sm btn-danger" data-action="delete-pack-item" data-id="${esc(p.id)}" style="padding:2px 8px;font-size:11px;background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;border-radius:3px;" title="Xóa pack này khỏi website">🗑 Xóa</button>
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        `;
-      }
       const editable = descriptors.filter(d => !d.key.startsWith('alt-') && !d.key.startsWith('pos-'));
       const groups = new Map();
       editable.forEach(item => {
@@ -907,10 +560,14 @@ export function createSiteTools(ctx) {
         if (!groups.has(title)) groups.set(title, []);
         groups.get(title).push(item);
       });
-      outline.innerHTML = packsHtml + `${selected.startsWith('/pages/') ? '<button class="studio-outline-item studio-page-settings" type="button" data-studio="page-settings"><span>⚙</span><span>Tên trang và bản sao</span></button>' : ''}${[...groups.entries()].map(([title, items]) => `<section class="studio-outline-group"><b>${esc(title)}</b>${items.map(item => `<button type="button" class="studio-outline-item" data-studio="edit-field" data-key="${esc(item.key)}"><span>${item.key.startsWith('img-') ? 'Ảnh' : 'Chữ'}</span><span>${esc(item.label || item.value || 'Nội dung')}</span></button>`).join('')}</section>`).join('') || '<p class="studio-sidebar-tip">Đang đọc nội dung của trang…</p>'}`;
+      const initial = outline.dataset.page !== selected || !outline.querySelector('.studio-outline-group');
+      const expanded = new Set([...outline.querySelectorAll('details[open]')].map(group => group.dataset.outlineGroup));
+      outline.dataset.page = selected;
+      outline.innerHTML = (selected.startsWith('/pages/') ? '<button class="studio-outline-item studio-page-settings" type="button" data-studio="page-settings"><span>Trang</span><span>Tên trang và bản sao</span></button>' : '') + (outlineHtml(groups, { esc, expanded, initial, selectedKey: activeFocusKey }) || '<p class="studio-sidebar-tip">Nội dung đang được tải.</p>');
     }
   }
   async function switchStudioPage(path) {
+    setStudioSidebar('content');
     if (path === selected) return;
     clearTimeout(draftTimer);
     if (savingDraft) { toast('Đang lưu bản nháp, vui lòng thử lại sau giây lát.'); return; }
@@ -921,8 +578,7 @@ export function createSiteTools(ctx) {
   }
   function openPageDialog(settings = false) {
     const container = blockModalContainer();
-    container.innerHTML = `<div class="cms-modal-overlay cms-section-overlay"><div class="cms-section-dialog studio-page-dialog" role="dialog" aria-modal="true" aria-labelledby="studio-page-title"><header><div><span class="cms-dialog-kicker">HOÀN STUDIO</span><h2 id="studio-page-title">${settings ? 'Thiết lập trang' : 'Tạo một trang mới'}</h2><p>${settings ? 'Đổi tên hoặc tạo bản sao để thử một ý tưởng khác.' : 'Bắt đầu từ mẫu. Chỉnh theo phong cách của bạn.'}</p></div><button class="cms-modal-close" type="button" data-action="close-block-modal" aria-label="Đóng">×</button></header><form id="studio-page-form" data-settings="${settings}"><label class="cms-field">Tên trang<input name="title" required maxlength="100" placeholder="Ví dụ: Mùa cưới 2026" value="${settings ? esc(draft['page-title'] || '') : ''}"></label>${settings ? `<p class="studio-url">Đường dẫn: #${esc(selected)}</p>` : '<label class="cms-field">Đường dẫn<span class="studio-url">#/pages/<input name="slug" required maxlength="70" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="mua-cuoi-2026"></span><small>Chữ thường không dấu, số và dấu gạch ngang.</small></label><label class="cms-field">Mẫu khởi đầu<select name="template"><option value="story">Câu chuyện thương hiệu</option><option value="campaign">Giới thiệu dịch vụ / chiến dịch</option><option value="gallery">Bộ sưu tập ảnh</option><option value="blank">Trang trống</option></select></label>'}<p class="studio-sidebar-tip">Trang mới được lưu riêng dưới dạng bản nháp. Sau khi xuất bản, bạn có thể gắn đường dẫn vào nút trên website.</p><p id="studio-page-error" role="alert"></p><footer>${settings ? '<button class="btn" type="button" data-studio="duplicate-page">Nhân bản trang</button>' : ''}<button type="submit" class="btn btn-dark">${settings ? 'Lưu tên trang' : 'Tạo trang & chỉnh sửa →'}</button></footer></form></div></div>`;
-    container.querySelector('input')?.focus();
+    container.innerHTML = pageDialogHtml({ settings, title: draft['page-title'] || '', selected, templates: library.templates(), esc });
   }
   async function createStudioPage(title, slug, template, copiedFields) {
     const path = '/pages/' + slug;
@@ -930,9 +586,7 @@ export function createSiteTools(ctx) {
     if (pageEntries().some(([p]) => p === path)) throw new Error('Đường dẫn đã tồn tại. Hãy chọn tên khác.');
     if (savingDraft) throw new Error('Bản nháp đang được lưu. Vui lòng thử lại sau giây lát.');
     if (dirty && !await saveDraft(true)) throw new Error('Chưa lưu được trang hiện tại. Hãy thử lại.');
-    const types = { story: ['split','testimonial','cta'], campaign: ['image','features','cta'], gallery: ['gallery','cta'], blank: [] };
-    const blocks = (types[template] || []).map(type => createContentBlock(type, newBlockId, 1));
-    const fields = { ...(copiedFields || { blocks: JSON.stringify(blocks) }), 'page-title': title };
+    const fields = createPageFields(title, template, newBlockId, copiedFields, library.templates());
     const result = await request('/api/site-content', { action: 'draft', path, fields, revision: '' }, true);
     serverDrafts[path] = result.draft;
     q('#cms-block-modal-container')?.replaceChildren();
@@ -941,48 +595,38 @@ export function createSiteTools(ctx) {
   }
 
   function cmsWorkspaceHtml() {
-    return `
-      <div class="cms-workspace full-live-mode cms-studio">
-        <form id="cms-page-form" class="cms-live-main-form">
-          <header class="studio-toolbar">
-            <div class="studio-brand"><span>H</span><div><small>QUẢN TRỊ WEBSITE</small><b>Sửa nội dung</b></div></div>
-            <div class="studio-current-page"><small>Đang sửa trang</small><strong id="studio-current-page">${esc(pageName(selected))}</strong></div>
-            <div id="cms-status" class="cms-live-status-pill" role="status">Đang tải nội dung…</div>
-            <div class="studio-toolbar-actions">
-              <details class="studio-more"><summary class="btn">Công cụ</summary><div>
-                <button class="btn" type="button" data-action="undo-cms">↶ Hoàn tác</button>
-                <button class="btn" type="button" data-action="redo-cms">↷ Làm lại</button>
-                <button class="btn" type="button" data-action="save-cms-draft">Lưu nháp ngay</button>
-                <button class="btn" type="button" data-action="compare-cms">Xem nội dung đã sửa</button>
-                <button class="btn" type="button" data-action="open-cms-history">Lịch sử phiên bản</button>
-                <button class="btn" type="button" data-studio="new-page">Tạo trang mới</button>
-                <button class="btn" type="button" data-cms-action="reload">Tải lại nội dung</button>
-              </div></details>
-              <a class="btn studio-preview-button" id="cms-open-page" href="#${esc(selected)}" target="_blank" rel="noopener">Xem trang khách ↗</a>
-              <button class="btn btn-dark btn-save-primary" type="submit">Đăng lên website</button>
-            </div>
-          </header>
-          <div class="studio-layout">
-            <aside class="studio-sidebar" aria-label="Quản lý trang và nội dung">
-              <div class="studio-step-heading"><span>1</span><div><b>Chọn trang cần sửa</b><small>Chọn đúng trang khách sẽ nhìn thấy</small></div></div>
-              <select id="cms-page-select" class="cms-page-select-modern" style="margin-bottom:8px;width:100%;padding:6px 10px;border-radius:4px;border:1px solid var(--line,#ddd);background:#fff;font-size:13px;" aria-label="Chọn nhanh trang">${pageEntries().map(([p,n])=>`<option value="${esc(p)}" ${p===selected?'selected':''}>${esc(n)}</option>`).join('')}</select>
-              <input id="studio-page-search" class="studio-search" type="search" placeholder="Tìm tên trang…" aria-label="Tìm trang">
-              <nav id="studio-page-list" aria-label="Danh sách trang"></nav>
-              <div class="studio-step-heading studio-structure-title"><span>2</span><div><b>Chọn nội dung cần sửa</b><small>Chọn chữ hoặc ảnh trong danh sách</small></div><button type="button" class="btn btn-sm" data-action="open-block-picker" aria-label="Thêm phần nội dung">+ Thêm</button></div>
-              <div id="studio-outline"></div>
-              <div id="cms-block-manager" class="cms-block-manager"></div>
-              <div class="studio-sidebar-tip"><b>Mẹo:</b> Bạn cũng có thể bấm thẳng vào chữ hoặc ảnh trong khung xem trước. Thay đổi được tự động lưu thành bản nháp.</div>
-            </aside>
-            <section class="studio-canvas" aria-label="Trình chỉnh sửa trực quan">
-              <div class="studio-canvas-bar"><span><strong>3</strong><span><b>Bấm vào nội dung để sửa</b><small>Đây là hình ảnh khách sẽ nhìn thấy</small></span></span><button class="btn btn-sm" type="button" data-cms-action="add-media">Đổi ảnh</button></div>
-              <div class="live-preview-viewport" data-device="${previewDevice}"><iframe id="cms-real-preview" title="Xem trước trang website thật" src="${previewUrl(selected)}"></iframe></div>
-              <footer class="studio-canvas-footer"><span id="studio-path">${esc(pageName(selected))}</span><div class="cms-device-switch" role="group" aria-label="Kích thước xem trước">${[['desktop','Máy tính'],['tablet','Máy tính bảng'],['mobile','Điện thoại']].map(([id,label])=>`<button type="button" class="cms-device-btn ${previewDevice === id ? 'active' : ''}" data-cms-device="${id}" aria-pressed="${previewDevice === id}">${label}</button>`).join('')}</div><span>Kiểm tra nội dung rồi bấm “Đăng lên website”</span></footer>
-            </section>
-          </div>
-          <div class="cms-sync-fields-hidden" hidden inert><div id="cms-fields"></div></div>
-        </form>
-      </div>
-      <div id="cms-media-modal-container"></div><div id="cms-text-modal-container"></div><div id="cms-block-modal-container"></div>`;
+    const entries = pageEntries();
+    return workspaceHtml({ selected, selectedName: entries.find(([path]) => path === selected)?.[1] || pageName(selected), entries, previewUrl: previewUrl(selected), previewDevice, view: studioView, sidebarView: studioSidebarView, outlineHidden: studioOutlineHidden, esc });
+  }
+  function setStudioView(view) {
+    if (!['pages', 'packs', 'resources'].includes(view)) return;
+    studioView = view;
+    document.querySelectorAll('[data-studio-panel]').forEach(panel => { panel.hidden = panel.dataset.studioPanel !== view; });
+    document.querySelectorAll('[data-studio-view]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.studioView === view)));
+    if (view === 'packs') drawPackManager();
+  }
+  function setStudioSidebar(view) {
+    studioSidebarView = view;
+    document.querySelectorAll('[data-sidebar-panel]').forEach(panel => { panel.hidden = panel.dataset.sidebarPanel !== view; });
+    document.querySelectorAll('[data-sidebar-view]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.sidebarView === view)));
+  }
+  function setOutlineVisibility(hidden) {
+    studioOutlineHidden = hidden;
+    q('.cms-editor-refined')?.classList.toggle('is-outline-hidden', hidden);
+    if (q('#studio-editor-sidebar')) q('#studio-editor-sidebar').hidden = hidden;
+    q('[data-outline-toggle]')?.setAttribute('aria-expanded', String(!hidden));
+  }
+  function selectOutlineField(key) {
+    activeFocusKey = key;
+    document.querySelectorAll('.studio-outline-item[data-key]').forEach(button => {
+      const selected = button.dataset.key === key;
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-current', String(selected));
+    });
+  }
+  function drawPackManager() {
+    const manager = q('#studio-pack-manager');
+    if (manager) manager.innerHTML = packManagerHtml(ctx.getState().portfolio || [], { category: q('#studio-pack-category')?.value || '', search: q('#studio-pack-search')?.value || '', esc });
   }
 
   function contentPage() {
@@ -1032,6 +676,7 @@ export function createSiteTools(ctx) {
   }
 
   function openTextModal(targetKey) {
+    selectOutlineField(targetKey);
     activeTextKey = targetKey;
     let modalWrap = q('#cms-text-modal-container');
     if (!modalWrap) {
@@ -1079,7 +724,9 @@ export function createSiteTools(ctx) {
   }
 
   let closeImageEditor = null;
-  function openMediaModal(targetKey) {
+  async function openMediaModal(targetKey) {
+    selectOutlineField(targetKey?.replace(/^pos-/, 'img-'));
+    try { await library.load(); } catch (error) { toast(error.message); }
     const key = targetKey?.replace(/^pos-/, 'img-') || descriptors.find(d => d.key?.startsWith('img-'))?.key || 'img-1';
     let item = descriptors.find(d => d.key === key && d.attr === 'src') || descriptors.find(d => d.attr === 'src');
     const liveImage = frame()?.contentDocument?.querySelector(`img[data-cms-key="${item?.key || key}"]`) || frame()?.contentDocument?.querySelector('img[data-cms-key]') || frame()?.contentDocument?.querySelector('img');
@@ -1095,7 +742,7 @@ export function createSiteTools(ctx) {
     closeImageEditor = openImageEditor({
       container: q('#cms-media-modal-container'), liveImage,
       label: item.label, source: draft[key] ?? item.value ?? item.original,
-      catalog: studioMediaCatalog, esc, icon, uploadHeaders: adminHeaders,
+      catalog: library.catalog(), esc, icon, uploadHeaders: adminHeaders,
       onPreview: state => sendPreview(values(state)),
       onApply: state => {
         Object.assign(draft, values(state));
@@ -1373,39 +1020,36 @@ export function createSiteTools(ctx) {
     updateUndoRedoControls();
     if (dirty && q('#cms-status')) q('#cms-status').textContent = 'Đã mở bản nháp · khách chưa thấy';
   }
-  async function saveDraft(silent = false) {
-    if (!dirty) return true;
-    if (savingDraft) return false;
-    savingDraft = true;
-    const path = selected, fields = { ...draft }, baseRevision = revision;
-    if (q('#cms-status')) q('#cms-status').textContent = 'Đang lưu bản nháp…';
-    try {
-      const result = await request('/api/site-content', { action: 'draft', path, fields, revision: baseRevision }, true);
-      serverDrafts[path] = result.draft;
-      drawStudioNavigation();
-      if (q('#cms-status')) q('#cms-status').textContent = 'Bản nháp đã tự lưu · khách chưa thấy';
-      if (!silent) toast('Đã lưu bản nháp. Website công khai chưa thay đổi.');
-      return true;
-    } catch (error) {
-      if (q('#cms-status')) q('#cms-status').textContent = error.message;
-      if (!silent) toast(error.message);
-      return false;
-    } finally { savingDraft = false; }
-  }
+  const saveDraft = (silent = false) => persistence.saveDraft(silent);
   function queueDraftSave() {
     clearTimeout(draftTimer);
     draftTimer = setTimeout(() => void saveDraft(true), 1200);
   }
-  async function savePage() {
+  function openPublishCheck() {
+    const issues = inspectPage({ path: selected, fields: draft, descriptors, shared: library.shared(), services: ctx.getState().services });
+    const saved = JSON.stringify(serverDrafts[selected]?.fields) === JSON.stringify(draft);
+    const container = blockModalContainer();
+    container.innerHTML = `<div class="cms-modal-overlay cms-section-overlay"><div class="cms-section-dialog cms-history-dialog" role="dialog" aria-modal="true" aria-labelledby="cms-preflight-title"><header><h2 id="cms-preflight-title">Kiểm tra trước xuất bản</h2><button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng">×</button></header>${publishReportHtml(issues, esc, { dirty, saved })}<footer><button type="button" class="btn" data-action="save-cms-draft">Lưu nháp</button><button type="button" class="btn btn-dark" data-action="confirm-cms-publish" ${issues.some(issue => issue.severity === 'error') ? 'disabled' : ''}>Đăng lên website</button></footer></div></div>`;
+  }
+  async function savePage(checked = false) {
     if (savingDraft) { toast('Bản nháp đang được lưu. Vui lòng xuất bản sau giây lát.'); return; }
+    const path = selected, fields = { ...draft }, baseRevision = revision;
+    const issues = inspectPage({ path, fields, descriptors, shared: library.shared(), services: ctx.getState().services });
+    if (issues.some(issue => issue.severity === 'error') || (!checked && issues.length)) { openPublishCheck(); return; }
     const button = q('#cms-page-form button[type="submit"]');
     if (button) button.disabled = true;
     try {
       clearTimeout(draftTimer);
-      const result = await request('/api/site-content', { action: 'publish', path: selected, fields: draft, revision }, true);
-      pages[selected] = result.page; revision = result.page.revision; dirty = false;
-      undoStack = []; redoStack = [];
-      delete serverDrafts[selected];
+      const result = await persistence.publish({ path, fields, revision: baseRevision });
+      pages[path] = result.page;
+      if (selected === path) {
+        revision = result.page.revision;
+        dirty = JSON.stringify(draft) !== JSON.stringify(fields);
+        if (dirty) queueDraftSave();
+        else { undoStack = []; redoStack = []; }
+      }
+      delete serverDrafts[path];
+      q('#cms-block-modal-container')?.replaceChildren();
       contentSaved(); drawFields(); drawStudioNavigation(); toast('Đã đăng nội dung mới lên website.');
     } catch (error) { toast(error.message); if (q('#cms-status')) q('#cms-status').textContent = error.message; }
     finally { if (button) button.disabled = false; }
@@ -2514,6 +2158,9 @@ export function createSiteTools(ctx) {
   }
 
   function start() {
+    if (!document.querySelector('link[href="/cms/library.css"]')) {
+      const style = document.createElement('link'); style.rel = 'stylesheet'; style.href = '/cms/library.css'; document.head.append(style);
+    }
     if (!document.querySelector('link[href*="content-studio.css"]')) {
       const style = document.createElement('link'); style.rel = 'stylesheet'; style.href = '/content-studio.css'; document.head.append(style);
     }
@@ -2526,8 +2173,15 @@ export function createSiteTools(ctx) {
     if (!document.querySelector('link[href*="image-editor.css"]')) {
       const imageEditorStyle = document.createElement('link'); imageEditorStyle.rel = 'stylesheet'; imageEditorStyle.href = '/image-editor.css'; document.head.append(imageEditorStyle);
     }
-    loadPages().then(() => {
+    if (!document.querySelector('link[href="/cms/usability.css"]')) {
+      const style = document.createElement('link'); style.rel = 'stylesheet'; style.href = '/cms/usability.css'; document.head.append(style);
+    }
+    const adminInterface = document.querySelector('link[href*="/admin-interface.css"]') || document.createElement('link');
+    adminInterface.rel = 'stylesheet'; adminInterface.href = '/admin-interface.css?v=2'; document.head.append(adminInterface);
+    Promise.all([loadPages(), library.load()]).then(() => {
       if (isAdmin() && (currentPath() === '/admin/content' || currentPath() === '/admin/content-pages')) {
+        if (!q('#cms-page-select')) ctx.render();
+        if (!dirty) void selectPage(selected);
         drawStudioNavigation();
         drawFields();
         drawBlockManager();
@@ -2650,15 +2304,18 @@ export function createSiteTools(ctx) {
       }
       if (isPreview && event.source === window.parent && message?.type === 'hoan:preview') {
         if (message.path !== currentPath()) return;
+        if (message.shared) library.setShared(message.shared);
         const previousBrand = JSON.stringify(ctx.getState().brand);
         const previousSettings = JSON.stringify(ctx.getState().settings);
+        const previousServices = JSON.stringify(ctx.getState().services);
+        if (message.services) ctx.getState().services = message.services;
         previewDraft = message;
         if (message.brand) ctx.getState().brand = message.brand;
         if (message.settings) ctx.getState().settings = message.settings;
         pages[message.path] = { ...(pages[message.path] || {}), fields: message.fields || {} };
         isApplyingPreview = true;
         try {
-          if (previousBrand !== JSON.stringify(ctx.getState().brand) || previousSettings !== JSON.stringify(ctx.getState().settings)) {
+          if (previousBrand !== JSON.stringify(ctx.getState().brand) || previousSettings !== JSON.stringify(ctx.getState().settings) || previousServices !== JSON.stringify(ctx.getState().services)) {
             const scroll = { left: window.scrollX, top: message.scrollY ?? window.scrollY, behavior: 'instant' };
             ctx.render();
             window.scrollTo(scroll);
@@ -2731,6 +2388,7 @@ export function createSiteTools(ctx) {
     });
 
     document.addEventListener('input', event => {
+      if (event.target.id === 'studio-pack-search') drawPackManager();
       if (event.target.id === 'visitor-search-input') {
         visitorSearchQuery = event.target.value;
         const clearBtn = q('[data-action="clear-visitor-search"]');
@@ -2814,6 +2472,15 @@ export function createSiteTools(ctx) {
       if (event.target.closest('form[data-form="content"]')) queueMicrotask(sendPreview);
     });
     document.addEventListener('change', async event => {
+      if (event.target.id === 'studio-pack-category') drawPackManager();
+      if (event.target.matches('[data-cms-source]')) {
+        recordDraftEdit();
+        const blocks = getBlocks(), block = blocks.find(item => item.id === event.target.dataset.cmsSource);
+        if (!block) return;
+        if (event.target.value) block.source = { kind: block.type === 'gallery' ? 'albums' : 'testimonials', id: event.target.value };
+        else delete block.source;
+        writeBlocks(blocks); openBlockEditor(block.id); return;
+      }
       if (event.target.matches('[data-block-setting]')) {
         recordDraftEdit();
         const blocks = getBlocks();
@@ -2927,32 +2594,37 @@ export function createSiteTools(ctx) {
       if (event.target.id === 'modal-pack-file-upload') {
         const file = event.target.files[0];
         if (!file) return;
-        if (file.size > 5 * 1024 * 1024) return toast('Ảnh tối đa 5 MB.');
-        
-        // Instant 0ms visual preview: "thêm ảnh thì thêm ảnh luôn"
+        if (file.size > 5 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return toast('Chọn ảnh JPG, PNG hoặc WebP, tối đa 5 MB.');
         const localUrl = URL.createObjectURL(file);
         const preview = q('#modal-pack-preview-img');
+        const previousSource = preview?.getAttribute('src');
         if (preview) preview.src = localUrl;
         const input = q('#modal-new-pack-img');
-        if (input) input.value = localUrl;
         const filenameSpan = q('#pack-upload-active-filename') || q('#pack-upload-filename');
-        if (filenameSpan) filenameSpan.innerHTML = `<span style="color:#0a7a3b;">✓ Đã tải ảnh: ${esc(file.name)}</span>`;
-        document.querySelectorAll('[data-action="pick-pack-sample"]').forEach(sb => sb.classList.remove('btn-dark'));
-        toast('Đã cập nhật ảnh mới vào khung mẫu!');
-
-        // Background server upload
+        const status = q('#pack-upload-status-pill');
+        const form = q('#cms-new-pack-form');
+        const controls = [...q('.cms-pack-dialog').querySelectorAll('[data-pack-save], [data-action="pick-pack-sample"], #modal-pack-file-upload')];
+        form.dataset.uploading = '1'; controls.forEach(control => { control.disabled = true; });
+        if (status) status.textContent = 'Đang tải ảnh…';
         const data = new FormData();
         data.append('files', file);
         try {
           const response = await fetch('/api/uploads', { method: 'POST', body: data, headers: adminHeaders() });
-          if (response.ok) {
-            const result = await response.json();
-            if (result.paths && result.paths[0]) {
-              if (input) input.value = result.paths[0];
-            }
-          }
+          const result = await response.json();
+          if (!response.ok || !result.paths?.[0]) throw new Error(result.error || 'Không tải được ảnh. Vui lòng thử lại.');
+          if (input) input.value = result.paths[0];
+          if (preview) preview.src = result.paths[0];
+          if (filenameSpan) filenameSpan.textContent = file.name;
+          if (status) status.textContent = 'Đã tải ảnh';
+          form.querySelectorAll('[data-action="pick-pack-sample"]').forEach(button => { button.classList.remove('is-selected'); button.setAttribute('aria-pressed', 'false'); });
         } catch (error) {
-          // Local URL remains functional in draft
+          if (preview) preview.src = previousSource;
+          if (status) status.textContent = error.message;
+          toast(error.message);
+        } finally {
+          delete form.dataset.uploading; controls.forEach(control => { control.disabled = false; });
+          event.target.value = '';
+          URL.revokeObjectURL(localUrl);
         }
         return;
       }
@@ -2974,8 +2646,10 @@ export function createSiteTools(ctx) {
       if (!['cms-page-form', 'visit-share-form', 'visit-identity-form', 'cms-new-pack-form'].includes(form.id)) return;
       event.preventDefault(); event.stopImmediatePropagation();
       if (form.id === 'cms-new-pack-form') {
+        if (form.dataset.uploading) return toast('Đang tải ảnh. Vui lòng đợi ảnh tải xong.');
+        if (form.dataset.step !== 'image') { q('[data-pack-next]')?.click(); return; }
         const title = (q('#modal-new-pack-title')?.value || '').trim();
-        if (!title) return toast('Vui lòng nhập tên phong cách / pack.');
+        if (!title) return toast('Vui lòng nhập tên gói dịch vụ.');
         const serviceId = q('#modal-new-pack-service')?.value || 'personal';
         const tag = (q('#modal-new-pack-tag')?.value || '').trim() || 'Tự nhiên';
         const note = (q('#modal-new-pack-note')?.value || '').trim();
@@ -3057,8 +2731,8 @@ export function createSiteTools(ctx) {
         const container = q('#cms-block-modal-container');
         if (container) container.replaceChildren();
 
-        const sTitle = serviceId === 'personal' ? 'Cá nhân' : serviceId === 'party' ? 'Dự tiệc' : serviceId === 'bridal' ? 'Cô dâu' : 'Chụp ảnh';
-        toast(editId ? `Đã cập nhật Pack "${title}"!` : `Đã thêm thành công Pack "${title}" vào mục ${sTitle}!`);
+        setStudioView('packs');
+        toast(editId ? `Đã cập nhật gói “${title}”.` : `Đã thêm gói “${title}”.`);
         return;
       }
       if (form.id === 'cms-page-form') return savePage();
@@ -3140,6 +2814,20 @@ export function createSiteTools(ctx) {
       finally { button.disabled = false; }
     });
     document.addEventListener('click', async event => {
+      if (event.target.closest('[data-outline-toggle]')) { event.preventDefault(); setOutlineVisibility(!studioOutlineHidden); return; }
+      const viewButton = event.target.closest('[data-studio-view]');
+      if (viewButton) { event.preventDefault(); setStudioView(viewButton.dataset.studioView); return; }
+      const sidebarButton = event.target.closest('[data-sidebar-view]');
+      if (sidebarButton) { event.preventDefault(); setStudioSidebar(sidebarButton.dataset.sidebarView); return; }
+      if (event.target.closest('[data-reset-pack-filters]')) { q('#studio-pack-search').value = ''; q('#studio-pack-category').value = ''; drawPackManager(); return; }
+      const libraryButton = event.target.closest('[data-action="open-content-library"]');
+      if (libraryButton) { event.preventDefault(); await library.open(libraryButton.dataset.tab); return; }
+      const blockMediaButton = event.target.closest('[data-action="block-media-library"]');
+      if (blockMediaButton) { event.preventDefault(); await library.open('media', { blockId: blockMediaButton.dataset.id, ...(blockMediaButton.dataset.index === undefined ? {} : { index: Number(blockMediaButton.dataset.index) }) }); return; }
+      const templateButton = event.target.closest('[data-action="save-block-template"], [data-action="save-page-template"]');
+      if (templateButton) { event.preventDefault(); await library.saveTemplate(templateButton.dataset.action === 'save-page-template' ? 'page' : 'block', templateButton.dataset.id); return; }
+      if (event.target.closest('[data-action="check-cms-publish"]')) { event.preventDefault(); openPublishCheck(); return; }
+      if (event.target.closest('[data-action="confirm-cms-publish"]')) { event.preventDefault(); await savePage(true); return; }
       const studio = event.target.closest('[data-studio]');
       if (studio) {
         event.preventDefault();
@@ -3230,93 +2918,6 @@ export function createSiteTools(ctx) {
         }
         return;
       }
-      const catTab = event.target.closest('.card-category-tab');
-      if (catTab) {
-        event.preventDefault();
-        const cat = catTab.dataset.cat;
-        document.querySelectorAll('.card-category-tab').forEach(b => {
-          const isActive = b.dataset.cat === cat;
-          b.classList.toggle('active', isActive);
-          b.classList.toggle('btn-dark', isActive);
-          b.style.background = '';
-          b.style.color = '';
-        });
-        const select = q('#modal-new-pack-service');
-        if (select) select.value = cat;
-
-        const DEFAULTS = {
-          personal: {
-            img: 'natural.png',
-            title: 'Trang điểm cá nhân',
-            note: 'Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.',
-            price: '450.000đ',
-            duration: '60 phút',
-            tag: 'Tự nhiên'
-          },
-          party: {
-            img: 'evening.png',
-            title: 'Trang điểm dự tiệc',
-            note: 'Sắc nét vừa đủ, bền đẹp dưới nhiều điều kiện ánh sáng.',
-            price: '650.000đ',
-            duration: '90 phút',
-            tag: 'Dự tiệc'
-          },
-          bridal: {
-            img: 'bridal-new.png',
-            title: 'Trang điểm cô dâu',
-            note: 'Thiết kế diện mạo, thử phong cách và đồng hành trong ngày cưới.',
-            price: 'Tư vấn riêng',
-            duration: '150 phút',
-            tag: 'Cô dâu'
-          },
-          photo: {
-            img: 'campaign.png',
-            title: 'Trang điểm chụp ảnh',
-            note: 'Tối ưu lớp nền, đường nét và màu sắc trước ống kính.',
-            price: '850.000đ',
-            duration: '120 phút',
-            tag: 'Chụp ảnh'
-          }
-        };
-
-        const d = DEFAULTS[cat] || DEFAULTS.personal;
-        const inputImg = q('#modal-new-pack-img');
-        if (inputImg) inputImg.value = d.img;
-        const preview = q('#modal-pack-preview-img');
-        if (preview) preview.src = '/assets/' + d.img;
-        const filenameSpan = q('#pack-upload-active-filename') || q('#pack-upload-filename');
-        if (filenameSpan) filenameSpan.textContent = d.img;
-
-        const titleEl = q('#modal-new-pack-title');
-        if (titleEl) { titleEl.value = d.title; }
-        const liveTitle = q('#card-preview-live-title');
-        if (liveTitle) { liveTitle.textContent = d.title; }
-
-        const noteEl = q('#modal-new-pack-note');
-        if (noteEl) { noteEl.value = d.note; }
-        const liveNote = q('#card-preview-live-note');
-        if (liveNote) { liveNote.textContent = d.note; }
-
-        const priceEl = q('#modal-new-pack-price');
-        if (priceEl) { priceEl.value = d.price; }
-        const livePrice = q('#card-preview-live-price');
-        if (livePrice) { livePrice.textContent = d.price; }
-
-        const durEl = q('#modal-new-pack-duration');
-        if (durEl) { durEl.value = d.duration; }
-        const liveDur = q('#card-preview-live-duration');
-        if (liveDur) { liveDur.textContent = d.duration; }
-
-        const tagEl = q('#modal-new-pack-tag');
-        if (tagEl) { tagEl.value = d.tag; }
-        const liveTag = q('#card-preview-live-tag');
-        if (liveTag) { liveTag.textContent = d.tag; }
-
-        document.querySelectorAll('[data-action="pick-pack-sample"]').forEach(sb => {
-          sb.classList.toggle('btn-dark', sb.dataset.img === d.img);
-        });
-        return;
-      }
       const pickPackSampleBtn = event.target.closest('[data-action="pick-pack-sample"]');
       if (pickPackSampleBtn) {
         event.preventDefault();
@@ -3328,8 +2929,10 @@ export function createSiteTools(ctx) {
         const filenameSpan = q('#pack-upload-active-filename') || q('#pack-upload-filename');
         if (filenameSpan) filenameSpan.textContent = imgName;
         document.querySelectorAll('[data-action="pick-pack-sample"]').forEach(sb => {
-          sb.classList.toggle('btn-dark', sb.dataset.img === imgName);
+          sb.classList.toggle('is-selected', sb.dataset.img === imgName);
+          sb.setAttribute('aria-pressed', String(sb.dataset.img === imgName));
         });
+        if (q('#pack-upload-status-pill')) q('#pack-upload-status-pill').textContent = 'Sẵn sàng';
         return;
       }
       const showSectionTemplatesBtn = event.target.closest('[data-action="show-section-templates"]');
@@ -3904,9 +3507,9 @@ export function createSiteTools(ctx) {
   async function syncContent() {
     if (polling) return; polling = true;
     try {
-      const before = JSON.stringify([pages, ctx.getState().brand, ctx.getState().services]);
-      await loadPages(); await ctx.hydrateBackend(true);
-      if (before !== JSON.stringify([pages, ctx.getState().brand, ctx.getState().services]) && !document.activeElement?.closest('form')) ctx.render();
+      const before = JSON.stringify([pages, library.shared(), ctx.getState().brand, ctx.getState().services]);
+      await Promise.all([loadPages(), library.load(), ctx.hydrateBackend(true)]);
+      if (before !== JSON.stringify([pages, library.shared(), ctx.getState().brand, ctx.getState().services]) && !document.activeElement?.closest('form')) ctx.render();
     } catch { /* Retain last working page during temporary network errors. */ }
     finally { polling = false; }
   }
@@ -3914,6 +3517,7 @@ export function createSiteTools(ctx) {
     if (!isPreview || !previewDraft) return;
     if (previewDraft.brand) ctx.getState().brand = previewDraft.brand;
     if (previewDraft.settings) ctx.getState().settings = previewDraft.settings;
+    if (previewDraft.services) ctx.getState().services = previewDraft.services;
   }
   return { start, mount, beforeRender, customPageHtml, contentPage, cmsWorkspaceHtml, visitorsPage, conversion, contentSaved };
 }

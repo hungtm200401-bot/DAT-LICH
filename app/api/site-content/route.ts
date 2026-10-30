@@ -1,3 +1,7 @@
+import { validateBlockData, validImage } from '../../../public/cms/block-schema.js';
+import { inspectPage } from '../../../public/cms/publish.js';
+import { readResource } from '../../../lib/cms-resources';
+import { services } from '../../../db/schema';
 import { eq, like } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { siteContent } from "../../../db/schema";
@@ -6,21 +10,8 @@ import { siteAdmin, privateHeaders } from "../../../lib/site-admin";
 const PUBLIC_PREFIX = "cms:";
 const DRAFT_PREFIX = "cms-draft:";
 const HISTORY_PREFIX = "cms-history:";
-const BLOCK_TYPES = new Set(["text", "image", "split", "gallery", "features", "process", "testimonial", "faq", "cta"]);
-const BLOCK_SETTINGS = {
-  width: new Set(["narrow", "standard", "wide", "full"]),
-  spacing: new Set(["compact", "normal", "airy"]),
-  theme: new Set(["white", "soft", "dark", "wine"]),
-  align: new Set(["left", "center"]),
-  ratio: new Set(["auto", "landscape", "portrait", "square"]),
-  imagePosition: new Set(["left", "right", "top", "background"]),
-  columns: new Set(["2", "3", "4"]),
-};
-
 const validPath = (path: unknown): path is string =>
   typeof path === "string" && /^\/(?:[a-z0-9/-]{0,100})$/.test(path) && !path.startsWith("/admin");
-const validImage = (value: string) => !value || /^(?:\/(?!\/)|https:\/\/)[^\s<>"']+$/.test(value);
-const validLink = (value: string) => !value || /^(?:#\/[a-z0-9/?=&_-]*|https:\/\/[^\s<>"']+|mailto:[^\s<>"']+|tel:[+0-9 ()-]+)$/.test(value);
 
 function readJson<T>(value: string, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
@@ -31,50 +22,7 @@ function pageMap(rows: Array<{ key: string; value: string }>, prefix: string) {
 }
 
 function validateBlocks(value: string) {
-  const blocks = readJson<unknown>(value || "[]", null);
-  if (!Array.isArray(blocks) || blocks.length > 30) return "Danh sách section không hợp lệ.";
-  for (const source of blocks) {
-    if (!source || typeof source !== "object") return "Section không hợp lệ.";
-    const block = source as Record<string, unknown>;
-    if (typeof block.id !== "string" || block.id.length > 100 || !BLOCK_TYPES.has(String(block.type))) return "Loại section không hợp lệ.";
-    for (const field of ["eyebrow", "title", "text", "image", "alt", "caption", "buttonLabel", "buttonHref"]) {
-      if (block[field] !== undefined && (typeof block[field] !== "string" || block[field].length > 6000)) return "Nội dung section quá dài.";
-    }
-    if (!validImage(String(block.image || ""))) return "Ảnh trong section phải dùng đường dẫn nội bộ hoặc HTTPS.";
-    if (!validLink(String(block.buttonHref || ""))) return "Liên kết trong section không hợp lệ.";
-    if (block.slot !== undefined && (!Number.isInteger(block.slot) || Number(block.slot) < 0 || Number(block.slot) > 40)) return "Vị trí section không hợp lệ.";
-    if (block.hidden !== undefined && typeof block.hidden !== "boolean") return "Trạng thái section không hợp lệ.";
-    if (block.settings !== undefined) {
-      if (!block.settings || typeof block.settings !== "object" || Array.isArray(block.settings)) return "Thiết lập section không hợp lệ.";
-      for (const [key, allowed] of Object.entries(BLOCK_SETTINGS)) {
-        const setting = (block.settings as Record<string, unknown>)[key];
-        if (setting !== undefined && (typeof setting !== "string" || !allowed.has(setting))) return "Thiết lập trình bày không hợp lệ.";
-      }
-    }
-    if (block.items !== undefined) {
-      if (!Array.isArray(block.items) || block.items.length > 12) return "Danh sách nội dung trong section không hợp lệ.";
-      for (const item of block.items) {
-        if (!item || typeof item !== "object" || Array.isArray(item)) return "Mục nội dung không hợp lệ.";
-        for (const field of ["title", "text"]) {
-          const content = (item as Record<string, unknown>)[field];
-          if (typeof content !== "string" || content.length > 3000) return "Mục nội dung quá dài.";
-        }
-      }
-    }
-    if (block.images !== undefined) {
-      if (!Array.isArray(block.images) || block.images.length > 8) return "Bộ sưu tập ảnh không hợp lệ.";
-      for (const image of block.images) {
-        if (!image || typeof image !== "object" || Array.isArray(image)) return "Ảnh trong bộ sưu tập không hợp lệ.";
-        const entry = image as Record<string, unknown>;
-        if (typeof entry.src !== "string" || !validImage(entry.src)) return "Đường dẫn ảnh trong bộ sưu tập không hợp lệ.";
-        for (const field of ["alt", "caption"]) {
-          const content = entry[field];
-          if (content !== undefined && (typeof content !== "string" || content.length > 1000)) return "Mô tả ảnh quá dài.";
-        }
-      }
-    }
-  }
-  return "";
+  return validateBlockData(readJson(value || '[]', null));
 }
 
 function validateFields(fields: unknown) {
@@ -134,6 +82,10 @@ export async function POST(request: Request) {
 
     if (action !== "publish") return Response.json({ error: "Thao tác không hợp lệ." }, { status: 400, headers: privateHeaders });
     if ((revision || "") !== (published.revision || "")) return Response.json({ error: "Trang đã được sửa ở cửa sổ khác. Tải lại nội dung trước khi xuất bản." }, { status: 409, headers: privateHeaders });
+    const shared = (await readResource('shared')).value;
+    const serviceRows = await db.select().from(services);
+    const issues = inspectPage({ path, fields, shared, services: serviceRows });
+    if (issues.some(issue => issue.severity === 'error')) return Response.json({ error: issues.filter(issue => issue.severity === 'error').map(issue => issue.message).join(' '), issues }, { status: 400, headers: privateHeaders });
     const page = { fields, revision: crypto.randomUUID(), updatedAt: new Date().toISOString() };
     if (current) {
       const result = await db.update(siteContent).set({ value: JSON.stringify(page), updatedAt: page.updatedAt })
