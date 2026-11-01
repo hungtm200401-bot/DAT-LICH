@@ -41,6 +41,20 @@ export const appointments = sqliteTable("appointments", {
   index("appointments_status_idx").on(table.status),
 ]);
 
+export const paymentTransactions = sqliteTable("payment_transactions", {
+  id: text("id").primaryKey(),
+  appointmentCode: text("appointment_code").notNull().references(() => appointments.code),
+  kind: text("kind").notNull(),
+  amount: integer("amount").notNull(),
+  method: text("method").notNull(),
+  reference: text("reference").notNull().default(""),
+  note: text("note").notNull().default(""),
+  occurredAt: text("occurred_at").notNull(),
+  createdAt: text("created_at").notNull(),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  confirmAppointment: integer("confirm_appointment", { mode: "boolean" }).notNull().default(false),
+}, table => [index("payment_appointment_idx").on(table.appointmentCode, table.occurredAt), index("payment_occurred_idx").on(table.occurredAt)]);
+
 export const customers = sqliteTable("customers", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),

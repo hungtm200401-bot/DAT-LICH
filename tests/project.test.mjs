@@ -69,7 +69,7 @@ test("notifies admins when appointment status changes", async () => {
 
 test("only shows a received deposit after backend payment confirmation", async () => {
   const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  assert.match(source, /Boolean\(apt && apt\.paymentStatus === 'received' && Number\(apt\.deposit\) > 0\)/);
+  assert.match(source, /Boolean\(apt && apt\.paymentStatus === 'received' && Number\(apt\.deposit\) >= deposit\)/);
   assert.match(source, /a\.paymentStatus === 'received' && Number\(a\.deposit\) >= needed/);
   assert.doesNotMatch(source, /const isPaid = apt\s*\? apt\.paymentStatus === 'received'\s*:\s*\(!!state\.booking\.depositPaid/);
 });
@@ -94,14 +94,16 @@ test("routes approved appointments into the work schedule", async () => {
 test("prevents duplicate deposit reports while awaiting review", async () => {
   const api = await readFile(new URL("../app/api/data/route.ts", import.meta.url), "utf8");
   const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  assert.match(api, /a\.paymentStatus==='received' \|\| a\.paymentStatus==='pending_verification'/);
+  assert.match(api, /a\.paymentStatus==='pending_verification'/);
+  assert.match(api, /depositRequired/);
   assert.match(source, /btn-deposit-pending" disabled aria-disabled="true">ĐANG CHỜ ĐỐI SOÁT/);
   assert.doesNotMatch(source, /btn-deposit-pending" data-action="ct-deposit-confirmed-proceed"/);
 });
 
-test("creates a server appointment before reporting a deposit when needed", async () => {
+test("uses a server appointment and verified customer lookup for deposit reports", async () => {
   const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  assert.match(source, /const latest = await api\(\);/);
+  assert.match(source, /await prepareDepositBooking\(true\)/);
+  assert.match(source, /await lookupOwnBooking\(requestedCode, phone\)/);
   assert.match(source, /action: 'createAppointment'/);
   assert.match(source, /action:'reportPayment',code:appointment\.code/);
 });
@@ -110,7 +112,8 @@ test("starts a fresh booking instead of reusing an old appointment", async () =>
   const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
   assert.match(source, /data-action="start-booking"/);
   assert.match(source, /state\.booking = structuredClone\(defaultState\.booking\)/);
-  assert.match(source, /const code = state\.booking\.code \|\| \('LK'/);
+  assert.doesNotMatch(source, /const code = state\.booking\.code \|\| \('LK'/);
+  assert.match(source, /booking\.code = result\.appointment\.code/);
 });
 
 test("configures production CMS uploads and authenticates the image editor", async () => {
@@ -135,20 +138,20 @@ test("runs repeatable local migrations without re-adding refund columns", async 
 });
 
 test("handles GPS permission and address confirmation without inaccurate IP fallback", async () => {
-  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  const api = await readFile(new URL("../app/api/data/route.ts", import.meta.url), "utf8");
+  const source = await readFile(new URL("../public/booking-location.js", import.meta.url), "utf8") + await readFile(new URL("../public/device-location.js", import.meta.url), "utf8");
+  const api = await readFile(new URL("../lib/reverse-geocode.mjs", import.meta.url), "utf8");
   assert.match(source, /Quyền định vị đang bị chặn/);
   assert.match(source, /resetLocationConfirmation/);
-  assert.match(source, /enableHighAccuracy: false/);
+  assert.match(source, /enableHighAccuracy: true/);
   assert.doesNotMatch(source, /api\(\{ action: 'reverseGeocode' \}\)/);
   assert.match(api, /Tọa độ GPS không hợp lệ/);
   assert.doesNotMatch(api, /reverse-geocode-client\?localityLanguage=vi/);
 });
 
-test("uses the complete two-level Vietnam administrative directory with searchable legacy districts", async () => {
+test("uses the complete current Vietnam administrative directory and retains historical data separately", async () => {
   const current = JSON.parse(await readFile(new URL("../public/data/vietnam-administrative-latest.json", import.meta.url), "utf8"));
   const legacy = JSON.parse(await readFile(new URL("../public/data/vietnam-legacy-districts.json", import.meta.url), "utf8"));
-  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const source = await readFile(new URL("../public/booking-location.js", import.meta.url), "utf8");
   const wards = current.flatMap(province => province.wards || []);
   const districts = legacy.flatMap(province => province.districts || []);
 
@@ -158,8 +161,9 @@ test("uses the complete two-level Vietnam administrative directory with searchab
   assert.ok(wards.every(ward => /^(Phường|Xã|Đặc khu)\s/.test(ward.name)));
   assert.match(source, /data-location-search="\$\{field\}"/);
   assert.match(source, /locationSearchKey/);
-  assert.match(source, /Quận \/ huyện cũ \(nếu có\)/);
-  assert.match(source, /Phường \/ xã \/ đặc khu hiện hành/);
+  assert.match(source, /Tỉnh \/ Thành phố/);
+  assert.match(source, /Phường \/ Xã/);
+  assert.doesNotMatch(source, /Quận \/ huyện cũ|slice\(0, 80\)/);
 });
 
 test("preserves form focus and scroll when background data re-renders the same page", async () => {

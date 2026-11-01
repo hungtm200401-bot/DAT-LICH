@@ -67,11 +67,13 @@
       }
       #scroll-progress-bar .scroll-progress-fill {
         height: 100% !important;
-        width: 0% !important;
+        width: 100% !important;
+        transform: scaleX(0);
+        transform-origin: left;
         background: linear-gradient(90deg, #7a1832 0%, #a85560 40%, #c9747c 75%, #d4a373 100%) !important;
         box-shadow: 0 0 12px rgba(122, 24, 50, 0.6), 0 0 4px rgba(212, 163, 115, 0.8) !important;
         border-radius: 0 2px 2px 0 !important;
-        transition: width 0.08s linear !important;
+        transition: transform 0.08s linear !important;
       }
 
       /* === FLOATING BACK TO TOP BUTTON === */
@@ -244,15 +246,18 @@
     return container;
   }
 
+  let elements;
   function getElements() {
+    if (elements?.btn?.isConnected && elements.bar?.isConnected) return elements;
     ensureElements();
-    return {
+    elements = {
       bar: document.getElementById('scroll-progress-bar'),
       fill: document.querySelector('#scroll-progress-bar .scroll-progress-fill'),
       btn: document.getElementById('back-to-top-btn'),
       ring: document.querySelector('#back-to-top-btn .progress-ring-fill'),
       percent: document.querySelector('#back-to-top-btn .btn-percent')
     };
+    return elements;
   }
 
   let scheduled = false;
@@ -288,8 +293,10 @@
 
     // Update Top Progress Bar
     if (fill) {
-      fill.style.width = pct + '%';
-      bar.setAttribute('aria-valuenow', String(pct));
+      if (bar.getAttribute('aria-valuenow') !== String(pct)) {
+        fill.style.transform = `scaleX(${pct / 100})`;
+        bar.setAttribute('aria-valuenow', String(pct));
+      }
       if (scrollTop > 10 && scrollableDistance > 80) {
         bar.classList.add('is-active');
       } else {
@@ -307,12 +314,12 @@
     }
 
     // Update circular progress ring
-    if (ring) {
+    if (ring && percent?.textContent !== `${pct}%`) {
       const offset = CIRCUMFERENCE - (pct / 100) * CIRCUMFERENCE;
       ring.style.strokeDashoffset = offset;
     }
 
-    if (percent) {
+    if (percent && percent.textContent !== `${pct}%`) {
       percent.textContent = `${pct}%`;
     }
   }
@@ -363,10 +370,13 @@
     });
 
     // Content observer for dynamically fetched lists/tables
-    const observer = new MutationObserver(() => {
-      onScroll();
+    const observer = new MutationObserver(records => {
+      // Progress text and fixed-size map tiles cannot change page length.
+      // Observing our own text write used to schedule another frame forever.
+      if (records.some(record => !record.target.closest?.('#hoan-scroll-system, .leaflet-container, .maplibregl-map'))) onScroll();
     });
     observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    if (typeof ResizeObserver === 'function') new ResizeObserver(onScroll).observe(document.body);
 
     // Hotkey: Ctrl+Up or Cmd+Up
     window.addEventListener('keydown', (e) => {

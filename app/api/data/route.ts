@@ -1,6 +1,9 @@
+import { reverseGeocode } from "../../../lib/reverse-geocode.mjs";
+import { cleanBookingLocation } from "../../../public/location-utils.js";
+import { summarizePayments, validateMoneySettings, validatePayment, validateVndAmount } from "../../../public/finance-utils.js";
 import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { appointments, customers, scheduleSlots, services, siteContent } from "../../../db/schema";
+import { appointments, customers, paymentTransactions, scheduleSlots, services, siteContent } from "../../../db/schema";
 import { siteAdmin } from "../../../lib/site-admin";
 
 const initialServices = [
@@ -31,13 +34,23 @@ const initialSettings = {
   timezone: "GMT+7",
   scheduleOpen: true,
   travelFee: "50000",
-  bankName: "MB Bank (Ngân hàng Quân Đội)",
-  bankAccount: "0901234567",
-  bankOwner: "NGUYEN HOAN",
+  bankName: "",
+  bankAccount: "",
+  bankOwner: "",
 };
 
 function messageFor(error: unknown) {
   const message = error instanceof Error ? error.message : "Lỗi không xác định";
+  const ledgerMessages: Record<string,string> = {
+    PAYMENT_REFUND_EXCEEDS_RECEIVED: "Khoản hoàn vượt số tiền thực còn giữ của lịch này.",
+    PAYMENT_EXCEEDS_TOTAL: "Số tiền thu vượt phần còn phải thanh toán.",
+    PAYMENT_CANCELLED: "Lịch đã hủy chỉ có thể ghi nhận hoàn tiền.",
+    PAYMENT_HISTORY_EXISTS: "Lịch có lịch sử thu/hoàn tiền không được xóa. Hãy hủy lịch để giữ chứng từ.",
+    PAYMENT_TOTAL_BELOW_RECEIVED: "Tổng chi phí không được thấp hơn số tiền thực còn giữ.",
+    PAYMENT_IMMUTABLE: "Giao dịch đã ghi sổ không thể sửa hoặc xóa.",
+    payment_bank_reference_unique: "Mã giao dịch ngân hàng đã được ghi nhận. Hãy đối chiếu sổ giao dịch.",
+  };
+  for (const [code,label] of Object.entries(ledgerMessages)) if(message.includes(code)) return label;
   return message.includes("no such table")
     ? "Cơ sở dữ liệu chưa được khởi tạo. Hãy triển khai migration rồi thử lại."
     : message;
@@ -50,6 +63,13 @@ function text(value: unknown, fallback = "") {
 function integer(value: unknown, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : fallback;
+}
+
+function configuredPaymentSettings(value: Record<string,unknown>) {
+  // This exact tuple was shipped as starter content, not a verified bank
+  // account. Keep other saved settings intact and require real configuration.
+  if(text(value.bankAccount)==='0901234567'&&text(value.bankOwner)==='NGUYEN HOAN')return {...value,bankName:'',bankAccount:'',bankOwner:'',bankCode:''};
+  return value;
 }
 
 function parseJson<T>(value: string | undefined, fallback: T): T {
@@ -95,27 +115,23 @@ async function createNotification(db: ReturnType<typeof getDb>, notification: Re
 async function snapshot() {
   await ensureDefaults();
   const db = getDb();
-  const [serviceRows, appointmentRows, customerRows, slotRows, contentRows] = await Promise.all([
+  const [serviceRows, appointmentRows, customerRows, slotRows, contentRows, paymentRows] = await Promise.all([
     db.select().from(services).orderBy(asc(services.sortOrder)),
     db.select().from(appointments).orderBy(desc(appointments.createdAt)),
     db.select().from(customers).orderBy(desc(customers.updatedAt)),
     db.select().from(scheduleSlots).orderBy(asc(scheduleSlots.slotDate), asc(scheduleSlots.slotTime)),
     db.select().from(siteContent),
+    db.select().from(paymentTransactions).orderBy(desc(paymentTransactions.occurredAt),desc(paymentTransactions.createdAt)),
   ]);
   const content = Object.fromEntries(contentRows.map((row) => [row.key, row.value]));
   return {
     services: serviceRows,
-    appointments: appointmentRows,
+    appointments: appointmentRows.map(appointment => ({...appointment,finance:summarizePayments(appointment,paymentRows)})),
+    paymentTransactions: paymentRows,
     customers: customerRows,
     scheduleSlots: slotRows,
     brand: parseJson(content.brand, initialBrand),
-    settings: (() => {
-      const s = parseJson(content.settings, initialSettings);
-      if (!s.bankName) s.bankName = "MB Bank (Ngân hàng Quân Đội)";
-      if (!s.bankAccount) s.bankAccount = "0901234567";
-      if (!s.bankOwner) s.bankOwner = "NGUYEN HOAN";
-      return s;
-    })(),
+    settings: configuredPaymentSettings(parseJson(content.settings, initialSettings)),
     bookingDetails: Object.fromEntries(contentRows.filter(r=>r.key.startsWith("booking:")).map(r=>[r.key.slice(8), parseJson(r.value, {})])),
     requests: contentRows.filter(r=>r.key.startsWith("request:")).map(r=>parseJson(r.value, {})),
     notifications: contentRows.filter(r=>r.key.startsWith("notification:")).map(r=>parseJson(r.value, {})),
@@ -139,7 +155,13 @@ export async function GET(request: Request) {
         return Response.json({ error: "Không tìm thấy lịch phù hợp." }, { status: 404 });
       }
       const [details] = await db.select().from(siteContent).where(eq(siteContent.key, "booking:" + appointment.code)).limit(1);
-      return Response.json({ appointment, bookingDetails: parseJson(details?.value, {}) }, { headers: { "Cache-Control": "no-store" } });
+      const [paymentSettingsRow] = await db.select().from(siteContent).where(eq(siteContent.key,"settings")).limit(1);
+      const paymentSettings = configuredPaymentSettings(parseJson<Record<string,unknown>>(paymentSettingsRow?.value,initialSettings));
+      const bookingDetails = parseJson<Record<string,unknown>>(details?.value,{});
+      const paymentInstructions = {bankName:text(paymentSettings.bankName),bankAccount:text(paymentSettings.bankAccount),bankOwner:text(paymentSettings.bankOwner),bankCode:text(paymentSettings.bankCode),paymentQrUrl:text(paymentSettings.paymentQrUrl),depositRequired:Math.max(0,Math.min(appointment.total,integer(bookingDetails.depositRequired,integer(paymentSettings.deposit,200000))))};
+      const rows = await db.select().from(paymentTransactions).where(eq(paymentTransactions.appointmentCode,appointment.code)).orderBy(desc(paymentTransactions.occurredAt));
+      const {entries: _entries,...finance} = summarizePayments(appointment,rows);
+      return Response.json({ appointment:{...appointment,finance}, paymentHistory:rows.map(({kind,amount,occurredAt})=>({kind,amount,occurredAt})), bookingDetails, paymentInstructions }, { headers: { "Cache-Control": "no-store" } });
     }
 
     const data = await snapshot();
@@ -163,6 +185,7 @@ export async function POST(request: Request) {
   try {
     const payload = await request.json() as Record<string, unknown>;
     const action = text(payload.action);
+    if (action === "reverseGeocode") return reverseGeocode(payload);
     const db = getDb();
     await ensureDefaults();
 
@@ -177,6 +200,7 @@ export async function POST(request: Request) {
       "updateRequest",
       "deleteRequest",
       "markNotificationsRead",
+      "recordPayment",
     ];
     if (adminActions.includes(action)) {
       if (!await siteAdmin(request)) {
@@ -252,7 +276,8 @@ export async function POST(request: Request) {
         entityId: code,
       });
 
-      const details = {skin:text(payload.skin),allergy:text(payload.allergy),allergyNote:text(payload.allergyNote),city:text(payload.city),locationNote:text(payload.locationNote),travelFee,depositRequired:Math.min(total,integer(settings.deposit,200000)),references:Array.isArray(payload.references)?payload.references.filter(x=>typeof x==='string'&&/^\/api\/uploads\?key=/.test(x)).slice(0,3):[]};
+      const location = cleanBookingLocation(payload);
+      const details = {skin:text(payload.skin),allergy:text(payload.allergy),allergyNote:text(payload.allergyNote),city:text(payload.city),locationNote:text(payload.locationNote),...location,travelFee,depositRequired:Math.min(total,integer(settings.deposit,200000)),references:Array.isArray(payload.references)?payload.references.filter(x=>typeof x==='string'&&/^\/api\/uploads\?key=/.test(x)).slice(0,3):[]};
       await db.insert(siteContent).values({key:'booking:'+code,value:JSON.stringify(details)});
       const [existingCustomer] = await db.select().from(customers).where(eq(customers.phone, phone)).limit(1);
       if (existingCustomer) {
@@ -266,6 +291,34 @@ export async function POST(request: Request) {
         await db.insert(customers).values({ name: customer, phone, email: text(payload.email), visits: 1 });
       }
       return Response.json({ appointment: created }, { status: 201 });
+    }
+
+    if (action === "recordPayment") {
+      let values;
+      try { values=validatePayment(payload); } catch(error) { return Response.json({error:messageFor(error)},{status:400}); }
+      const code=text(payload.code);
+      const [current]=await db.select().from(appointments).where(eq(appointments.code,code)).limit(1);
+      if(!current)return Response.json({error:"Không tìm thấy lịch hẹn."},{status:404});
+      const existing=async()=>{const [row]=await db.select().from(paymentTransactions).where(eq(paymentTransactions.idempotencyKey,values.idempotencyKey)).limit(1);return row;};
+      let transaction=await existing();
+      const matches=(row:typeof paymentTransactions.$inferSelect)=>row.appointmentCode===code&&row.kind===values.kind&&row.amount===values.amount&&row.method===values.method&&row.reference===values.reference&&row.occurredAt===values.occurredAt&&row.note===values.note&&row.confirmAppointment===values.confirmAppointment;
+      if(transaction&&!matches(transaction))return Response.json({error:"Mã yêu cầu đã dùng cho giao dịch khác. Hãy mở lại biểu mẫu."},{status:409});
+      let createdTransaction=false;
+      if(!transaction){
+        try{
+          [transaction]=await db.insert(paymentTransactions).values({id:'TX-'+crypto.randomUUID(),appointmentCode:code,...values,createdAt:new Date().toISOString()}).returning();
+          createdTransaction=true;
+        }catch(error){
+          // Concurrent retries share the same idempotency key. The trigger and
+          // unique constraints keep both overdrafts and duplicate writes atomic.
+          transaction=await existing();
+          if(!transaction||!matches(transaction))return Response.json({error:messageFor(error)},{status:409});
+        }
+      }
+      const [appointment]=await db.select().from(appointments).where(eq(appointments.code,code)).limit(1);
+      const rows=await db.select().from(paymentTransactions).where(eq(paymentTransactions.appointmentCode,code));
+      if(createdTransaction){try{await createNotification(db,{type:'payment.recorded',title:values.kind==='refund'?'Đã ghi sổ hoàn tiền':'Đã ghi sổ thu tiền',message:`${code}: ${values.amount.toLocaleString('vi-VN')}đ · ${values.kind==='refund'?'Hoàn tiền':values.kind==='deposit'?'Thu cọc':'Thu tiền còn lại'}`,entityType:'appointment',entityId:code});}catch{/* A notification failure must not turn a committed payment into a failed receipt. */}}
+      return Response.json({transaction,appointment:{...appointment,finance:summarizePayments(appointment,rows)},replayed:!createdTransaction},{status:createdTransaction?201:200,headers:{'Cache-Control':'no-store'}});
     }
 
     if (action === "updateAppointment") {
@@ -283,7 +336,9 @@ export async function POST(request: Request) {
       if (payload.district !== undefined) changes.district = text(payload.district);
       if (payload.note !== undefined) changes.note = text(payload.note);
       if (payload.style !== undefined) changes.style = text(payload.style);
-      if (payload.total !== undefined) changes.total = integer(payload.total);
+      if (payload.total !== undefined) {
+        try{changes.total=validateVndAmount(payload.total,'Tổng chi phí');}catch(error){return Response.json({error:messageFor(error)},{status:400});}
+      }
 
       const [current] = await db.select().from(appointments).where(eq(appointments.code,code)).limit(1);
       if (!current) return Response.json({error:"Không tìm thấy lịch hẹn."},{status:404});
@@ -301,14 +356,15 @@ export async function POST(request: Request) {
         if(rows.some(a=>start<minutes(a.time)+(serviceRows.find(s=>s.id===a.serviceId)?.duration||90)&&end>minutes(a.time)))return Response.json({error:'Thời gian mới trùng một lịch khác.'},{status:409});
       }
       const newTotal = changes.total !== undefined ? integer(changes.total) : current.total;
-      if (payload.deposit !== undefined && integer(payload.deposit)>newTotal) return Response.json({error:"Khoản đã nhận không được vượt tổng chi phí."},{status:400});
-      if (payload.deposit !== undefined) {
-        changes.deposit = integer(payload.deposit);
-        changes.paymentStatus = integer(payload.deposit) > 0 ? "received" : "unverified";
-      }
-      if (payload.paymentStatus !== undefined && ["received", "pending_verification", "unverified"].includes(text(payload.paymentStatus))) {
+      if(newTotal<current.deposit)return Response.json({error:"Tổng chi phí không được thấp hơn số tiền thực còn giữ."},{status:409});
+      if(payload.deposit!==undefined&&Number(payload.deposit)!==current.deposit)return Response.json({error:"Ghi nhận thu hoặc hoàn tiền trong sổ giao dịch; không sửa trực tiếp số tiền đã nhận."},{status:409});
+      if(payload.paymentStatus!==undefined&&text(payload.paymentStatus)!==current.paymentStatus&&current.deposit>0)return Response.json({error:"Trạng thái thanh toán được tính từ sổ giao dịch."},{status:409});
+      if(text(payload.paymentStatus)==='received'&&current.deposit===0)return Response.json({error:"Hãy ghi nhận giao dịch thu tiền trước khi đánh dấu đã nhận."},{status:409});
+      if (current.deposit===0&&payload.paymentStatus !== undefined && ["pending_verification", "unverified"].includes(text(payload.paymentStatus))) {
         changes.paymentStatus = text(payload.paymentStatus);
       }
+      if(text(payload.refundStatus)==='paid'&&current.refundStatus!=='paid')return Response.json({error:"Ghi nhận giao dịch hoàn tiền để cập nhật số tiền và trạng thái đã hoàn."},{status:409});
+      if(payload.refundStatus!==undefined&&(['partial','paid'].includes(current.refundStatus)||text(payload.refundStatus)==='partial')&&text(payload.refundStatus)!==current.refundStatus)return Response.json({error:"Trạng thái tiền đã hoàn được tính từ sổ giao dịch, không thể sửa trực tiếp."},{status:409});
       if (payload.refundStatus !== undefined && ["none", "pending", "approved", "paid", "rejected"].includes(text(payload.refundStatus))) {
         changes.refundStatus = text(payload.refundStatus);
       }
@@ -351,7 +407,12 @@ export async function POST(request: Request) {
       const code=text(payload.code);
       const [a]=await db.select().from(appointments).where(eq(appointments.code,code)).limit(1);
       if(!a||a.status==='cancelled')return Response.json({error:'Lịch không khả dụng.'},{status:404});
-      if(a.paymentStatus==='received' || a.paymentStatus==='pending_verification')return Response.json({appointment:a});
+      if(!await siteAdmin(request)&&a.phone.replace(/\s+/g,'')!==text(payload.phone).replace(/\s+/g,''))return Response.json({error:'Mã lịch hoặc số điện thoại không khớp.'},{status:404});
+      const paymentContent=await db.select().from(siteContent).where(sql`${siteContent.key} IN (${'booking:'+code},'settings')`);
+      const detail=parseJson<Record<string,unknown>>(paymentContent.find(row=>row.key==='booking:'+code)?.value,{});
+      const setting=parseJson<Record<string,unknown>>(paymentContent.find(row=>row.key==='settings')?.value,initialSettings);
+      const needed=Math.max(0,Math.min(a.total,integer(detail.depositRequired,integer(setting.deposit,200000))));
+      if(a.paymentStatus==='pending_verification'||needed===0||a.deposit>=needed)return Response.json({appointment:a});
       const [appointment]=await db.update(appointments).set({paymentStatus:'pending_verification',updatedAt:new Date().toISOString()}).where(eq(appointments.code,code)).returning();
       await createNotification(db, {
         type: "payment.reported",
@@ -472,8 +533,11 @@ export async function POST(request: Request) {
 
     if (action === "saveContent") {
       const key = text(payload.key);
-      if (!["brand", "settings"].includes(key) || typeof payload.value !== "object" || !payload.value) {
+      if (!["brand", "settings"].includes(key) || typeof payload.value !== "object" || !payload.value || Array.isArray(payload.value)) {
         return Response.json({ error: "Nội dung không hợp lệ." }, { status: 400 });
+      }
+      if(key==='settings'){
+        try{validateMoneySettings(payload.value);}catch(error){return Response.json({error:messageFor(error)},{status:400});}
       }
       await db.insert(siteContent).values({ key, value: JSON.stringify(payload.value) })
         .onConflictDoUpdate({ target: siteContent.key, set: { value: JSON.stringify(payload.value), updatedAt: new Date().toISOString() } });
@@ -482,6 +546,7 @@ export async function POST(request: Request) {
 
     if (action === "saveService") {
       const id = text(payload.id) || `service-${Date.now()}`;
+      if(payload.price!==undefined){try{validateVndAmount(payload.price,'Giá dịch vụ');}catch(error){return Response.json({error:messageFor(error)},{status:400});}}
       const values = {
         id,
         name: text(payload.name),
@@ -505,148 +570,6 @@ export async function POST(request: Request) {
       if (linked.length) return Response.json({ error: "Không thể xóa dịch vụ đã có lịch hẹn. Hãy tắt hiển thị dịch vụ." }, { status: 409 });
       await db.delete(services).where(eq(services.id, id));
       return Response.json({ ok: true });
-    }
-
-    if (action === "reverseGeocode") {
-      const lat = Number(payload.lat);
-      const lon = Number(payload.lon);
-      if (payload.lat == null || payload.lon == null || !Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
-        return Response.json({ error: "Tọa độ GPS không hợp lệ." }, { status: 400 });
-      }
-      let rawResult: { street?: string; ward?: string; district?: string; city?: string; fullStr?: string; lat?: number; lon?: number } | null = null;
-
-      try {
-        const nomRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1&accept-language=vi`, {
-          headers: { 'User-Agent': 'HoanMakeupArtist/1.0 (booking@hoanmakeup.vn)' }
-        });
-        if (nomRes.ok) {
-          const data = await nomRes.json() as Record<string, unknown>;
-          const a = (data.address || {}) as Record<string, string>;
-          const houseNumber = a.house_number || '';
-          const road = a.road || a.street || a.amenity || a.building || '';
-          const street = [houseNumber, road].filter(Boolean).join(' ');
-          const ward = a.suburb || a.quarter || a.neighbourhood || '';
-          const district = a.city_district || a.district || a.county || '';
-          const rawCity = a.city || a.state || a.province || 'Hà Nội';
-          rawResult = {
-            street: street || (data.name as string) || '',
-            ward,
-            district,
-            city: rawCity,
-            fullStr: (data.display_name as string) || '',
-            lat,
-            lon
-          };
-        }
-      } catch (e) {
-        console.warn('Backend Nominatim error:', e);
-      }
-
-      if (!rawResult) {
-        try {
-          const bdcUrl = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=vi`;
-          const bdcRes = await fetch(bdcUrl);
-          if (bdcRes.ok) {
-            const data = await bdcRes.json() as Record<string, unknown>;
-            const rawCity = (data.city as string) || (data.principalSubdivision as string) || 'Hà Nội';
-            const district = (data.locality as string) || '';
-            let ward = '';
-            const localityInfo = data.localityInfo as { administrative?: Array<{ description?: string; name?: string }> } | undefined;
-            if (Array.isArray(localityInfo?.administrative)) {
-              const wardObj = localityInfo.administrative.find((x) =>
-                x.description?.includes('phường') || x.description?.includes('xã') || x.name?.startsWith('Phường') || x.name?.startsWith('Xã')
-              );
-              if (wardObj?.name) ward = wardObj.name;
-            }
-            rawResult = {
-              street: '',
-              ward,
-              district,
-              city: rawCity,
-              fullStr: '',
-              lat,
-              lon
-            };
-          }
-        } catch (e) {
-          console.warn('Backend BigDataCloud error:', e);
-        }
-      }
-
-      if (rawResult) {
-        let { street = '', ward = '', district = '', city = '', fullStr = '', lat: rLat, lon: rLon } = rawResult;
-
-        if (!city || city.includes('Hà Nội') || city.includes('Ha Noi') || city.includes('HN')) {
-          city = 'Hà Nội';
-        } else if (city.includes('Hồ Chí Minh') || city.includes('Ho Chi Minh') || city.includes('Sài Gòn')) {
-          city = 'TP. Hồ Chí Minh';
-        } else if (city.includes('Đà Nẵng')) {
-          city = 'Đà Nẵng';
-        } else if (city.includes('Hải Phòng')) {
-          city = 'Hải Phòng';
-        } else if (city.includes('Cần Thơ')) {
-          city = 'Cần Thơ';
-        }
-
-        if (city === 'Hà Nội') {
-          // Specific road and area normalization for Hanoi
-          if (street.includes('Châu Văn Liêm') || fullStr.includes('Châu Văn Liêm') || (rLat && rLat >= 21.000 && rLat <= 21.015 && rLon && rLon >= 105.760 && rLon <= 105.775)) {
-            street = street || 'Đường Châu Văn Liêm';
-            district = 'Nam Từ Liêm';
-            ward = 'Phường Phú Đô';
-          } else if (street.includes('Mễ Trì') || fullStr.includes('Mễ Trì') || fullStr.includes('The Matrix One') || fullStr.includes('Keangnam')) {
-            district = 'Nam Từ Liêm';
-            ward = 'Phường Mễ Trì';
-          } else if (street.includes('Mỹ Đình') || fullStr.includes('Mỹ Đình')) {
-            district = 'Nam Từ Liêm';
-            ward = 'Phường Mỹ Đình 1';
-          } else if (street.includes('Lê Đức Thọ') || street.includes('Hàm Nghi')) {
-            district = 'Nam Từ Liêm';
-            ward = 'Phường Mỹ Đình 2';
-          } else if (street.includes('Định Công') || fullStr.includes('Định Công')) {
-            district = 'Hoàng Mai';
-            ward = 'Phường Định Công';
-          } else if (street.includes('Linh Đàm') || fullStr.includes('Linh Đàm')) {
-            district = 'Hoàng Mai';
-            ward = 'Phường Hoàng Liệt';
-          } else if (street.includes('Cầu Giấy') || street.includes('Duy Tân') || street.includes('Trần Thái Tông')) {
-            district = 'Cầu Giấy';
-            ward = 'Phường Dịch Vọng Hậu';
-          }
-
-          if (district === 'Từ Liêm' || district === 'Phường Từ Liêm' || district.includes('Từ Liêm')) {
-            if (!district.startsWith('Nam') && !district.startsWith('Bắc')) {
-              district = (rLat && rLat >= 21.04) ? 'Bắc Từ Liêm' : 'Nam Từ Liêm';
-            }
-          }
-
-          if (ward === 'Xuân Phong') ward = 'Phường Phú Đô';
-          else if (ward === 'Kẻ Lủ') ward = 'Phường Định Công';
-          else if (ward === 'Khu phố cổ') ward = 'Phường Hàng Bạc';
-
-          if (ward && !ward.startsWith('Phường') && !ward.startsWith('Xã') && !ward.startsWith('Thị trấn')) {
-            ward = 'Phường ' + ward;
-          }
-          if (district.startsWith('Quận ')) {
-            district = district.slice(5);
-          }
-        }
-
-        const districtLabel = district && /^(Quận|Huyện|Thị xã|TP\.|Thành phố)\s+/i.test(district) ? district : district ? `Quận ${district}` : '';
-        const fullParts = [street, ward, districtLabel, city].filter(Boolean);
-        const fullAddress = fullParts.join(', ');
-
-        return Response.json({
-          fullAddress,
-          address: street,
-          city,
-          district,
-          ward,
-          source: 'normalized'
-        });
-      }
-
-      return Response.json({ error: "Không thể nhận diện được địa chỉ từ vị trí này." }, { status: 404 });
     }
 
     return Response.json({ error: "Thao tác không được hỗ trợ." }, { status: 400 });

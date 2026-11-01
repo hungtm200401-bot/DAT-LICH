@@ -5121,10 +5121,10 @@
     ]
   },
   {
-    "name": "Tỉnh Quảng Ninh",
+    "name": "Thành phố Quảng Ninh",
     "code": 22,
     "codename": "quang_ninh",
-    "division_type": "tỉnh",
+    "division_type": "thành phố",
     "phone_code": 203,
     "wards": [
       {
@@ -5508,10 +5508,10 @@
     ]
   },
   {
-    "name": "Tỉnh Bắc Ninh",
+    "name": "Thành phố Bắc Ninh",
     "code": 24,
     "codename": "bac_ninh",
-    "division_type": "tỉnh",
+    "division_type": "thành phố",
     "phone_code": 222,
     "wards": [
       {
@@ -5557,10 +5557,10 @@
         "short_codename": "yen_the"
       },
       {
-        "name": "Xã Bố Hạ",
+        "name": "Phường Bố Hạ",
         "code": 7294,
-        "codename": "xa_bo_ha",
-        "division_type": "xã",
+        "codename": "phuong_bo_ha",
+        "division_type": "phường",
         "short_codename": "bo_ha"
       },
       {
@@ -5599,10 +5599,10 @@
         "short_codename": "ngoc_thien"
       },
       {
-        "name": "Xã Lạng Giang",
+        "name": "Phường Lạng Giang",
         "code": 7375,
-        "codename": "xa_lang_giang",
-        "division_type": "xã",
+        "codename": "phuong_lang_giang",
+        "division_type": "phường",
         "short_codename": "lang_giang"
       },
       {
@@ -5613,10 +5613,10 @@
         "short_codename": "tien_luc"
       },
       {
-        "name": "Xã Kép",
+        "name": "Phường Kép",
         "code": 7399,
-        "codename": "xa_kep",
-        "division_type": "xã",
+        "codename": "phuong_kep",
+        "division_type": "phường",
         "short_codename": "kep"
       },
       {
@@ -5634,10 +5634,10 @@
         "short_codename": "tan_dinh"
       },
       {
-        "name": "Xã Lục Nam",
+        "name": "Phường Lục Nam",
         "code": 7444,
-        "codename": "xa_luc_nam",
-        "division_type": "xã",
+        "codename": "phuong_luc_nam",
+        "division_type": "phường",
         "short_codename": "luc_nam"
       },
       {
@@ -5900,10 +5900,10 @@
         "short_codename": "hoang_van"
       },
       {
-        "name": "Xã Hiệp Hoà",
+        "name": "Phường Hiệp Hoà",
         "code": 7840,
-        "codename": "xa_hiep_hoa",
-        "division_type": "xã",
+        "codename": "phuong_hiep_hoa",
+        "division_type": "phường",
         "short_codename": "hiep_hoa"
       },
       {
@@ -5942,10 +5942,10 @@
         "short_codename": "vo_cuong"
       },
       {
-        "name": "Xã Yên Phong",
+        "name": "Phường Yên Phong",
         "code": 9193,
-        "codename": "xa_yen_phong",
-        "division_type": "xã",
+        "codename": "phuong_yen_phong",
+        "division_type": "phường",
         "short_codename": "yen_phong"
       },
       {
@@ -6005,10 +6005,10 @@
         "short_codename": "nam_son"
       },
       {
-        "name": "Xã Phù Lãng",
+        "name": "Phường Phù Lãng",
         "code": 9292,
-        "codename": "xa_phu_lang",
-        "division_type": "xã",
+        "codename": "phuong_phu_lang",
+        "division_type": "phường",
         "short_codename": "phu_lang"
       },
       {
@@ -6026,17 +6026,17 @@
         "short_codename": "dao_vien"
       },
       {
-        "name": "Xã Chi Lăng",
+        "name": "Phường Chi Lăng",
         "code": 9313,
-        "codename": "xa_chi_lang",
-        "division_type": "xã",
+        "codename": "phuong_chi_lang",
+        "division_type": "phường",
         "short_codename": "chi_lang"
       },
       {
-        "name": "Xã Tiên Du",
+        "name": "Phường Tiên Du",
         "code": 9319,
-        "codename": "xa_tien_du",
-        "division_type": "xã",
+        "codename": "phuong_tien_du",
+        "division_type": "phường",
         "short_codename": "tien_du"
       },
       {
@@ -6145,10 +6145,10 @@
         "short_codename": "ninh_xa"
       },
       {
-        "name": "Xã Gia Bình",
+        "name": "Phường Gia Bình",
         "code": 9454,
-        "codename": "xa_gia_binh",
-        "division_type": "xã",
+        "codename": "phuong_gia_binh",
+        "division_type": "phường",
         "short_codename": "gia_binh"
       },
       {
@@ -6166,10 +6166,10 @@
         "short_codename": "dai_lai"
       },
       {
-        "name": "Xã Nhân Thắng",
+        "name": "Phường Nhân Thắng",
         "code": 9475,
-        "codename": "xa_nhan_thang",
-        "division_type": "xã",
+        "codename": "phuong_nhan_thang",
+        "division_type": "phường",
         "short_codename": "nhan_thang"
       },
       {
@@ -6180,10 +6180,10 @@
         "short_codename": "dong_cuu"
       },
       {
-        "name": "Xã Lương Tài",
+        "name": "Phường Lương Tài",
         "code": 9496,
-        "codename": "xa_luong_tai",
-        "division_type": "xã",
+        "codename": "phuong_luong_tai",
+        "division_type": "phường",
         "short_codename": "luong_tai"
       },
       {
@@ -17503,10 +17503,10 @@
     ]
   },
   {
-    "name": "Tỉnh Đồng Nai",
+    "name": "Thành phố Đồng Nai",
     "code": 75,
     "codename": "dong_nai",
-    "division_type": "tỉnh",
+    "division_type": "thành phố",
     "phone_code": 251,
     "wards": [
       {
@@ -17594,10 +17594,10 @@
         "short_codename": "phu_nghia"
       },
       {
-        "name": "Xã Lộc Ninh",
+        "name": "Phường Lộc Ninh",
         "code": 25270,
-        "codename": "xa_loc_ninh",
-        "division_type": "xã",
+        "codename": "phuong_loc_ninh",
+        "division_type": "phường",
         "short_codename": "loc_ninh"
       },
       {
@@ -17692,17 +17692,17 @@
         "short_codename": "tan_quan"
       },
       {
-        "name": "Xã Tân Khai",
+        "name": "Phường Tân Khai",
         "code": 25357,
-        "codename": "xa_tan_khai",
-        "division_type": "xã",
+        "codename": "phuong_tan_khai",
+        "division_type": "phường",
         "short_codename": "tan_khai"
       },
       {
-        "name": "Xã Đồng Phú",
+        "name": "Phường Đồng Phú",
         "code": 25363,
-        "codename": "xa_dong_phu",
-        "division_type": "xã",
+        "codename": "phuong_dong_phu",
+        "division_type": "phường",
         "short_codename": "dong_phu"
       },
       {
@@ -17867,10 +17867,10 @@
         "short_codename": "hang_gon"
       },
       {
-        "name": "Xã Tân Phú",
+        "name": "Phường Tân Phú",
         "code": 26116,
-        "codename": "xa_tan_phu",
-        "division_type": "xã",
+        "codename": "phuong_tan_phu",
+        "division_type": "phường",
         "short_codename": "tan_phu"
       },
       {
@@ -17902,10 +17902,10 @@
         "short_codename": "phu_lam"
       },
       {
-        "name": "Xã Trị An",
+        "name": "Phường Trị An",
         "code": 26170,
-        "codename": "xa_tri_an",
-        "division_type": "xã",
+        "codename": "phuong_tri_an",
+        "division_type": "phường",
         "short_codename": "tri_an"
       },
       {
@@ -17965,10 +17965,10 @@
         "short_codename": "la_nga"
       },
       {
-        "name": "Xã Trảng Bom",
+        "name": "Phường Trảng Bom",
         "code": 26248,
-        "codename": "xa_trang_bom",
-        "division_type": "xã",
+        "codename": "phuong_trang_bom",
+        "division_type": "phường",
         "short_codename": "trang_bom"
       },
       {
@@ -18014,10 +18014,10 @@
         "short_codename": "gia_kiem"
       },
       {
-        "name": "Xã Dầu Giây",
+        "name": "Phường Dầu Giây",
         "code": 26326,
-        "codename": "xa_dau_giay",
-        "division_type": "xã",
+        "codename": "phuong_dau_giay",
+        "division_type": "phường",
         "short_codename": "dau_giay"
       },
       {
@@ -18056,10 +18056,10 @@
         "short_codename": "song_ray"
       },
       {
-        "name": "Xã Long Thành",
+        "name": "Phường Long Thành",
         "code": 26368,
-        "codename": "xa_long_thanh",
-        "division_type": "xã",
+        "codename": "phuong_long_thanh",
+        "division_type": "phường",
         "short_codename": "long_thanh"
       },
       {
@@ -18112,10 +18112,10 @@
         "short_codename": "phuoc_thai"
       },
       {
-        "name": "Xã Xuân Lộc",
+        "name": "Phường Xuân Lộc",
         "code": 26425,
-        "codename": "xa_xuan_loc",
-        "division_type": "xã",
+        "codename": "phuong_xuan_loc",
+        "division_type": "phường",
         "short_codename": "xuan_loc"
       },
       {
@@ -18154,10 +18154,10 @@
         "short_codename": "xuan_dinh"
       },
       {
-        "name": "Xã Nhơn Trạch",
+        "name": "Phường Nhơn Trạch",
         "code": 26485,
-        "codename": "xa_nhon_trach",
-        "division_type": "xã",
+        "codename": "phuong_nhon_trach",
+        "division_type": "phường",
         "short_codename": "nhon_trach"
       },
       {

@@ -1,0 +1,37 @@
+/* Private appointment location panels, shared by desktop and mobile admin. */
+.admin-location { margin:16px 0; padding:18px 0; border-block:1px solid #e4e1de; color:#262626; min-width:0; }
+.admin-location-heading { display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin-bottom:8px; flex-wrap:wrap; }
+.admin-location .admin-location-heading h3 { margin:0; color:#252525; font:600 15px/1.5 var(--sans,Inter,sans-serif); letter-spacing:0; }
+.admin-location-heading > span { font-size:11px; line-height:1.5; color:#686868; }
+.admin-location-address { margin:0 0 14px; color:#454545; font-size:13px; line-height:1.7; overflow-wrap:anywhere; }
+.admin-location-canvas { height:240px; position:relative; z-index:0; background:#f1f1ed; border:1px solid #e4e1de; border-radius:4px; overflow:hidden; }
+.admin-location-canvas img { max-width:none; }
+.admin-location-canvas .leaflet-control-attribution { font:10px/1.5 var(--sans,Inter,sans-serif); }
+.admin-location-map-status { font-size:11px; line-height:1.6; color:#717171; margin:7px 0 0; }
+.admin-location-facts { margin:14px 0 0; }
+.admin-location-facts > div { display:grid; grid-template-columns:150px minmax(0,1fr); gap:8px; padding:8px 0; border-bottom:1px solid #f0eeeb; font-size:12px; line-height:1.7; }
+.admin-location-facts dt { margin:0; color:#74706e; font-weight:400; }
+.admin-location-facts dd { margin:0; color:#292929; overflow-wrap:anywhere; }
+.admin-location-facts code { font-size:12px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-variant-numeric:tabular-nums; }
+.admin-location-facts dd small { display:block; color:#75716e; font-size:11px; line-height:1.65; margin-top:2px; }
+.admin-location-facts button { margin-left:10px; border:0; padding:0; color:#7a1832; background:none; font:500 11px/1.7 var(--sans,Inter,sans-serif); text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
+.admin-location-note { font-size:12px; line-height:1.75; color:#67625e; margin:12px 0 0; overflow-wrap:anywhere; }
+.admin-location-note b { font-weight:600; color:#3c3936; }
+.admin-location-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+.admin-location-actions .btn { display:inline-flex; align-items:center; justify-content:center; text-decoration:none; min-height:36px; padding:8px 12px; border-radius:4px; font:500 12px/1.5 var(--sans,Inter,sans-serif); letter-spacing:0; }
+.admin-location-table-link { display:inline-block; width:fit-content; padding:3px 0; border:0; background:none; color:#7a1832; font:500 12px/1.5 var(--sans,Inter,sans-serif); cursor:pointer; text-decoration:underline; text-underline-offset:3px; white-space:nowrap; }
+.admin-location-table-link:hover { color:#36101b; }
+.admin-location :is(button,a):focus-visible, .admin-location-table-link:focus-visible { outline:2px solid #7a1832; outline-offset:4px; }
+.admin-location-no-point { color:#827e7a; display:block; font-size:11px; font-weight:400; }
+.admin-customer-locations { min-width:0; }
+.admin-location-booking { margin-top:20px; }
+.admin-location-booking-heading { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; }
+.admin-location-booking-heading > span { color:#706b67; font-variant-numeric:tabular-nums; }
+.admin-location-booking .admin-location { margin-top:8px; }
+@media(max-width:600px) {
+  .admin-location { padding-block:16px; }
+  .admin-location-canvas { height:225px; }
+  .admin-location-facts > div { grid-template-columns:1fr; gap:2px; }
+  .admin-location-actions { display:grid; grid-template-columns:1fr; }
+  .admin-location-actions .btn { min-height:42px; }
+}

@@ -1,0 +1,78 @@
+/* The policy contents use the same left-to-right underline as the main menu. */
+.couture .policy-contents nav {
+  position: relative;
+}
+
+.couture .policy-contents nav > a,
+.couture .policy-contents nav > button {
+  transition: color .25s ease;
+}
+
+.couture .policy-contents nav > a > span,
+.couture .policy-contents nav > button > span,
+.couture .policy-contents nav > [aria-current] > span {
+  position: relative;
+  display: inline-block;
+  text-decoration: none;
+}
+
+.couture .policy-contents nav > a > span::after,
+.couture .policy-contents nav > button > span::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform .25s ease;
+}
+
+.couture .policy-contents nav > [aria-current] > span::after,
+.couture .policy-contents nav > a:focus-visible > span::after,
+.couture .policy-contents nav > button:focus-visible > span::after {
+  transform: scaleX(1);
+}
+
+@media (hover: hover) {
+  .couture .policy-contents nav > a:hover > span::after,
+  .couture .policy-contents nav > button:hover > span::after {
+    transform: scaleX(1);
+  }
+}
+
+.couture .policy-contents nav.policy-nav-enhanced > [aria-current]::before {
+  content: none;
+}
+
+.couture .policy-contents .policy-reading-marker {
+  position: absolute;
+  top: 0;
+  left: -14px;
+  width: 2px;
+  height: 20px;
+  background: #111;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.couture .policy-contents nav.is-ready > .policy-reading-marker {
+  transition: transform .25s ease, height .25s ease, opacity .15s ease;
+}
+
+.couture .policy-contents summary .ui-icon {
+  transition: transform .25s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .couture .policy-contents nav > a,
+  .couture .policy-contents nav > button,
+  .couture .policy-contents nav > a > span::after,
+  .couture .policy-contents nav > button > span::after,
+  .couture .policy-contents nav.is-ready > .policy-reading-marker,
+  .couture .policy-contents summary .ui-icon {
+    transition: none;
+  }
+}

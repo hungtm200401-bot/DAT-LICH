@@ -7,9 +7,9 @@ export default function Home() {
       <div id="app" aria-live="polite" suppressHydrationWarning />
       <div id="toast" className="toast" role="status" aria-live="polite" />
       <div id="modal-root" />
-      <Script src="/scroll-enhancements.js?v=1.2" strategy="afterInteractive" />
-      <Script src="/mobile-admin.js?v=1.2" strategy="afterInteractive" />
-      <Script src="/app.js?v=147.0" strategy="afterInteractive" />
+      <Script src="/scroll-enhancements.js?v=1.4" strategy="afterInteractive" />
+      <Script src="/mobile-admin.js?v=1.4" strategy="afterInteractive" />
+      <Script src="/app.js?v=171.0" strategy="afterInteractive" />
     </>
   );
 }

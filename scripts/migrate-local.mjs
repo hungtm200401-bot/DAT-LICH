@@ -40,3 +40,5 @@ for (const [name, sql] of additions) {
     console.log(`Local migration: added ${name}.`);
   }
 }
+
+execute(['--file', 'drizzle/0003_payment_ledger.sql']);

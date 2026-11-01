@@ -1,0 +1,2 @@
+// The visible tip is exactly (15, 38), matching both map renderers' anchor.
+export const locationPinMarkup = '<svg data-map-pin-shape width="30" height="38" viewBox="0 0 30 38" aria-hidden="true" focusable="false"><path fill="#fff" d="M15 38C11 32 0 23 0 15a15 15 0 1 1 30 0c0 8-11 17-15 23Z"/><path fill="#7a1832" d="M15 34.5C10.8 28.8 2 21.2 2 15a13 13 0 0 1 26 0c0 6.2-8.8 13.8-13 19.5Z"/><circle cx="15" cy="15" r="5" fill="#fff"/></svg>';

@@ -1,6 +1,16 @@
 (() => {
   'use strict';
 
+  if (typeof window !== 'undefined') {
+    if (window.__hoanAppStarted) return;
+    window.__hoanAppStarted = true;
+    // A development script update must not attach a second set of document
+    // handlers to an already running legacy app. The version loader refreshes it.
+    const existing = typeof document.getElementById === 'function' && document.getElementById('app');
+    if (window.state && existing?.childElementCount) { window.__hoanAppBuild = 'legacy'; return; }
+    window.__hoanAppBuild = 'location-auto-fill-1';
+  }
+
   // Guaranteed critical schedule styles injection (bulletproof against browser CSS caching)
   if (typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.head) {
     let sEl = document.getElementById('schv2-critical-styles');
@@ -122,7 +132,7 @@
       time: defaultBookingTime(),
       locationType: 'client',
       address: '',
-      city: 'Thành phố Hà Nội',
+      city: '',
       district: '',
       ward: '',
       detectedAddress: '',
@@ -165,7 +175,7 @@
     backendError: ''
   };
 
-  const loadState = () => {
+  const loadState = ({ freshDocument = false } = {}) => {
     const today = localIso();
     try {
       const saved = JSON.parse(localStorage.getItem('hoanMakeupDraft'));
@@ -188,6 +198,18 @@
       if (!loaded.booking.time) {
         loaded.booking.time = defaultBookingTime(loaded.booking.date);
       }
+      if (freshDocument) {
+        const booking = loaded.booking;
+        if (booking.locationSource === 'administrative-boundaries' || booking.locationAutofill) {
+          const automatic = booking.locationAutofill || { city: booking.city, ward: booking.ward, address: booking.detectedAddress === [booking.address, booking.ward, booking.city].filter(Boolean).join(', ') ? booking.address : undefined };
+          for (const field of ['city', 'ward', 'address']) if (automatic[field] !== undefined && booking[field] === automatic[field]) booking[field] = '';
+          if (!booking.city) booking.provinceCode = null;
+          if (!booking.city || !booking.ward) { booking.ward = ''; booking.wardCode = null; }
+        }
+        Object.assign(booking, { locationCoordinates: null, locationDeviceCoordinates: null, locationCapturedAt: '', locationConfirmedAt: '', locationRegion: null, locationSource: '', locationAutofill: null, locationAddressDetails: null, locationVerificationVersion: 0, detectedAddress: '', isDetectingLocation: false, locationStage: 'idle', locationError: '', locationMessage: '' });
+        // Persist the reset before any async controller/map code can read it.
+        localStorage.setItem('hoanMakeupDraft', JSON.stringify({ ...saved, booking }));
+      }
       return loaded;
     } catch {
       const s = structuredClone(defaultState);
@@ -201,33 +223,39 @@
     state.booking = structuredClone(defaultState.booking);
     state.booking.date = localIso();
     state.booking.time = defaultBookingTime(state.booking.date);
-    saveState();
+    saveState(undefined, { replaceBooking: true });
     route('/booking/service');
   }
   const isPreview = typeof window !== 'undefined' && window.parent !== window && new URLSearchParams(location.search || '').get('cmsPreview') === '1';
-  let state = loadState();
+  let state = loadState({ freshDocument: !isPreview && !(location.hash.slice(1) || '/').startsWith('/admin') });
   let siteTools;
+  let bookingLocation;
+  let financeAdmin;
+  let adminLocations;
+  let policyNavigation;
+  const verifiedBookings = new Map();
+  let depositPreparation = null;
+  let depositPreparationError = '';
 
   if (typeof window !== 'undefined') window.state = state;
-  const saveState = (message) => {
+  const saveState = (message, options = {}) => {
     if (isPreview) return;
     try {
-      localStorage.setItem('hoanMakeupDraft', JSON.stringify({ booking: state.booking, adminWeekOffset: state.adminWeekOffset, portfolio: state.portfolio }));
+      let booking = state.booking;
+      if (!options.replaceBooking && (location.hash.slice(1) || '/').startsWith('/admin')) {
+        try {
+          const latest = JSON.parse(localStorage.getItem('hoanMakeupDraft') || '{}');
+          if (latest.booking && typeof latest.booking === 'object' && !Array.isArray(latest.booking)) booking = latest.booking;
+        } catch { /* Preserve the current draft if local storage is unreadable. */ }
+      }
+      // Native requests belong to this tab. A shared draft must not make another
+      // tab resume, cancel, or overwrite a live browser location request.
+      const savedBooking = { ...booking, isDetectingLocation: false };
+      delete savedBooking.locationStage;
+      localStorage.setItem('hoanMakeupDraft', JSON.stringify({ booking: savedBooking, adminWeekOffset: state.adminWeekOffset, portfolio: state.portfolio }));
       localStorage.setItem('hoanDepositSyncTrigger', String(Date.now()));
     } catch { /* storage may be blocked in iframe / test sandbox */ }
     if (message) toast(message);
-  };
-  const resetLocationConfirmation = () => {
-    state.booking.detectedAddress = '';
-    state.booking.locationError = '';
-    const card = document.querySelector('[data-action="detect-location"]');
-    if (card) {
-      card.classList.remove('is-detected', 'has-error');
-      const tag = card.querySelector('.mockup-gps-tag');
-      if (tag) { tag.className = 'mockup-gps-tag'; tag.textContent = 'NHẬP THỦ CÔNG'; }
-      const description = card.querySelector('.mockup-option-desc');
-      if (description) description.textContent = 'Địa chỉ đã được chỉnh sửa thủ công. Bạn có thể bấm lại để định vị bằng GPS.';
-    }
   };
   const currentToday = localIso();
   if (!isPreview) {
@@ -272,21 +300,87 @@
     } : (token ? { headers: { 'Authorization': 'Bearer ' + token } } : {});
     const response = await fetch('/api/data', options);
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Không thể kết nối dữ liệu');
+    if (!response.ok) { const error = new Error(data.error || 'Không thể kết nối dữ liệu'); error.status = response.status; throw error; }
     if (payload?.action === 'createAppointment') siteTools?.conversion('Đã gửi yêu cầu đặt lịch');
     if (payload?.action === 'createRequest') siteTools?.conversion('Đã gửi yêu cầu liên hệ');
     if (payload?.action === 'saveContent') siteTools?.contentSaved();
     return data;
   }
 
+  function retainVerifiedBooking(result) {
+    const code = result.appointment.code;
+    verifiedBookings.set(code, result);
+    state.appointments = [result.appointment, ...state.appointments.filter(item => item.code !== code)];
+    state.bookingDetails = { ...state.bookingDetails, [code]: result.bookingDetails || {} };
+    state.paymentInstructionsByCode = { ...state.paymentInstructionsByCode, [code]: result.paymentInstructions || {} };
+    state.paymentHistoryByCode = { ...state.paymentHistoryByCode, [code]: result.paymentHistory || [] };
+    return result.appointment;
+  }
+
+  async function lookupOwnBooking(code, phone) {
+    const response = await fetch('/api/data?code=' + encodeURIComponent(code) + '&phone=' + encodeURIComponent(phone), { cache: 'no-store' });
+    const result = await response.json();
+    if (!response.ok || !result.appointment) throw new Error(result.error || 'Chưa tìm thấy lịch hẹn.');
+    return retainVerifiedBooking(result);
+  }
+
+  function bookingFingerprint(booking) {
+    return JSON.stringify(['serviceId','date','time','locationType','travelFee','address','ward','city','name','phone','style','skin','allergy','allergyNote','note','locationNote','locationCoordinates','locationDeviceCoordinates','references'].map(field => booking[field] ?? null));
+  }
+
+  function requireBookingLocation(booking) {
+    const point = booking.locationCoordinates, region = booking.locationRegion;
+    if (point && (!booking.locationConfirmedAt || !region || region.provinceCode !== booking.provinceCode || region.wardCode !== booking.wardCode)) {
+      route('/booking/location');
+      throw new Error('Kiểm tra và xác nhận điểm đến, hoặc chọn dùng địa chỉ nhập tay trước khi tiếp tục.');
+    }
+    if (booking.locationType === 'client' && (!booking.address?.trim() || !booking.city || !booking.ward || !booking.provinceCode || !booking.wardCode)) {
+      route('/booking/location');
+      throw new Error('Vui lòng hoàn tất địa chỉ phục vụ trước khi tạo mã lịch.');
+    }
+  }
+
+  async function prepareDepositBooking(create = false) {
+    if (depositPreparation) return depositPreparation;
+    const booking = state.booking;
+    depositPreparationError = '';
+    depositPreparation = (async () => {
+      if (!booking.name?.trim() || !booking.phone?.trim()) throw new Error('Hoàn tất thông tin khách hàng trước khi tạo mã chuyển khoản.');
+      if (booking.code) {
+        if (booking.serverBookingFingerprint && booking.serverBookingFingerprint !== bookingFingerprint(booking)) {
+          route('/booking/' + booking.code);
+          throw new Error('Lịch đã được gửi trước đó. Vui lòng gửi yêu cầu thay đổi từ trang lịch hẹn.');
+        }
+        try {
+          const appointment = await lookupOwnBooking(booking.code, booking.phone);
+          if (appointment.status === 'cancelled') throw new Error('Lịch này đã hủy. Vui lòng tạo lịch mới.');
+          return appointment;
+        } catch (error) { if (!create || /^HMA-/.test(booking.code)) throw error; }
+      }
+      if (!create) return null;
+      if (!booking.consent) throw new Error('Vui lòng đồng ý chính sách đặt lịch ở phần thông tin khách hàng.');
+      requireBookingLocation(booking);
+      const result = await api({ action: 'createAppointment', ...booking, customer: booking.name, paymentStatus: 'unverified' });
+      booking.code = result.appointment.code;
+      booking.serverBookingFingerprint = bookingFingerprint(booking);
+      bookingCode = booking.code;
+      state.appointments = [result.appointment, ...state.appointments.filter(item => item.code !== booking.code)];
+      try { localStorage.setItem('hoanLastBookingCode', bookingCode); } catch {}
+      saveState();
+      return lookupOwnBooking(booking.code, booking.phone);
+    })().catch(error => { depositPreparationError = error.message; throw error; }).finally(() => { depositPreparation = null; });
+    return depositPreparation;
+  }
+
   async function hydrateBackend(silent = false) {
     try {
       const data = await api();
       state.services = data.services || [];
-      state.bookingDetails = data.bookingDetails || {};
+      state.bookingDetails = data.bookingDetails || Object.fromEntries([...verifiedBookings].map(([code, value]) => [code, value.bookingDetails || {}]));
+      state.paymentTransactions = data.paymentTransactions || [];
       state.requests = data.requests || [];
       state.notifications = data.notifications || [];
-      state.appointments = data.appointments || [];
+      state.appointments = (data.appointments || []).map(appointment => data.bookingDetails ? appointment : ({ ...verifiedBookings.get(appointment.code)?.appointment, ...appointment }));
       state.customers = data.customers || [];
       state.scheduleSlots = data.scheduleSlots || [];
       state.brand = { ...state.brand, ...(data.brand || {}) };
@@ -418,48 +512,24 @@
     ['privacy','Bảo mật thông tin','Thông tin thu thập và mục đích sử dụng.']
   ];
   const helpSections = [
-    [
-      'calendar',
-      'Đặt & quản lý lịch',
-      [
-        ['booking', 'Hướng dẫn đặt lịch', '4 bước hoàn tất yêu cầu trang điểm nhanh chóng và chuẩn xác.'],
-        ['lookup', 'Tra cứu và xem lịch hẹn', 'Kiểm tra trạng thái duyệt, thời gian hẹn và thông tin đối soát.']
-      ],
-      '01 / QUY TRÌNH',
-      'Quy trình tạo yêu cầu, cố định khung giờ độc quyền và kiểm tra hồ sơ trực tuyến.'
-    ],
-    [
-      'card',
-      'Đặt cọc & thanh toán',
-      [
-        ['deposit', 'Cách chuyển khoản đặt cọc', 'Mức cọc tiêu chuẩn 200.000đ và lưu ý nội dung chuyển khoản.'],
-        ['verification', 'Đã chuyển tiền nhưng chưa xác nhận', 'Cách kiểm tra trạng thái và hỗ trợ đối soát nhanh trong 15 phút.'],
-        ['receipt', 'Xem và tải biên nhận', 'Truy xuất và tải biên nhận thanh toán chính thức dạng PDF / hình ảnh.']
-      ],
-      '02 / TÀI CHÍNH',
-      'Phương thức chuyển khoản bảo chứng, đối soát giao dịch và xuất biên nhận điện tử.'
-    ],
-    [
-      'clock',
-      'Đổi, hủy & hoàn cọc',
-      [
-        ['reschedule', 'Gửi yêu cầu đổi lịch', 'Miễn phí đổi ngày giờ trước 24h và bảo lưu cọc trong 60 ngày.'],
-        ['cancel', 'Gửi yêu cầu hủy lịch', 'Quy định hủy buổi hẹn và các điều kiện hoàn cọc minh bạch.'],
-        ['refund', 'Theo dõi hoàn cọc', 'Thời gian hoàn tiền từ 1-2 ngày làm việc về tài khoản chính chủ.']
-      ],
-      '03 / LINH HOẠT',
-      'Chính sách dời ngày hẹn, bảo lưu tiền cọc và quy định hoàn tiền minh bạch.'
-    ],
-    [
-      'star',
-      'Chuẩn bị cho buổi hẹn',
-      [
-        ['preparation', 'Chuẩn bị trước khi trang điểm', 'Chăm sóc da cơ bản, cấp ẩm nhẹ và chuẩn bị không gian thoải mái.'],
-        ['reference', 'Gửi ảnh phong cách tham khảo', 'Cách chọn ảnh tone makeup, màu son và kiểu tóc mong muốn.']
-      ],
-      '04 / CHĂM SÓC',
-      'Bí quyết chuẩn bị làn da hoàn hảo, trang phục và gửi ảnh tham khảo ưng ý.'
-    ]
+    ['calendar', 'Lịch hẹn', [
+      ['booking', 'Đặt lịch như thế nào?', 'Chọn dịch vụ, ngày giờ và gửi thông tin của bạn.'],
+      ['lookup', 'Xem lại lịch đã đặt', 'Tra cứu bằng mã lịch hẹn và số điện thoại.']
+    ]],
+    ['card', 'Thanh toán', [
+      ['deposit', 'Chuyển khoản đặt cọc', 'Thông tin chuyển khoản và cách ghi nội dung.'],
+      ['verification', 'Đã chuyển tiền nhưng lịch chưa xác nhận?', 'Kiểm tra giao dịch và gửi biên lai cho Hoàn.'],
+      ['receipt', 'Xem và lưu biên nhận', 'Biên nhận sau khi khoản cọc được xác nhận.']
+    ]],
+    ['clock', 'Thay đổi lịch', [
+      ['reschedule', 'Tôi muốn đổi ngày hoặc giờ hẹn', 'Gửi yêu cầu đổi lịch và kiểm tra giờ còn trống.'],
+      ['cancel', 'Tôi muốn hủy lịch', 'Cách gửi yêu cầu và xem điều kiện hoàn cọc.'],
+      ['refund', 'Kiểm tra khoản hoàn cọc', 'Theo dõi tiến độ sau khi yêu cầu được duyệt.']
+    ]],
+    ['star', 'Trước buổi hẹn', [
+      ['preparation', 'Cần chuẩn bị gì trước khi trang điểm?', 'Một vài lưu ý về làn da, trang phục và địa điểm.'],
+      ['reference', 'Gửi ảnh makeup và kiểu tóc yêu thích', 'Đính kèm ảnh để trao đổi trước với Hoàn.']
+    ]]
   ];
   const lookItems = [
     ['bridal','Ngày của riêng bạn','bridal-new.png','bridal'],['natural','Nét trong trẻo','natural.png','personal'],
@@ -761,888 +831,348 @@
   }
   const helpArticlesData = {
     booking: {
-      category: 'Đặt & quản lý lịch',
-      badge: 'QUY TRÌNH DỊCH VỤ',
-      summary: 'Quy trình đặt lịch tại HOÀN Makeup Artist được tối ưu để bạn chủ động chọn dịch vụ, ngày giờ và phong cách chỉ trong vài phút.',
+      summary: 'Bạn có thể đặt lịch ngay trên website. Hãy chuẩn bị ngày giờ, địa điểm và một vài ảnh makeup bạn thích nếu có.',
       steps: [
-        {
-          title: 'Lựa chọn phong cách và gói dịch vụ',
-          desc: 'Truy cập danh mục Dịch vụ để tham khảo chi tiết về bảng giá, thời lượng thực hiện và đặc trưng từng phong cách (trang điểm cá nhân, dự tiệc, cô dâu...).',
-          tip: 'Mỗi gói dịch vụ đều được niêm yết rõ ràng chi phí và thời lượng để bạn dễ dàng chủ động thời gian.'
-        },
-        {
-          title: 'Chọn ngày giờ và địa điểm phục vụ',
-          desc: 'Xem lịch trực tiếp trên hệ thống để chọn khung giờ bắt đầu còn trống. Bạn có thể chọn trang điểm tại studio của Hoàn hoặc yêu cầu phục vụ tận nơi tại địa chỉ của bạn.',
-          tip: 'Khung giờ sáng sớm cho tiệc cưới hoặc sự kiện quan trọng nên được đặt trước từ 2-4 tuần để giữ được giờ đẹp nhất.'
-        },
-        {
-          title: 'Cung cấp thông tin và ảnh phong cách mong muốn',
-          desc: 'Điền tên, số điện thoại liên hệ và đính kèm tối đa 3 ảnh tone trang điểm hoặc kiểu tóc bạn yêu thích. Nếu bạn có làn da nhạy cảm, hãy ghi chú lại để Hoàn chuẩn bị mỹ phẩm phù hợp.',
-          tip: 'Ảnh tham khảo giúp Hoàn định hình phong cách và chuẩn bị phụ kiện chu đáo ngay từ trước buổi hẹn.'
-        },
-        {
-          title: 'Nhận mã lịch và chuyển khoản đặt cọc',
-          desc: 'Sau khi gửi yêu cầu, hệ thống sẽ cấp một Mã lịch hẹn riêng. Bạn chuyển khoản tiền cọc để chính thức khóa khung giờ độc quyền trên lịch của Hoàn.',
-          tip: 'Bạn có thể theo dõi tiến độ duyệt lịch bất kỳ lúc nào tại trang Tra cứu lịch.'
-        }
+        { title: 'Chọn dịch vụ', desc: 'Vào trang Dịch vụ để xem giá, thời lượng và chọn gói phù hợp với buổi hẹn.' },
+        { title: 'Chọn ngày giờ và địa điểm', desc: 'Chọn khung giờ còn trống, sau đó chọn trang điểm tại studio hoặc nhập địa chỉ nếu cần Hoàn đến tận nơi.', tip: 'Nếu có giờ chụp ảnh hoặc giờ vào tiệc cố định, bạn nên ghi rõ khi đặt lịch.' },
+        { title: 'Điền thông tin', desc: 'Nhập tên, số điện thoại và ghi chú. Bạn có thể gửi tối đa 3 ảnh tham khảo; nhớ báo trước nếu da dễ kích ứng.' },
+        { title: 'Đặt cọc và giữ lại mã lịch', desc: 'Làm theo hướng dẫn thanh toán trên màn hình. Hoàn sẽ kiểm tra khoản cọc và xác nhận lịch; bạn dùng mã lịch hẹn để xem lại thông tin.' }
       ],
-      cta: {
-        primaryText: 'BẮT ĐẦU ĐẶT LỊCH',
-        primaryHref: '#/booking/service',
-        secondaryText: 'TRA CỨU LỊCH HẸN',
-        secondaryHref: '#/lookup'
-      },
+      cta: { primaryText: 'Đặt lịch', primaryHref: '#/booking/service', secondaryText: 'Tra cứu lịch hẹn', secondaryHref: '#/lookup' },
       related: ['lookup', 'deposit', 'preparation']
     },
     lookup: {
-      category: 'Đặt & quản lý lịch',
-      badge: 'QUẢN LÝ HỒ SƠ',
-      summary: 'Trang tra cứu trực tuyến giúp bạn kiểm tra toàn bộ thông tin lịch hẹn, tình trạng thanh toán và gửi các yêu cầu thay đổi khi cần.',
+      summary: 'Ngày giờ, địa điểm và trạng thái thanh toán đều có trong trang Tra cứu lịch.',
       steps: [
-        {
-          title: 'Mở trang Tra cứu lịch hẹn',
-          desc: 'Nhấn vào mục Tra cứu lịch ở chân trang hoặc thanh điều hướng để mở giao diện quản lý hồ sơ buổi hẹn.',
-          tip: 'Bạn có thể lưu lại liên kết trang tra cứu vào trình duyệt trên điện thoại để kiểm tra nhanh chóng.'
-        },
-        {
-          title: 'Nhập Mã lịch hẹn và Số điện thoại',
-          desc: 'Điền chính xác Mã lịch hẹn (được cung cấp khi gửi yêu cầu) cùng Số điện thoại bạn đã đăng ký để hệ thống bảo mật thông tin.',
-          tip: 'Nếu quên mã lịch hẹn, bạn có thể kiểm tra lại tin nhắn xác nhận hoặc liên hệ trực tiếp để Hoàn hỗ trợ tìm lại.'
-        },
-        {
-          title: 'Kiểm tra trạng thái và quản lý buổi hẹn',
-          desc: 'Tại đây bạn sẽ thấy chi tiết ngày giờ, địa điểm, trạng thái đối soát cọc, biên nhận thanh toán, cũng như các nút yêu cầu Đổi lịch hoặc Hủy lịch linh hoạt.',
-          tip: 'Mọi thay đổi về trạng thái lịch hẹn đều được cập nhật thời gian thực trên trang hồ sơ này.'
-        }
+        { title: 'Mở trang Tra cứu lịch', desc: 'Bạn có thể mở từ liên kết ở cuối website hoặc nút bên dưới.' },
+        { title: 'Nhập mã lịch và số điện thoại', desc: 'Dùng mã được cấp khi đặt lịch và số điện thoại đã đăng ký.', tip: 'Nếu quên mã, hãy xem lại tin nhắn xác nhận hoặc liên hệ Hoàn để tìm lại.' },
+        { title: 'Xem thông tin buổi hẹn', desc: 'Trang chi tiết hiển thị trạng thái lịch, khoản cọc và biên nhận. Bạn cũng có thể gửi yêu cầu đổi hoặc hủy lịch tại đây.' }
       ],
-      cta: {
-        primaryText: 'ĐẾN TRANG TRA CỨU',
-        primaryHref: '#/lookup',
-        secondaryText: 'LIÊN HỆ HOÀN',
-        secondaryHref: '#/contact'
-      },
+      cta: { primaryText: 'Tra cứu lịch', primaryHref: '#/lookup', secondaryText: 'Liên hệ Hoàn', secondaryHref: '#/contact' },
       related: ['booking', 'receipt', 'reschedule']
     },
     deposit: {
-      category: 'Đặt cọc & thanh toán',
-      badge: 'TÀI CHÍNH & ĐẶT CỌC',
-      summary: 'Khoản tiền cọc là cam kết giữ khung giờ độc quyền cho bạn và được trừ 100% vào tổng chi phí dịch vụ khi hoàn thành buổi hẹn.',
+      summary: 'Tiền cọc dùng để giữ lịch và được trừ vào tổng chi phí buổi trang điểm.',
       steps: [
-        {
-          title: 'Kiểm tra thông tin chi phí và mức cọc',
-          desc: 'Mức cọc tiêu chuẩn là 200.000đ/lượt (hoặc theo thỏa thuận với lịch trình đặc biệt). Kiểm tra tổng chi phí và thông tin tài khoản thụ hưởng của Hoàn.',
-          tip: 'Khoản cọc được trừ trực tiếp vào hóa đơn cuối cùng, bạn chỉ cần thanh toán phần còn lại sau khi hoàn tất makeup.'
-        },
-        {
-          title: 'Chuyển khoản với nội dung là Mã lịch hẹn',
-          desc: 'Thực hiện chuyển khoản qua ngân hàng điện tử và bắt buộc ghi nội dung chuyển khoản là Mã lịch hẹn của bạn để hệ thống tự động nhận diện.',
-          tip: 'Ví dụ cú pháp nội dung chuyển khoản: HM-123456. Tránh ghi nội dung khác khiến việc đối soát kéo dài.'
-        },
-        {
-          title: 'Hệ thống xác nhận và cấp biên nhận',
-          desc: 'Sau khi nhận biến động số dư, Hoàn sẽ đối soát và chuyển trạng thái lịch hẹn sang "Đã xác nhận", đồng thời xuất biên nhận đặt cọc điện tử.',
-          tip: 'Thời gian đối soát thường diễn ra trong vòng 15-30 phút sau khi bạn thực hiện giao dịch.'
-        }
+        { title: 'Xem số tiền và tài khoản nhận', desc: 'Kiểm tra mức cọc trên lịch hẹn và thông tin ngân hàng của Hoàn trước khi chuyển. Mức cọc cho lịch đặc biệt có thể được thỏa thuận riêng.' },
+        { title: 'Ghi mã lịch vào nội dung chuyển khoản', desc: 'Chuyển đúng số tiền và ghi mã lịch hẹn trong nội dung để Hoàn đối chiếu giao dịch.' },
+        { title: 'Kiểm tra trạng thái', desc: 'Sau khi nhận và kiểm tra tiền, Hoàn cập nhật xác nhận cùng biên nhận trên trang tra cứu.', tip: 'Việc kiểm tra thường mất 15–30 phút. Nếu chưa thấy cập nhật, bạn có thể gửi biên lai cho Hoàn.' }
       ],
-      cta: {
-        primaryText: 'TRA CỨU TRẠNG THÁI CỌC',
-        primaryHref: '#/lookup',
-        secondaryText: 'XEM CHÍNH SÁCH CỌC',
-        secondaryHref: '#/policies/deposit'
-      },
+      cta: { primaryText: 'Kiểm tra khoản cọc', primaryHref: '#/lookup', secondaryText: 'Chính sách đặt cọc', secondaryHref: '#/policies/deposit' },
       related: ['verification', 'receipt', 'cancel']
     },
     verification: {
-      category: 'Đặt cọc & thanh toán',
-      badge: 'ĐỐI SOÁT GIAO DỊCH',
-      summary: 'Hướng dẫn xử lý khi bạn đã thực hiện chuyển khoản nhưng trạng thái lịch hẹn chưa chuyển sang Đã xác nhận.',
+      summary: 'Nếu đã chuyển khoản mà lịch vẫn chờ xác nhận, bạn hãy kiểm tra lại giao dịch theo các bước dưới đây.',
       steps: [
-        {
-          title: 'Kiểm tra lại thời gian và ngân hàng chuyển',
-          desc: 'Vào các khung giờ cao điểm hoặc ngày cuối tuần, giao dịch chuyển khoản liên ngân hàng có thể mất thêm từ 5 đến 15 phút để đến tài khoản của Hoàn.',
-          tip: 'Bạn không cần chuyển lại tiền lần hai khi đang trong quá trình chờ ngân hàng xử lý.'
-        },
-        {
-          title: 'Kiểm tra nội dung chuyển khoản',
-          desc: 'Xác nhận lại xem trên ứng dụng ngân hàng, nội dung chuyển tiền đã bao gồm đúng Mã lịch hẹn hay chưa.',
-          tip: 'Nếu quên ghi mã lịch, đừng lo lắng, Hoàn sẽ đối soát thủ công theo số tiền và thời gian chuyển của bạn.'
-        },
-        {
-          title: 'Gửi ảnh biên lai giao dịch cho Hoàn',
-          desc: 'Bạn có thể chụp màn hình giao dịch thành công và gửi trực tiếp qua trang Tra cứu lịch hoặc nhắn tin qua Zalo/Facebook để Hoàn duyệt ngay lập tức.',
-          tip: 'Hoàn sẽ kiểm tra và xác nhận thủ công ngay khi nhận được ảnh biên lai của bạn.'
-        }
+        { title: 'Kiểm tra giao dịch ngân hàng', desc: 'Xem giao dịch đã thành công chưa, số tiền và tài khoản nhận có đúng không. Giao dịch liên ngân hàng đôi khi cập nhật chậm.', tip: 'Bạn không cần chuyển thêm lần nữa trong lúc chờ kiểm tra.' },
+        { title: 'Xem nội dung chuyển khoản', desc: 'Kiểm tra giao dịch có ghi mã lịch hẹn không. Nếu thiếu mã, hãy gửi lại thông tin để Hoàn đối chiếu.' },
+        { title: 'Gửi biên lai cho Hoàn', desc: 'Gửi ảnh giao dịch thành công kèm mã lịch qua trang Tra cứu lịch hoặc kênh liên hệ của Hoàn.' }
       ],
-      cta: {
-        primaryText: 'MỞ TRANG TRA CỨU',
-        primaryHref: '#/lookup',
-        secondaryText: 'NHẮN TIN VỚI HOÀN',
-        secondaryHref: '#/contact'
-      },
+      cta: { primaryText: 'Tra cứu lịch', primaryHref: '#/lookup', secondaryText: 'Liên hệ Hoàn', secondaryHref: '#/contact' },
       related: ['deposit', 'receipt', 'lookup']
     },
     receipt: {
-      category: 'Đặt cọc & thanh toán',
-      badge: 'BIÊN NHẬN ĐIỆN TỬ',
-      summary: 'Cách xem, kiểm tra và tải về biên nhận thanh toán đặt cọc chính thức dạng tài liệu điện tử.',
+      summary: 'Biên nhận xuất hiện trong lịch hẹn sau khi Hoàn xác nhận đã nhận tiền cọc.',
       steps: [
-        {
-          title: 'Mở chi tiết lịch hẹn tại trang Tra cứu',
-          desc: 'Đăng nhập vào trang Tra cứu lịch bằng Mã lịch hẹn và số điện thoại đã đăng ký dịch vụ.',
-          tip: 'Biên nhận chỉ xuất hiện khi khoản cọc đã được Hoàn xác minh thành công.'
-        },
-        {
-          title: 'Bấm chọn nút Xem biên nhận',
-          desc: 'Trong khung thông tin thanh toán, nhấn nút "Xem biên nhận" để mở giao diện hóa đơn dịch vụ chi tiết.',
-          tip: 'Biên nhận hiển thị đầy đủ thông tin dịch vụ, ngày giờ, số tiền cọc đã nhận và số tiền còn lại cần thanh toán.'
-        },
-        {
-          title: 'Lưu hoặc in biên nhận ra PDF / hình ảnh',
-          desc: 'Sử dụng nút "In / Lưu PDF" tích hợp sẵn trên trình duyệt để lưu lại hồ sơ trên điện thoại hoặc máy tính của bạn.',
-          tip: 'Biên nhận điện tử có giá trị xác nhận dịch vụ chính thức từ HOÀN Makeup Artist.'
-        }
+        { title: 'Tra cứu lịch hẹn', desc: 'Nhập mã lịch và số điện thoại đã dùng để đặt lịch.' },
+        { title: 'Mở biên nhận', desc: 'Chọn “Xem biên nhận” ở phần thanh toán để xem dịch vụ, ngày giờ, tiền cọc đã nhận và số tiền còn lại.' },
+        { title: 'Lưu một bản', desc: 'Chọn “In / Lưu PDF” rồi lưu vào điện thoại hoặc máy tính để tiện xem lại.' }
       ],
-      cta: {
-        primaryText: 'TRA CỨU VÀ TẢI BIÊN NHẬN',
-        primaryHref: '#/lookup',
-        secondaryText: 'ĐẶT LỊCH DỊCH VỤ',
-        secondaryHref: '#/booking/service'
-      },
+      cta: { primaryText: 'Xem biên nhận', primaryHref: '#/lookup', secondaryText: 'Đặt lịch mới', secondaryHref: '#/booking/service' },
       related: ['deposit', 'verification', 'lookup']
     },
     reschedule: {
-      category: 'Đổi, hủy & hoàn cọc',
-      badge: 'THAY ĐỔI LỊCH HẸN',
-      summary: 'Chính sách hỗ trợ đổi ngày giờ hẹn miễn phí, linh hoạt và bảo lưu khoản cọc trọn vẹn cho khách hàng.',
+      summary: 'Nếu kế hoạch thay đổi, bạn hãy báo cho Hoàn sớm để cùng chọn lại giờ hẹn.',
       steps: [
-        {
-          title: 'Thời hạn thông báo dời ngày giờ hẹn',
-          desc: 'Hoàn hỗ trợ dời ngày hẹn hoàn toàn miễn phí nếu bạn thông báo trước giờ hẹn từ 24 giờ trở lên.',
-          tip: 'Khoản cọc đã đóng sẽ được bảo lưu trọn vẹn 100% sang lịch mới trong vòng 60 ngày.'
-        },
-        {
-          title: 'Gửi yêu cầu đổi lịch trực tuyến',
-          desc: 'Vào trang Tra cứu lịch, chọn "Yêu cầu đổi lịch", chọn ngày giờ mong muốn mới và ghi rõ lý do cần điều chỉnh.',
-          tip: 'Khung giờ hiện tại vẫn được giữ an toàn cho bạn trong khi Hoàn kiểm tra và sắp xếp khung giờ mới.'
-        },
-        {
-          title: 'Hoàn xác nhận lịch trình mới',
-          desc: 'Hoàn sẽ kiểm tra thời gian biểu và nhắn tin xác nhận ngày giờ mới trong vòng 2-4 giờ làm việc.',
-          tip: 'Nếu khung giờ mới bị trùng, Hoàn sẽ chủ động liên hệ để đề xuất các khung giờ kế cận phù hợp nhất cho bạn.'
-        }
+        { title: 'Kiểm tra thời hạn đổi lịch', desc: 'Bạn được đổi lịch miễn phí khi báo trước ít nhất 24 giờ. Tiền cọc được chuyển sang lịch mới trong vòng 60 ngày kể từ ngày hẹn ban đầu.' },
+        { title: 'Gửi ngày giờ bạn muốn đổi', desc: 'Vào Tra cứu lịch, chọn “Yêu cầu đổi lịch” và ghi ngày giờ mới cùng lý do thay đổi.' },
+        { title: 'Chờ Hoàn xác nhận', desc: 'Hoàn kiểm tra giờ còn trống và phản hồi trong 2–4 giờ làm việc. Nếu giờ bạn chọn đã có khách, Hoàn sẽ trao đổi để tìm giờ khác.' }
       ],
-      cta: {
-        primaryText: 'GỬI YÊU CẦU ĐỔI LỊCH',
-        primaryHref: '#/lookup',
-        secondaryText: 'XEM CHÍNH SÁCH ĐỔI LỊCH',
-        secondaryHref: '#/policies/change'
-      },
-      related: ['cancel', 'deposit', 'lookup']
+      cta: { primaryText: 'Mở lịch hẹn', primaryHref: '#/lookup', secondaryText: 'Chính sách đổi lịch', secondaryHref: '#/policies/change' },
+      related: ['cancel', 'refund', 'lookup']
     },
     cancel: {
-      category: 'Đổi, hủy & hoàn cọc',
-      badge: 'HỦY LỊCH & CHÍNH SÁCH',
-      summary: 'Quy trình và quy định hủy buổi hẹn trang điểm khi phát sinh lịch trình đột xuất hoặc trường hợp bất khả kháng.',
+      summary: 'Bạn có thể gửi yêu cầu hủy từ trang lịch hẹn. Điều kiện hoàn cọc phụ thuộc vào thời điểm báo hủy.',
       steps: [
-        {
-          title: 'Mở hồ sơ lịch hẹn cần hủy',
-          desc: 'Truy cập trang Tra cứu lịch, mở lịch hẹn của bạn và chọn nút "Yêu cầu hủy / hoàn cọc".',
-          tip: 'Hãy xem lại chính sách hủy trước để nắm rõ quyền lợi hoàn cọc tương ứng với thời gian thông báo.'
-        },
-        {
-          title: 'Ghi rõ lý do và gửi yêu cầu',
-          desc: 'Điền thông tin lý do hủy buổi hẹn để Hoàn nắm bắt tình hình và có hướng hỗ trợ tốt nhất cho bạn.',
-          tip: 'Trong các tình huống đặc biệt (sức khỏe, sự cố gia đình...), Hoàn luôn ưu tiên sự thấu hiểu và hỗ trợ tối đa.'
-        },
-        {
-          title: 'Theo dõi phản hồi và đối soát',
-          desc: 'Hệ thống ghi nhận yêu cầu hủy và Hoàn sẽ phản hồi về việc giải quyết khoản cọc trên trang hồ sơ trong vòng 24 giờ.',
-          tip: 'Bạn có thể lựa chọn hoàn tiền hoặc bảo lưu khoản cọc vô thời hạn cho các sự kiện tiếp theo.'
-        }
+        { title: 'Xem điều kiện hoàn cọc', desc: 'Báo trước ít nhất 48 giờ: hoàn 100% cọc hoặc bảo lưu trong 60 ngày. Báo trong vòng 48 giờ: cọc không được hoàn lại.' },
+        { title: 'Gửi yêu cầu hủy', desc: 'Tra cứu lịch hẹn, chọn “Yêu cầu hủy lịch” và điền lý do. Với trường hợp đột xuất, bạn có thể trao đổi thêm trực tiếp với Hoàn.' },
+        { title: 'Theo dõi phản hồi', desc: 'Kiểm tra trạng thái yêu cầu trên lịch hẹn. Nếu được duyệt hoàn cọc, cung cấp tài khoản ngân hàng để Hoàn chuyển lại.' }
       ],
-      cta: {
-        primaryText: 'TRA CỨU HỒ SƠ LỊCH HẸN',
-        primaryHref: '#/lookup',
-        secondaryText: 'XEM CHÍNH SÁCH HỦY & HOÀN',
-        secondaryHref: '#/policies/cancel'
-      },
-      related: ['refund', 'reschedule', 'deposit']
+      cta: { primaryText: 'Mở lịch hẹn', primaryHref: '#/lookup', secondaryText: 'Chính sách hủy lịch', secondaryHref: '#/policies/cancel' },
+      related: ['reschedule', 'refund', 'lookup']
     },
     refund: {
-      category: 'Đổi, hủy & hoàn cọc',
-      badge: 'THEO DÕI HOÀN TIỀN',
-      summary: 'Cách theo dõi tiến độ xử lý và thời gian nhận lại tiền hoàn cọc vào tài khoản ngân hàng của bạn.',
+      summary: 'Khoản hoàn cọc được chuyển sau khi Hoàn xác nhận yêu cầu hủy và điều kiện hoàn tiền.',
       steps: [
-        {
-          title: 'Điều kiện xét duyệt hoàn cọc',
-          desc: 'Yêu cầu hủy được gửi trước 48 giờ sẽ được hoàn 100% tiền cọc (hoặc bảo lưu theo nguyện vọng của bạn).',
-          tip: 'Trong vòng 48 giờ trước buổi hẹn, khoản cọc thường không hoàn lại do khung giờ đã khóa độc quyền.'
-        },
-        {
-          title: 'Cung cấp số tài khoản nhận hoàn tiền',
-          desc: 'Xác nhận thông tin số tài khoản ngân hàng chính chủ của bạn trong tin nhắn phản hồi với Hoàn.',
-          tip: 'Vui lòng cung cấp đúng tên chủ tài khoản trùng với tên người đã đặt lịch để đảm bảo bảo mật.'
-        },
-        {
-          title: 'Thời gian hoàn tiền về tài khoản',
-          desc: 'Sau khi yêu cầu được duyệt, Hoàn sẽ chuyển khoản hoàn cọc trong vòng 1 đến 2 ngày làm việc và cập nhật mã giao dịch.',
-          tip: 'Bạn luôn có thể tra cứu trạng thái giải quyết hoàn cọc bất cứ lúc nào trên trang hồ sơ trực tuyến.'
-        }
+        { title: 'Kiểm tra yêu cầu đã được duyệt', desc: 'Mở lịch hẹn để xem phản hồi và trạng thái hoàn cọc.' },
+        { title: 'Xác nhận tài khoản nhận tiền', desc: 'Gửi đúng tên ngân hàng, số tài khoản và tên chủ tài khoản cho Hoàn.' },
+        { title: 'Kiểm tra tiền về', desc: 'Thời gian hoàn cọc là 1–2 ngày làm việc sau khi được xác nhận. Nếu quá thời gian này, liên hệ Hoàn kèm mã lịch để kiểm tra.' }
       ],
-      cta: {
-        primaryText: 'TRA CỨU TRẠNG THÁI HOÀN CỌC',
-        primaryHref: '#/lookup',
-        secondaryText: 'TRAO ĐỔI VỚI HOÀN',
-        secondaryHref: '#/contact'
-      },
-      related: ['cancel', 'deposit', 'reschedule']
+      cta: { primaryText: 'Kiểm tra hoàn cọc', primaryHref: '#/lookup', secondaryText: 'Liên hệ Hoàn', secondaryHref: '#/contact' },
+      related: ['cancel', 'reschedule', 'deposit']
     },
     preparation: {
-      category: 'Chuẩn bị cho buổi hẹn',
-      badge: 'CHĂM SÓC TRƯỚC MAKEUP',
-      summary: 'Những bí quyết chuẩn bị làn da và không gian để buổi trang điểm diễn ra thuận lợi, lớp nền mướt mịn và bền màu suốt cả ngày.',
+      summary: 'Bạn chỉ cần chuẩn bị một chút trước buổi hẹn. Nếu có điều gì cần lưu ý riêng, hãy nhắn Hoàn trước nhé.',
       steps: [
-        {
-          title: 'Làm sạch và dưỡng ẩm cơ bản',
-          desc: 'Trước giờ hẹn khoảng 30-45 phút, hãy rửa mặt sạch bằng sữa rửa mặt dịu nhẹ, thoa toner và một lớp kem dưỡng ẩm mỏng nhẹ.',
-          tip: 'Không nên tẩy da chết hóa học nồng độ cao hoặc dùng sản phẩm peel da trong vòng 48 giờ trước ngày trang điểm.'
-        },
-        {
-          title: 'Chuẩn bị trang phục phù hợp',
-          desc: 'Nên mặc áo có cúc cài phía trước hoặc áo có khóa kéo để khi thay trang phục tiệc cưới/dạ tiệc không làm chạm vào tóc và lớp trang điểm.',
-          tip: 'Nếu trang điểm cô dâu, hãy chuẩn bị sẵn váy cưới và phụ kiện trang sức tại không gian makeup.'
-        },
-        {
-          title: 'Chuẩn bị không gian và ánh sáng',
-          desc: 'Nếu trang điểm tại nhà hoặc khách sạn, vui lòng chọn vị trí gần cửa sổ có ánh sáng tự nhiên tốt và có ổ cắm điện cho máy làm tóc.',
-          tip: 'Một chiếc ghế tựa thoải mái và nhiệt độ phòng mát mẻ sẽ giúp bạn thư giãn tối đa trong suốt thời gian makeup.'
-        },
-        {
-          title: 'Thông báo về tình trạng da đặc biệt',
-          desc: 'Báo trước cho Hoàn nếu da bạn đang bị dị ứng, có vết thương hở hoặc cực kỳ nhạy cảm với bất kỳ thành phần mỹ phẩm nào.',
-          tip: 'Hoàn sẽ lựa chọn dòng mỹ phẩm lành tính, chuyên biệt để bảo vệ làn da của bạn tối ưu.'
-        }
+        { title: 'Làm sạch và dưỡng ẩm nhẹ', desc: 'Giữ các bước chăm sóc da quen thuộc. Báo trước cho Hoàn nếu da nhạy cảm hoặc bạn có dị ứng với mỹ phẩm.' },
+        { title: 'Chuẩn bị trang phục và ảnh tham khảo', desc: 'Chọn trang phục dễ thay để tránh chạm vào lớp makeup và tóc. Bạn có thể gửi ảnh trang phục, makeup hoặc kiểu tóc muốn làm.' },
+        { title: 'Sắp xếp thời gian và không gian', desc: 'Có mặt đúng giờ. Nếu trang điểm tận nơi, chuẩn bị chỗ ngồi, ánh sáng và ổ cắm điện cho dụng cụ làm tóc.' }
       ],
-      cta: {
-        primaryText: 'ĐẶT LỊCH DỊCH VỤ',
-        primaryHref: '#/booking/service',
-        secondaryText: 'GỬI ẢNH THAM KHẢO',
-        secondaryHref: '#/support/reference'
-      },
-      related: ['reference', 'booking', 'deposit']
+      cta: { primaryText: 'Xem lịch hẹn', primaryHref: '#/lookup', secondaryText: 'Cách gửi ảnh tham khảo', secondaryHref: '#/support/reference' },
+      related: ['reference', 'booking', 'lookup']
     },
     reference: {
-      category: 'Chuẩn bị cho buổi hẹn',
-      badge: 'ĐỊNH HÌNH PHONG CÁCH',
-      summary: 'Hướng dẫn lựa chọn và gửi ảnh tone makeup, kiểu tóc tham khảo để nghệ nhân thấu hiểu trọn vẹn mong muốn của bạn.',
+      summary: 'Một vài ảnh tham khảo giúp Hoàn hiểu rõ hơn về kiểu makeup và tóc bạn muốn.',
       steps: [
-        {
-          title: 'Tìm nguồn cảm hứng phong cách',
-          desc: 'Bạn có thể tham khảo mục Bộ sưu tập trên website của Hoàn, hoặc tìm ảnh trên Pinterest, Instagram theo tone mong muốn (tự nhiên, nàng thơ, quyến rũ, cô dâu cổ điển...).',
-          tip: 'Ưu tiên chọn những bức ảnh có góc mặt và tone da gần tương đồng với bạn để lớp makeup lên chân thực nhất.'
-        },
-        {
-          title: 'Đính kèm ảnh khi gửi yêu cầu đặt lịch',
-          desc: 'Tại bước điền thông tin đặt lịch, bạn có thể tải lên tối đa 3 bức ảnh phong cách trang điểm hoặc kiểu tóc yêu thích.',
-          tip: 'Nếu bạn có trang phục đã chọn cho buổi tiệc, hãy gửi kèm ảnh trang phục để Hoàn tư vấn tone màu ăn ý nhất.'
-        },
-        {
-          title: 'Ghi chú chi tiết điểm bạn tâm đắc',
-          desc: 'Ghi chú thêm điểm bạn thích nhất trong ảnh tham khảo: dáng lông mày nhẹ nhàng, màu mắt cam đào, son bóng căng mọng hay kiểu búi tóc thanh lịch.',
-          tip: 'Hoàn sẽ kết hợp hài hòa giữa mong muốn của bạn và đường nét khuôn mặt tự nhiên để tạo nên diện mạo rạng rỡ nhất.'
-        }
+        { title: 'Chọn ảnh rõ mặt và màu sắc', desc: 'Chọn ảnh thấy rõ lớp nền, mắt và màu son. Ảnh ít chỉnh sửa sẽ dễ trao đổi hơn.' },
+        { title: 'Nói rõ điểm bạn thích', desc: 'Bạn thích màu mắt, độ bóng của nền hay kiểu tóc trong ảnh? Hãy ghi thêm cùng dịp sử dụng và trang phục dự định mặc.' },
+        { title: 'Gửi ảnh khi đặt lịch', desc: 'Đính kèm tối đa 3 ảnh trong bước thông tin. Nếu đã đặt lịch, bạn có thể gửi qua kênh liên hệ của Hoàn, kèm mã lịch hẹn.' }
       ],
-      cta: {
-        primaryText: 'XEM BỘ SƯU TẬP ẢNH',
-        primaryHref: '#/gallery',
-        secondaryText: 'BẮT ĐẦU ĐẶT LỊCH',
-        secondaryHref: '#/booking/service'
-      },
+      cta: { primaryText: 'Đặt lịch', primaryHref: '#/booking/service', secondaryText: 'Gửi ảnh cho Hoàn', secondaryHref: '#/contact' },
       related: ['preparation', 'booking', 'lookup']
     }
   };
 
-  function pageSupport() {
-    const q = new URLSearchParams(location.hash.split('?')[1]).get('q') || '';
-    const qClean = q.trim().toLocaleLowerCase('vi');
-    
-    let totalMatches = 0;
-    const filteredSections = helpSections.map(([ic, title, links, code, desc]) => {
-      const matchedLinks = links.filter(([id, t, teaser]) => {
-        if (!qClean) return true;
-        const textToMatch = `${t} ${teaser || ''} ${title}`.toLocaleLowerCase('vi');
-        return textToMatch.includes(qClean);
+  const supportSearchKey = value => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLocaleLowerCase('vi').trim();
+  const supportAnswerText = id => helpArticlesData[id].steps.map(step => [step.desc, step.tip].filter(Boolean).join(' ')).join(' ');
+
+  function updateSupportUrl(desk) {
+    const params = new URLSearchParams();
+    const query = desk.querySelector('[data-support-search]').value.trim();
+    if (query) params.set('q', query);
+    if (desk.dataset.category) params.set('category', desk.dataset.category);
+    if (desk.dataset.selected) params.set('article', desk.dataset.selected);
+    window.history.replaceState(null, '', '#/support' + (params.size ? '?' + params.toString() : ''));
+  }
+
+  function refreshSupportPicker(desk) {
+    const picker = desk.querySelector('[data-support-picker]');
+    const groups = [];
+    desk.querySelectorAll('[data-support-group]').forEach(group => {
+      const choices = [...group.querySelectorAll('[data-support-choice]')].filter(choice => !choice.hidden);
+      if (!choices.length) return;
+      const optionGroup = document.createElement('optgroup');
+      optionGroup.label = group.dataset.label;
+      choices.forEach(choice => {
+        const option = document.createElement('option');
+        option.value = choice.dataset.supportChoice;
+        option.textContent = choice.dataset.label;
+        optionGroup.append(option);
       });
-      totalMatches += matchedLinks.length;
-      return [ic, title, matchedLinks, code, desc];
+      groups.push(optionGroup);
     });
+    picker.replaceChildren(...groups);
+    picker.closest('.support-mobile-choice').hidden = groups.length === 0;
+    if (desk.dataset.selected) picker.value = desk.dataset.selected;
+  }
 
-    return ctPage(
-      'support',
-      '',
-      `<div class="ct-support-concierge-wrap">
-        <!-- Hero Header -->
-        <header class="ct-support-hero">
-          <span class="support-overline">HOÀN MAKEUP ARTIST · CLIENT CARE & CONCIERGE</span>
-          <h1 class="support-hero-title">Chỉ dẫn & Hỗ trợ dịch vụ</h1>
-          <p class="support-hero-lead">Không gian hướng dẫn chu đáo từ quy trình đặt lịch, đối soát tiền cọc an tâm đến chuẩn bị trọn vẹn cho buổi hẹn.</p>
+  function selectSupportAnswer(id, { scroll = false, focus = false, writeUrl = true } = {}) {
+    const desk = document.querySelector('.support-desk');
+    if (!desk) return;
+    const choices = [...desk.querySelectorAll('[data-support-choice]')];
+    const choice = choices.find(button => button.dataset.supportChoice === id && !button.hidden);
+    const selected = choice ? id : '';
+    desk.dataset.selected = selected;
+    choices.forEach(button => {
+      const active = button.dataset.supportChoice === selected;
+      button.classList.toggle('is-active', active);
+      if (active) button.setAttribute('aria-current', 'true');
+      else button.removeAttribute('aria-current');
+    });
+    let panel = null;
+    desk.querySelectorAll('[data-support-panel]').forEach(answer => {
+      answer.hidden = answer.dataset.supportPanel !== selected;
+      if (!answer.hidden) panel = answer;
+    });
+    desk.querySelector('.support-empty').hidden = Boolean(selected);
+    const picker = desk.querySelector('[data-support-picker]');
+    if (selected) picker.value = selected;
+    desk.querySelector('[data-support-announcement]').textContent = choice ? `Đang xem: ${choice.dataset.label}` : 'Không có hướng dẫn phù hợp.';
+    if (writeUrl) updateSupportUrl(desk);
+    if (panel && focus) panel.focus({ preventScroll: true });
+    if (panel && scroll) panel.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
+  }
 
-          <!-- Couture Search Bar -->
-          <form class="ct-support-search-bar" data-form="support-search">
-            <span class="search-bar-icon" aria-hidden="true">${icon('search')}</span>
-            <input name="q" aria-label="Tìm kiếm hướng dẫn" placeholder="Tìm hướng dẫn nhanh (đặt lịch, đối soát cọc, đổi ngày, chuẩn bị da...)" value="${esc(q)}">
-            <button class="btn btn-dark" type="submit">TÌM KIẾM</button>
-          </form>
+  function filterSupportAnswers(value) {
+    const desk = document.querySelector('.support-desk');
+    if (!desk) return;
+    const query = supportSearchKey(value);
+    const category = desk.dataset.category || '';
+    const matches = [];
+    desk.querySelectorAll('[data-support-group]').forEach(group => {
+      let visible = 0;
+      group.querySelectorAll('[data-support-choice]').forEach(choice => {
+        const match = (!category || group.dataset.supportGroup === category) && (!query || choice.dataset.search.includes(query));
+        choice.hidden = !match;
+        if (match) { visible++; matches.push(choice); }
+      });
+      group.hidden = !visible;
+    });
+    const results = desk.querySelector('.support-results');
+    results.hidden = !query && !category;
+    results.querySelector('p').textContent = `${matches.length} hướng dẫn${value.trim() ? ` cho “${value.trim()}”` : ''}`;
+    const best = query ? matches.find(choice => supportSearchKey(choice.dataset.label).includes(query)) || matches[0] : matches[0];
+    selectSupportAnswer(best?.dataset.supportChoice || '', { writeUrl: false });
+    refreshSupportPicker(desk);
+    updateSupportUrl(desk);
+  }
 
+  document.addEventListener('change', event => {
+    if (event.target.matches?.('[data-support-picker]')) selectSupportAnswer(event.target.value, { scroll: true, focus: true });
+  });
 
-
-          ${qClean ? `
-            <div class="support-search-status">
-              <span>Tìm thấy <b>${totalMatches}</b> hướng dẫn phù hợp với "<em>${esc(q)}</em>"</span>
-              <a class="clear-search-link" href="#/support">✕ Xóa tìm kiếm (Xem tất cả)</a>
-            </div>
-          ` : ''}
-        </header>
-
-        <!-- 4 Dossier Pillars (Grid 2 cột) -->
-        <section class="ct-support-pillars-grid" aria-label="Các chuyên đề hỗ trợ">
-          ${filteredSections.map(([ic, title, links, code, desc]) => {
-            if (qClean && links.length === 0) return '';
-            return `
-              <article class="ct-dossier-card">
-                <header class="dossier-header">
-                  <div class="dossier-top-meta">
-                    <span class="dossier-tag">${esc(code || 'CHUYÊN ĐỀ')}</span>
-                    <span class="dossier-icon-wrap" aria-hidden="true">${icon(ic)}</span>
-                  </div>
-                  <h2 class="dossier-title">${esc(title)}</h2>
-                  <p class="dossier-desc">${esc(desc || '')}</p>
-                </header>
-
-                <div class="dossier-articles-list">
-                  ${links.map(([id, t, teaser]) => `
-                    <a class="dossier-article-link" href="#/support/${id}">
-                      <div class="article-link-info">
-                        <strong class="article-link-title">${esc(t)}</strong>
-                        <span class="article-link-desc">${esc(teaser || '')}</span>
-                      </div>
-                      <span class="article-link-arrow" aria-hidden="true">→</span>
-                    </a>
-                  `).join('')}
-                </div>
-              </article>
-            `;
-          }).join('')}
-        </section>
-
-        ${qClean && totalMatches === 0 ? `
-          <div class="support-empty-state">
-            <p>Không tìm thấy hướng dẫn nào phù hợp với từ khóa "<b>${esc(q)}</b>".</p>
-            <div class="empty-state-actions">
-              <a class="btn btn-dark" href="#/support">Xem tất cả hướng dẫn</a>
-              <a class="btn" href="#/contact">Nhắn tin trực tiếp với Hoàn</a>
-            </div>
-          </div>
-        ` : ''}
-
-        <!-- Bottom Assistance Note -->
-        <div class="ct-protocol-bottom-note">
-          <div class="note-copy">
-            <span class="hero-overline" style="margin-bottom:8px;">HỖ TRỢ TRỰC TIẾP TỪ STUDIO</span>
-            <h3>Bạn có câu hỏi riêng hoặc cần hỗ trợ đặc biệt?</h3>
-            <p>Nếu bạn có trường hợp khẩn cấp, cần sắp xếp khung giờ sáng sớm hoặc cần tư vấn phong cách theo trang phục riêng, đừng ngần ngại trao đổi trực tiếp cùng Hoàn.</p>
-          </div>
-          <div class="note-btns">
-            <a class="btn btn-dark" href="#/contact">NHẮN TIN VỚI HOÀN</a>
-            <a class="btn" href="#/lookup">TRA CỨU LỊCH HẸN</a>
-          </div>
+  function pageSupport() {
+    const params = new URLSearchParams(location.hash.split('?')[1]);
+    const q = params.get('q') || '';
+    const query = supportSearchKey(q);
+    const requestedCategory = params.get('category') || '';
+    const category = helpSections.some(([id]) => id === requestedCategory) ? requestedCategory : '';
+    const b = state.brand || {};
+    const zalo = String(b.zaloPhone || b.phone || '').replace(/\D/g, '');
+    const contactHref = zalo ? `https://zalo.me/${zalo}` : '#/contact';
+    const contactLabel = zalo ? 'Nhắn Hoàn qua Zalo' : 'Liên hệ Hoàn';
+    const leads = {
+      booking: 'Chọn dịch vụ, ngày giờ và địa điểm, điền thông tin rồi đặt cọc. Lịch được giữ sau khi Hoàn xác nhận.',
+      lookup: 'Dùng mã lịch hẹn và số điện thoại đã đăng ký để xem lịch, tiền cọc hoặc gửi yêu cầu đổi, hủy.',
+      deposit: `Mức cọc tiêu chuẩn là ${money(Number(state.settings?.deposit || 200000))}, được trừ vào tổng chi phí. Ghi mã lịch hẹn khi chuyển khoản.`,
+      verification: 'Kiểm tra giao dịch và gửi biên lai kèm mã lịch. Không chuyển thêm tiền trong lúc chờ kiểm tra.',
+      receipt: 'Biên nhận có sau khi khoản cọc được xác nhận. Bạn có thể xem và lưu PDF trong lịch hẹn.',
+      reschedule: 'Báo trước ít nhất 24 giờ để đổi miễn phí. Tiền cọc được chuyển sang lịch mới trong vòng 60 ngày.',
+      cancel: 'Báo trước ít nhất 48 giờ: hoàn 100% cọc hoặc bảo lưu trong 60 ngày. Hủy trong vòng 48 giờ: không hoàn cọc.',
+      refund: 'Hoàn cọc trong 1–2 ngày làm việc sau khi yêu cầu được duyệt và xác nhận thông tin tài khoản.',
+      preparation: 'Làm sạch, dưỡng ẩm nhẹ và báo trước nếu da nhạy cảm. Chuẩn bị trang phục dễ thay; có chỗ ngồi và ổ cắm nếu trang điểm tận nơi.',
+      reference: 'Gửi tối đa 3 ảnh makeup, kiểu tóc hoặc trang phục khi đặt lịch, kèm ghi chú về những điểm bạn thích.'
+    };
+    const entries = helpSections.flatMap(([key, title, links]) => links.map(([id, label]) => ({ id, label, key, category: title, lead: leads[id], search: supportSearchKey(`${title} ${label} ${leads[id]} ${supportAnswerText(id)}`) })));
+    const matches = entries.filter(entry => (!category || entry.key === category) && (!query || entry.search.includes(query)));
+    const selected = matches.find(entry => entry.id === params.get('article')) || (query ? matches.find(entry => supportSearchKey(entry.label).includes(query)) : null) || matches[0];
+    const navigation = helpSections.map(([key, title]) => {
+      const links = entries.filter(entry => entry.key === key);
+      const visible = links.some(entry => matches.includes(entry));
+      return `<section class="support-nav-group" data-support-group="${key}" data-label="${esc(title)}" ${visible ? '' : 'hidden'}><h2>${esc(title)}</h2>${links.map(entry => `<button type="button" class="support-choice ${selected?.id === entry.id ? 'is-active' : ''}" data-action="support-select" data-id="${entry.id}" data-support-choice="${entry.id}" data-label="${esc(entry.label)}" data-search="${esc(entry.search)}" aria-controls="support-panel-${entry.id}" ${selected?.id === entry.id ? 'aria-current="true"' : ''} ${matches.includes(entry) ? '' : 'hidden'}><span>${esc(entry.label)}</span>${icon('arrow')}</button>`).join('')}</section>`;
+    }).join('');
+    const options = helpSections.map(([key, title]) => {
+      const links = matches.filter(entry => entry.key === key);
+      return links.length ? `<optgroup label="${esc(title)}">${links.map(entry => `<option value="${entry.id}" ${selected?.id === entry.id ? 'selected' : ''}>${esc(entry.label)}</option>`).join('')}</optgroup>` : '';
+    }).join('');
+    const answers = entries.map(entry => {
+      const article = helpArticlesData[entry.id];
+      const primaryHref = entry.id === 'reference' ? contactHref : article.cta.primaryHref;
+      const primaryLabel = entry.id === 'reference' ? 'Gửi ảnh cho Hoàn' : article.cta.primaryText;
+      const secondary = !article.cta.secondaryHref.startsWith('#/support/') && article.cta.secondaryHref !== primaryHref;
+      return `<article class="support-reader" id="support-panel-${entry.id}" data-support-panel="${entry.id}" tabindex="-1" aria-labelledby="support-title-${entry.id}" ${selected?.id === entry.id ? '' : 'hidden'}>
+        <header><p class="support-reader-category">${esc(entry.category)}</p><h2 id="support-title-${entry.id}">${esc(entry.label)}</h2><p class="support-reader-lead">${esc(entry.lead)}</p></header>
+        <ol class="support-reader-steps">${article.steps.map(step => `<li><h3>${esc(step.title)}</h3><p>${esc(step.desc)}</p>${step.tip ? `<p class="support-reader-note">${esc(step.tip)}</p>` : ''}</li>`).join('')}</ol>
+        <div class="support-reader-actions"><a class="btn" href="${esc(primaryHref)}" ${entry.id === 'reference' && zalo ? 'target="_blank" rel="noopener noreferrer"' : ''}>${esc(primaryLabel)} ${icon('arrow')}</a>${secondary ? `<a class="link" href="${esc(article.cta.secondaryHref)}">${esc(article.cta.secondaryText)}</a>` : ''}</div>
+      </article>`;
+    }).join('');
+    return ctPage('support', 'Hỗ trợ', `<p class="ct-subtitle">Chọn câu hỏi để xem hướng dẫn đầy đủ ngay bên dưới.</p>
+      <div class="support-desk" data-category="${esc(category)}" data-selected="${selected?.id || ''}">
+        <div class="support-masterdetail">
+          <aside class="support-index"><form class="ct-search-form support-search" data-form="support-search" role="search"><label class="support-sr-only" for="support-query">Tìm câu trả lời</label>${icon('search')}<input id="support-query" type="search" name="q" data-support-search value="${esc(q)}" placeholder="Tìm câu trả lời…" autocomplete="off">${category ? `<input type="hidden" name="category" value="${esc(category)}">` : ''}</form>
+            <div class="support-results" role="status" ${query || category ? '' : 'hidden'}><p>${matches.length} hướng dẫn${q.trim() ? ` cho “${esc(q.trim())}”` : ''}</p><a href="#/support">Xem tất cả</a></div>
+            <nav class="support-question-nav" aria-label="Chọn câu hỏi hỗ trợ">${navigation}</nav>
+            <label class="support-mobile-choice" ${matches.length ? '' : 'hidden'}><span>Chọn câu hỏi</span><select data-support-picker aria-label="Chọn câu hỏi">${options}</select></label>
+          </aside>
+          <div class="support-reading-area">${answers}<section class="support-empty" ${selected ? 'hidden' : ''}><h2>Chưa tìm thấy hướng dẫn phù hợp.</h2><p>Thử từ khóa khác hoặc liên hệ Hoàn để hỏi trực tiếp.</p><a class="link" href="${esc(contactHref)}" ${zalo ? 'target="_blank" rel="noopener noreferrer"' : ''}>${contactLabel} ${icon('arrow')}</a></section></div>
         </div>
-      </div>`,
-      'Hỗ trợ',
-      true
-    );
+        <span class="support-sr-only" role="status" aria-live="polite" data-support-announcement></span>
+      </div>`, 'Hỗ trợ', true);
   }
 
   function pageHelpArticle(id) {
-    const sectionEntry = helpSections.find(s => s[2].some(x => x[0] === id));
-    const label = sectionEntry ? sectionEntry[2].find(x => x[0] === id)?.[1] : null;
-    if (!label) return pageSupport();
-
-    const categoryTitle = sectionEntry ? sectionEntry[1] : 'Hỗ trợ';
-    const art = helpArticlesData[id] || {
-      category: categoryTitle,
-      badge: 'HƯỚNG DẪN DỊCH VỤ',
-      summary: 'Quy trình hướng dẫn chi tiết dành cho khách hàng của HOÀN Makeup Artist.',
-      steps: [
-        {
-          title: 'Chi tiết hướng dẫn',
-          desc: 'Vui lòng làm theo các chỉ dẫn dưới đây hoặc liên hệ trực tiếp để được hỗ trợ tốt nhất.',
-          tip: 'Hoàn luôn sẵn sàng hỗ trợ bạn bất cứ lúc nào.'
-        }
-      ],
-      cta: {
-        primaryText: id === 'booking' ? 'BẮT ĐẦU ĐẶT LỊCH' : 'TRA CỨU LỊCH',
-        primaryHref: id === 'booking' ? '#/booking/service' : '#/lookup',
-        secondaryText: 'LIÊN HỆ HOÀN',
-        secondaryHref: '#/contact'
-      },
-      related: []
-    };
-
-    const relatedLinks = (art.related || []).map(rId => {
-      const s = helpSections.find(sec => sec[2].some(x => x[0] === rId));
-      const link = s ? s[2].find(x => x[0] === rId) : null;
-      if (!link) return null;
-      return { id: rId, title: link[1], teaser: link[2] || '' };
-    }).filter(Boolean);
-
-    return ctPage(
-      'support',
-      '',
-      `<div class="ct-support-article-wrap">
-        <header class="article-dossier-hero">
-          <span class="article-category-badge">HƯỚNG DẪN DỊCH VỤ · ${esc(art.category.toUpperCase())}</span>
-          <h1 class="article-main-title">${esc(label)}</h1>
-
-          <div class="article-takeaway-card">
-            <span class="takeaway-lbl">TÓM TẮT CỐT LÕI</span>
-            <p class="takeaway-text">${esc(art.summary)}</p>
-          </div>
-        </header>
-
-        <!-- Step-by-step Cards -->
-        <section class="article-steps-section" aria-label="Các bước thực hiện">
-          ${art.steps.map((st, i) => `
-            <article class="article-step-card">
-              <span class="step-card-num">BƯỚC 0${i + 1}</span>
-              <h2 class="step-card-title">${esc(st.title)}</h2>
-              <p class="step-card-desc">${esc(st.desc)}</p>
-              ${st.tip ? `
-                <div class="step-card-tip">
-                  <b>Lưu ý từ Hoàn:</b> <span>${esc(st.tip)}</span>
-                </div>
-              ` : ''}
-            </article>
-          `).join('')}
-        </section>
-
-        <!-- Action Strip -->
-        <div class="article-actions-strip">
-          <a class="btn btn-dark" href="${esc(art.cta.primaryHref)}">${esc(art.cta.primaryText)}</a>
-          <a class="btn" href="${esc(art.cta.secondaryHref)}">${esc(art.cta.secondaryText)}</a>
-        </div>
-
-        ${relatedLinks.length > 0 ? `
-          <!-- Related Guides -->
-          <section class="article-related-guides">
-            <h3 class="related-heading">Chỉ dẫn liên quan có thể bạn quan tâm</h3>
-            <div class="related-grid">
-              ${relatedLinks.map(rel => `
-                <a class="related-card" href="#/support/${rel.id}">
-                  <div>
-                    <strong class="related-card-title">${esc(rel.title)}</strong>
-                    <p class="related-card-sub">${esc(rel.teaser)}</p>
-                  </div>
-                  <span class="related-card-link">Xem hướng dẫn →</span>
-                </a>
-              `).join('')}
-            </div>
-          </section>
-        ` : ''}
-      </div>`,
-      [{ label: 'Hỗ trợ', href: '#/support' }, { label: label }],
-      true
-    );
+    const section = helpSections.find(([, , links]) => links.some(link => link[0] === id));
+    const article = helpArticlesData[id];
+    if (!section || !article) return pageSupport();
+    const label = section[2].find(link => link[0] === id)[1];
+    const related = article.related.map(key => helpSections.flatMap(s => s[2]).find(link => link[0] === key)).filter(Boolean);
+    return ctPage('support', esc(label), `<p class="ct-subtitle">${esc(article.summary)}</p><article class="support-article">
+      <a class="ct-service-back support-back" href="#/support">${icon('back')} Tất cả hướng dẫn</a>
+      <ol class="support-steps">${article.steps.map(step => `<li><h2>${esc(step.title)}</h2><p>${esc(step.desc)}</p>${step.tip ? `<p class="support-step-note">${esc(step.tip)}</p>` : ''}</li>`).join('')}</ol>
+      <div class="support-article-actions"><a class="btn" href="${esc(article.cta.primaryHref)}">${esc(article.cta.primaryText)} ${icon('arrow')}</a><a class="link" href="${esc(article.cta.secondaryHref)}">${esc(article.cta.secondaryText)}</a></div>
+      ${related.length ? `<nav class="support-related" aria-label="Hướng dẫn liên quan"><h2>Hướng dẫn liên quan</h2>${related.map(([key, title]) => `<a href="#/support/${key}">${esc(title)} ${icon('arrow')}</a>`).join('')}</nav>` : ''}
+    </article>`, [{ label: 'Hỗ trợ', href: '#/support' }, { label }], true);
   }
+
   function pagePolicies(tab) {
     const b = state.brand || {};
     const s = state.settings || {};
     const depositStandard = money(Number(s.deposit || 200000));
-    const title = b.policiesPageTitle || 'Chính sách & Quy định dịch vụ';
-    const subtitle = b.policiesPageSubtitle || 'Để mỗi buổi hẹn diễn ra trọn vẹn và chu đáo, Hoàn xin chia sẻ rõ ràng các quy định về đặt lịch, đặt cọc và chính sách hỗ trợ.';
-
+    const title = b.policiesPageTitle || 'Chính sách dịch vụ';
+    const subtitle = b.policiesPageSubtitle || 'Một vài điều cần thống nhất trước buổi hẹn. Bạn có thể đọc từng mục bên dưới hoặc liên hệ Hoàn nếu cần giải thích thêm.';
     const policyDetails = {
       booking: {
-        title: 'Chính sách đặt lịch',
-        shortDesc: 'Quy trình tạo yêu cầu, khóa giờ độc quyền và xác nhận lịch hẹn.',
-        summary: [
-          'Bạn có thể chủ động chọn phong cách makeup, ngày giờ và địa điểm phục vụ trực tiếp trên website.',
-          'Chi phí dịch vụ và phí di chuyển (nếu có) được thông báo minh bạch trước khi bạn gửi yêu cầu.',
-          'Khung giờ chỉ chính thức được khóa sau khi Hoàn đối soát thông tin và nhận khoản tiền cọc.'
-        ],
+        title: 'Đặt lịch',
         sections: [
-          {
-            title: 'Lựa chọn phong cách & khung giờ phù hợp',
-            content: b.policyBooking1 || 'Bạn có thể chọn dịch vụ trang điểm mong muốn (cá nhân, dự tiệc, cô dâu...), ngày và khung giờ bắt đầu còn trống trên lịch. Mọi chi phí dịch vụ và thời lượng thực hiện đều được hiển thị rõ ràng để bạn dễ dàng cân đối thời gian.',
-            note: 'Nếu bạn đã có tone makeup hoặc kiểu tóc yêu thích, hãy đính kèm ảnh tham khảo khi đặt lịch để Hoàn chuẩn bị chu đáo nhất.'
-          },
-          {
-            title: 'Xác nhận lịch và khóa khung giờ riêng cho bạn',
-            content: b.policyBooking2 || 'Sau khi bạn gửi yêu cầu, hệ thống sẽ cấp một Mã lịch hẹn riêng. Hoàn sẽ kiểm tra thông tin, liên hệ trao đổi chi tiết và xác nhận chính thức ngay khi nhận được khoản tiền cọc theo thỏa thuận.',
-            note: 'Khi lịch đã xác nhận, khung giờ đó sẽ được khóa độc quyền và Hoàn sẽ không nhận bất kỳ khách nào khác.'
-          },
-          {
-            title: 'Nhắc lịch và chuẩn bị trước buổi hẹn',
-            content: 'Trước buổi hẹn khoảng 24 giờ, Hoàn sẽ nhắn tin nhắc lịch và trao đổi thêm về trang phục hoặc lưu ý chăm sóc da. Bạn vui lòng giữ liên lạc để buổi trang điểm diễn ra đúng giờ và thuận lợi nhất.',
-            note: 'Vui lòng làm sạch da cơ bản, dưỡng ẩm nhẹ và báo trước nếu da bạn thuộc nhóm da nhạy cảm hoặc dễ kích ứng.'
-          }
+          { title: 'Chọn dịch vụ và thời gian', content: b.policyBooking1 || 'Bạn chọn dịch vụ, ngày giờ còn trống và địa điểm trang điểm trên website. Giá và thời lượng được hiển thị trước khi gửi yêu cầu.', note: 'Có thể gửi kèm ảnh makeup, kiểu tóc và ghi chú về làn da khi đặt lịch.' },
+          { title: 'Khi nào lịch được xác nhận?', content: b.policyBooking2 || 'Sau khi gửi yêu cầu, bạn sẽ nhận được mã lịch hẹn. Lịch được xác nhận khi Hoàn kiểm tra thông tin và nhận đủ tiền cọc. Khi đó, khung giờ được giữ riêng cho bạn.' },
+          { title: 'Trước buổi hẹn', content: 'Hoàn sẽ nhắn nhắc lịch trước khoảng 24 giờ. Bạn vui lòng giữ liên lạc và báo trước nếu có thay đổi về thời gian, địa điểm hoặc trang phục.' }
         ]
       },
       deposit: {
         title: 'Đặt cọc & thanh toán',
-        shortDesc: 'Mức tiền cọc giữ lịch, phương thức chuyển khoản và thanh toán số tiền còn lại.',
-        summary: [
-          `Mức cọc tiêu chuẩn hiện tại là ${depositStandard} / lượt hẹn để giữ lịch riêng cho bạn.`,
-          'Khoản cọc được trừ trực tiếp 100% vào tổng chi phí dịch vụ của buổi hẹn.',
-          'Số tiền còn lại được thanh toán sau khi hoàn thành buổi trang điểm.'
-        ],
         sections: [
-          {
-            title: 'Mức cọc tiêu chuẩn & Mục đích giữ lịch',
-            content: b.policyDeposit || `Mức cọc tiêu chuẩn là ${depositStandard}. Khoản cọc này giúp Hoàn chắc chắn về lịch trình, từ chối các yêu cầu trùng giờ khác và chuẩn bị chu đáo mỹ phẩm, phụ kiện riêng cho bạn. Toàn bộ tiền cọc sẽ được trừ thẳng vào tổng chi phí cuối cùng.`,
-            note: 'Với dịch vụ cô dâu trọn gói hoặc sự kiện xa, mức cọc sẽ được thỏa thuận cụ thể theo lịch trình thực tế.'
-          },
-          {
-            title: 'Hình thức chuyển khoản và đối soát chính chủ',
-            content: 'Bạn chuyển khoản theo thông tin tài khoản ngân hàng chính chủ của Hoàn kèm nội dung là Mã lịch hẹn. Sau khi nhận được thông báo biến động số dư, Hoàn sẽ cập nhật ngay trạng thái lịch hẹn sang "Đã xác nhận".',
-            note: 'Bạn luôn có thể xem lại biên nhận đặt cọc bất cứ lúc nào tại trang tra cứu lịch hẹn.'
-          },
-          {
-            title: 'Thanh toán số tiền còn lại sau buổi hẹn',
-            content: 'Phần chi phí còn lại (sau khi đã trừ tiền cọc) sẽ được thanh toán sau khi buổi trang điểm hoàn thành bằng tiền mặt hoặc chuyển khoản ngân hàng.',
-            note: 'Hoàn cam kết không phát sinh bất kỳ khoản phụ thu hay chi phí nào ngoài những gì đã thống nhất trước.'
-          }
+          { title: 'Tiền cọc giữ lịch', content: b.policyDeposit || `Mức cọc tiêu chuẩn là ${depositStandard} cho một lượt hẹn. Toàn bộ tiền cọc được trừ vào tổng chi phí dịch vụ.`, note: 'Với gói cô dâu hoặc lịch đi xa, mức cọc được trao đổi riêng trước khi xác nhận.' },
+          { title: 'Chuyển khoản và xác nhận', content: 'Chuyển khoản theo thông tin ngân hàng của Hoàn và ghi mã lịch hẹn trong nội dung. Khi nhận và kiểm tra tiền, Hoàn sẽ cập nhật xác nhận và biên nhận trên trang tra cứu.' },
+          { title: 'Số tiền còn lại', content: 'Bạn thanh toán phần còn lại sau khi hoàn thành buổi trang điểm, bằng tiền mặt hoặc chuyển khoản. Các chi phí được thống nhất trước buổi hẹn.' }
         ]
       },
       change: {
-        title: 'Chính sách đổi lịch hẹn',
-        shortDesc: 'Điều kiện, thời hạn thông báo và cách hỗ trợ chuyển ngày giờ mới.',
-        summary: [
-          'Hỗ trợ đổi ngày, giờ miễn phí nếu bạn thông báo trước giờ hẹn từ 24 giờ trở lên.',
-          'Khoản tiền cọc đã đóng được bảo lưu trọn vẹn và chuyển sang lịch hẹn mới trong vòng 60 ngày.',
-          'Bạn có thể gửi yêu cầu đổi lịch trực tiếp trên trang Tra cứu lịch hoặc nhắn tin cho Hoàn.'
-        ],
+        title: 'Đổi lịch hẹn',
         sections: [
-          {
-            title: 'Thời gian thông báo khi cần đổi lịch',
-            content: b.policyChange || 'Nếu có thay đổi đột xuất trong kế hoạch, bạn vui lòng báo cho Hoàn sớm nhất có thể. Yêu cầu đổi lịch trước tối thiểu 24 giờ so với giờ hẹn ban đầu sẽ được hỗ trợ đổi ngày giờ mới hoàn toàn miễn phí, tùy thuộc vào khung giờ còn trống.',
-            note: 'Bạn có thể gửi yêu cầu đổi trực tiếp tại trang Tra cứu lịch hoặc nhắn tin trực tiếp qua Zalo / Facebook.'
-          },
-          {
-            title: 'Bảo lưu tiền cọc sang lịch hẹn mới',
-            content: 'Khi đổi lịch thành công, toàn bộ số tiền cọc bạn đã thanh toán sẽ được giữ nguyên và tự động chuyển sang lịch hẹn mới trong vòng 60 ngày kể từ ngày hẹn ban đầu.',
-            note: 'Mã lịch hẹn và các thông tin dịch vụ vẫn được giữ nguyên vẹn để tiện theo dõi.'
-          },
-          {
-            title: 'Trường hợp đổi lịch sát giờ (dưới 24 giờ)',
-            content: 'Nếu bạn cần đổi lịch trong vòng 24 giờ trước giờ hẹn, Hoàn sẽ cố gắng tối đa để sắp xếp một khung giờ khác còn trống trong cùng ngày. Nếu không thể sắp xếp được giờ thay thế, lịch hẹn cũ có thể cần áp dụng theo chính sách hủy lịch.',
-            note: 'Hãy chia sẻ thẳng thắn tình huống của bạn, Hoàn sẽ luôn tìm cách hỗ trợ linh hoạt nhất có thể.'
-          }
+          { title: 'Báo trước ít nhất 24 giờ', content: b.policyChange || 'Bạn được đổi ngày giờ miễn phí nếu báo trước ít nhất 24 giờ so với lịch ban đầu. Giờ mới cần còn trống và được Hoàn xác nhận.' },
+          { title: 'Bảo lưu tiền cọc', content: 'Toàn bộ tiền cọc được chuyển sang lịch mới trong vòng 60 ngày kể từ ngày hẹn ban đầu. Mã lịch hẹn được giữ nguyên để tiện theo dõi.' },
+          { title: 'Đổi lịch trong vòng 24 giờ', content: 'Hoàn sẽ kiểm tra xem có thể sắp xếp giờ khác trong cùng ngày hay không. Nếu không có giờ phù hợp, lịch có thể áp dụng điều kiện hủy.', note: 'Gửi yêu cầu ở trang Tra cứu lịch hoặc liên hệ Hoàn để trao đổi.' }
         ]
       },
       cancel: {
         title: 'Hủy lịch & hoàn cọc',
-        shortDesc: 'Quy định xem xét hoàn cọc theo thời gian thông báo và các trường hợp bất khả kháng.',
-        summary: [
-          'Hủy trước 48 giờ: Được hoàn lại 100% tiền cọc hoặc bảo lưu điểm dịch vụ trong 60 ngày.',
-          'Hủy trong vòng 48 giờ: Khoản cọc không hoàn lại nhằm bù đắp chi phí giữ lịch độc quyền.',
-          'Các trường hợp bất khả kháng (sức khỏe, việc gia đình đột xuất) luôn được Hoàn thấu hiểu và hỗ trợ linh hoạt.'
-        ],
         sections: [
-          {
-            title: 'Quy định hoàn cọc theo mốc thời gian',
-            content: b.policyCancel || 'Yêu cầu hủy lịch được gửi trước từ 48 giờ trở lên sẽ được hoàn lại 100% tiền cọc hoặc bảo lưu để sử dụng cho lần sau tùy mong muốn của bạn. Nếu thông báo hủy trong vòng 48 giờ trước buổi hẹn, khoản cọc sẽ không được hoàn lại vì Hoàn đã từ chối nhận các khách khác và chuẩn bị trang thiết bị.',
-            note: 'Sự thông cảm này giúp Hoàn duy trì được chất lượng phục vụ và sự công bằng cho tất cả khách hàng.'
-          },
-          {
-            title: 'Quy trình và thời gian nhận lại tiền cọc',
-            content: 'Sau khi xác nhận đồng ý hủy lịch và hoàn cọc, Hoàn sẽ chuyển khoản lại số tiền cọc về tài khoản ngân hàng của bạn trong vòng 1 đến 2 ngày làm việc.',
-            note: 'Thông tin đối soát và trạng thái hoàn cọc sẽ được hiển thị công khai trên hồ sơ lịch hẹn trực tuyến.'
-          },
-          {
-            title: 'Chính sách chia sẻ đối với lý do bất khả kháng',
-            content: 'Trong các trường hợp bất khả kháng như sức khỏe đột xuất, sự cố gia đình, thời tiết cực đoan... Hoàn luôn đặt sự thấu hiểu và sẻ chia lên hàng đầu để hỗ trợ hoàn tiền hoặc bảo lưu lịch hẹn vô thời hạn cho bạn.',
-            note: 'Đừng ngần ngại nhắn tin riêng cho Hoàn nếu bạn gặp phải tình huống không mong muốn.'
-          }
+          { title: 'Điều kiện hoàn cọc', content: b.policyCancel || 'Báo hủy trước ít nhất 48 giờ: hoàn 100% tiền cọc hoặc bảo lưu để đặt lịch trong 60 ngày. Báo hủy trong vòng 48 giờ: tiền cọc không được hoàn lại do khung giờ đã được giữ.' },
+          { title: 'Thời gian hoàn tiền', content: 'Sau khi yêu cầu hoàn cọc được xác nhận, Hoàn chuyển tiền về tài khoản của bạn trong 1–2 ngày làm việc. Bạn có thể theo dõi trạng thái trên trang lịch hẹn.' },
+          { title: 'Trường hợp bất khả kháng', content: 'Với sự cố sức khỏe, gia đình hoặc thời tiết, bạn hãy liên hệ trực tiếp. Hoàn sẽ trao đổi về việc hoàn tiền hoặc bảo lưu không giới hạn thời gian theo trường hợp cụ thể.' }
         ]
       },
       late: {
-        title: 'Đúng giờ & Thời lượng buổi hẹn',
-        shortDesc: 'Cách xử lý thời gian linh hoạt để đảm bảo lớp trang điểm đạt độ hoàn thiện cao nhất.',
-        summary: [
-          'Vui lòng có mặt đúng giờ để Hoàn có đủ thời gian hoàn thiện lớp nền và từng chi tiết tỉ mỉ nhất.',
-          'Nếu có nguy cơ đến muộn, hãy nhắn tin hoặc gọi điện ngay cho Hoàn để chủ động điều chỉnh.',
-          'Chuyên viên cam kết luôn có mặt đúng giờ hoặc sớm hơn 5-10 phút tại địa điểm phục vụ.'
-        ],
+        title: 'Đến trễ & thời lượng buổi hẹn',
         sections: [
-          {
-            title: 'Tầm quan trọng của việc bắt đầu đúng giờ',
-            content: b.policyLate || 'Mỗi buổi trang điểm đều được Hoàn phân bổ thời lượng vừa vặn (từ 60 đến 90 phút) để chăm chút từng bước: từ dưỡng ẩm, tạo khối, tán nền đến đánh mắt và tạo kiểu tóc. Bắt đầu đúng giờ giúp lớp trang điểm đạt độ bền đẹp nhất và bạn kịp thời gian tham dự sự kiện.',
-            note: 'Nếu bạn có hẹn chụp hình hoặc giờ xuất hành cố định, hãy báo trước để Hoàn tính toán thời gian lùi lại hợp lý.'
-          },
-          {
-            title: 'Xử lý khi bạn có việc đột xuất đến muộn',
-            content: 'Nếu bạn dự kiến đến muộn, xin vui lòng báo sớm cho Hoàn. Trễ dưới 15 phút, Hoàn sẽ tăng tốc các khâu phụ trợ để kịp tiến độ. Nếu trễ quá 15 phút, thời lượng buổi hẹn có thể phải rút ngắn một số chi tiết phụ để không ảnh hưởng đến khách hàng ở khung giờ kế tiếp.',
-            note: 'Hoàn sẽ luôn tư vấn tone makeup phù hợp nhất để dù thời gian gấp gáp, diện mạo của bạn vẫn tươi tắn và rạng rỡ.'
-          },
-          {
-            title: 'Cam kết trách nhiệm từ phía Hoàn Makeup Artist',
-            content: 'Nếu vì lý do khách quan (kẹt xe, thời tiết) khiến Hoàn đến muộn hơn so với giờ hẹn, Hoàn sẽ thông báo trước ngay lập tức, đồng thời nỗ lực hoàn thành đúng hạn hoặc miễn phí di chuyển để tạ lỗi cùng bạn.',
-            note: 'Hoàn luôn trân trọng từng phút giây của khách hàng và cam kết phục vụ chu đáo nhất.'
-          }
+          { title: 'Bắt đầu đúng giờ', content: b.policyLate || 'Một buổi trang điểm thường kéo dài 60–90 phút. Bạn vui lòng có mặt đúng giờ và báo trước nếu có giờ chụp ảnh, xuất hành hoặc vào tiệc cố định.' },
+          { title: 'Nếu bạn đến muộn', content: 'Hãy nhắn hoặc gọi cho Hoàn sớm. Trễ dưới 15 phút, Hoàn sẽ điều chỉnh các bước để kịp giờ. Trễ hơn 15 phút, một số chi tiết có thể phải rút gọn để không ảnh hưởng lịch của khách tiếp theo.' },
+          { title: 'Nếu Hoàn đến muộn', content: 'Hoàn sẽ báo ngay khi có sự cố và trao đổi cách xử lý: hoàn thành theo giờ đã hẹn hoặc miễn phí di chuyển.' }
         ]
       },
       travel: {
-        title: 'Khu vực & Phí di chuyển',
-        shortDesc: 'Phạm vi phục vụ tận nơi và nguyên tắc tính phí minh bạch trước khi đặt lịch.',
-        summary: [
-          'Hoàn nhận phục vụ tận nơi tại tư gia, khách sạn, studio hoặc địa điểm tổ chức tiệc.',
-          'Phí di chuyển (nếu có) được thông báo minh bạch ngay khi bạn chọn địa điểm trước khi cọc.',
-          'Nhận đi tỉnh và các chuyến công tác xa theo thỏa thuận lịch trình riêng.'
-        ],
+        title: 'Khu vực & phí di chuyển',
         sections: [
-          {
-            title: 'Phạm vi phục vụ tận nơi',
-            content: b.policyTravel || 'Hoàn nhận trang điểm tận nơi tại tất cả các quận huyện thuộc TP.HCM cũng như các tỉnh thành lân cận. Ekip mang theo đầy đủ vali đèn chuyên dụng, ghế makeup di động và bộ mỹ phẩm cao cấp để bạn có trải nghiệm thoải mái nhất ngay tại không gian của mình.',
-            note: 'Không gian phục vụ chỉ cần có ánh sáng cơ bản và ổ cắm điện cho các thiết bị làm tóc.'
-          },
-          {
-            title: 'Minh bạch chi phí di chuyển',
-            content: 'Phí di chuyển được tính toán dựa trên khoảng cách thực tế và hiển thị công khai ở Bước 3 (Địa điểm) của quy trình đặt lịch. Các khu vực gần studio thường được miễn phí hoặc hỗ trợ chi phí tối đa.',
-            note: 'Không có bất kỳ khoản phụ thu ngoài dự kiến nào sau khi đã thống nhất.'
-          },
-          {
-            title: 'Lịch trình ngoại tỉnh và tiệc cưới xa',
-            content: 'Đối với tiệc cưới ở tỉnh xa hoặc quay chụp ngoại cảnh nhiều ngày, Hoàn sẽ trao đổi chi tiết về phương tiện di chuyển và thời gian xuất phát để đảm bảo sức khỏe và phong độ tốt nhất cho buổi làm việc.',
-            note: 'Chi phí đi tỉnh luôn được báo trọn gói rõ ràng trước ngày hẹn.'
-          }
+          { title: 'Trang điểm tận nơi', content: b.policyTravel || 'Hoàn nhận trang điểm tại nhà, khách sạn, studio và địa điểm tổ chức tiệc ở TP.HCM cùng các tỉnh lân cận.', note: 'Bạn chuẩn bị chỗ ngồi, ánh sáng cơ bản và ổ cắm cho dụng cụ làm tóc.' },
+          { title: 'Phí di chuyển', content: 'Phí được tính theo địa điểm và hiển thị ở bước chọn địa điểm, trước khi đặt cọc. Khu vực gần studio có thể được miễn hoặc hỗ trợ phí. Mọi khoản phí được thống nhất trước.' },
+          { title: 'Lịch đi tỉnh', content: 'Với lịch đi xa hoặc làm việc nhiều ngày, Hoàn sẽ trao đổi thời gian xuất phát, phương tiện và báo chi phí trọn gói trước ngày hẹn.' }
         ]
       },
       privacy: {
-        title: 'Quyền riêng tư & Hình ảnh',
-        shortDesc: 'Cam kết bảo mật thông tin cá nhân và chỉ sử dụng hình ảnh khi có sự đồng ý của bạn.',
-        summary: [
-          'Thông tin cá nhân, số điện thoại và địa chỉ chỉ được sử dụng để tổ chức buổi hẹn.',
-          'Đặc điểm làn da và ảnh phong cách tham khảo được bảo mật tuyệt đối.',
-          'Hình ảnh hoàn thiện chỉ được đăng tải lên portfolio khi nhận được sự đồng ý vui vẻ của bạn.'
-        ],
+        title: 'Thông tin cá nhân & hình ảnh',
         sections: [
-          {
-            title: 'Mục đích sử dụng thông tin cá nhân',
-            content: b.policyPrivacy || 'Thông tin liên hệ (họ tên, số điện thoại), địa chỉ và ghi chú đặc biệt chỉ được Hoàn sử dụng duy nhất cho mục đích liên lạc, xác nhận lịch hẹn và phục vụ buổi trang điểm của bạn.',
-            note: 'Tuyệt đối không chia sẻ hoặc cung cấp thông tin của bạn cho bất kỳ bên thứ ba nào khác.'
-          },
-          {
-            title: 'Bảo mật thông tin làn da và hình ảnh tham khảo',
-            content: 'Ảnh chân dung tham khảo và các lưu ý về dị ứng da bạn cung cấp chỉ được lưu hành nội bộ để Hoàn chuẩn bị mỹ phẩm phù hợp và an toàn nhất cho làn da của bạn.',
-            note: 'Dữ liệu được lưu trữ an toàn và bảo mật trên hệ thống riêng.'
-          },
-          {
-            title: 'Tôn trọng quyền hình ảnh của khách hàng',
-            content: 'Sau khi hoàn thành makeup, Hoàn có thể xin phép chụp một vài bức ảnh kỷ niệm. Những hình ảnh này chỉ được đăng tải lên trang cá nhân hoặc website để làm portfolio khi bạn vui vẻ đồng ý. Bạn hoàn toàn có quyền yêu cầu không chụp ảnh hoặc gỡ bỏ hình ảnh bất cứ lúc nào.',
-            note: 'Hoàn luôn trân trọng sự thoải mái và riêng tư của bạn trước tiên.'
-          }
+          { title: 'Thông tin đặt lịch', content: b.policyPrivacy || 'Tên, số điện thoại, địa chỉ và ghi chú được sử dụng để liên hệ, xác nhận và phục vụ buổi hẹn. Hoàn không cung cấp thông tin này cho bên thứ ba.' },
+          { title: 'Ảnh tham khảo và lưu ý về da', content: 'Ảnh bạn gửi cùng thông tin về da, dị ứng chỉ được dùng nội bộ để trao đổi phong cách và chuẩn bị mỹ phẩm cho buổi hẹn.' },
+          { title: 'Sử dụng hình ảnh sau trang điểm', content: 'Hoàn chỉ đăng ảnh của bạn lên website hoặc trang cá nhân khi được đồng ý. Bạn có thể từ chối chụp ảnh hoặc yêu cầu gỡ ảnh bất cứ lúc nào.' }
         ]
       }
     };
-
-    if (!tab) {
-      return ctPage(
-        'policies',
-        '',
-        `<div class="ct-policy-atelier-wrap">
-          <!-- Split Hero Banner -->
-          <section class="ct-policy-hero-split">
-            <div class="hero-split-copy">
-              <span class="hero-overline">HOÀN MAKEUP ARTIST · STUDIO PROTOCOL</span>
-              <h1 class="hero-title">${esc(title)}</h1>
-              <p class="hero-lead">${esc(subtitle)}</p>
-              
-              <!-- Key Commitments (Khối cam kết nổi bật) -->
-              <div class="hero-commitment-grid">
-                <div class="commitment-item">
-                  <strong class="commitment-val">${depositStandard}</strong>
-                  <span class="commitment-lbl">Cọc tiêu chuẩn để khóa giờ riêng</span>
-                </div>
-                <div class="commitment-item">
-                  <strong class="commitment-val">24 GIỜ</strong>
-                  <span class="commitment-lbl">Đổi ngày hẹn miễn phí linh hoạt</span>
-                </div>
-                <div class="commitment-item">
-                  <strong class="commitment-val">48 GIỜ</strong>
-                  <span class="commitment-lbl">Hoàn 100% cọc khi báo trước</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="hero-split-media">
-              <div class="hero-image-frame">
-                <img src="/assets/contact-brushes.jpg" alt="Dụng cụ cọ và mỹ phẩm cao cấp Hoàn Makeup" loading="lazy">
-                <div class="hero-image-caption">
-                  <span>Dụng cụ & mỹ phẩm highend chuẩn bị chu đáo cho từng khách hàng</span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <!-- Interactive Studio Protocol List (Accordion) -->
-          <section class="ct-protocol-accordion-list" aria-label="Chi tiết các chính sách dịch vụ">
-            ${policySections.map(([id, pTitle, pDesc], i) => {
-              const p = policyDetails[id] || {};
-              const isOpen = i === 0;
-              return `
-                <article class="ct-protocol-item ${isOpen ? 'is-open' : ''}" id="policy-${id}">
-                  <header class="protocol-header" data-action="policy-toggle" data-id="${id}" role="button" aria-expanded="${isOpen}" tabindex="0">
-                    <span class="protocol-index">0${i + 1}</span>
-                    <div class="protocol-title-group">
-                      <h2 class="protocol-title">${esc(p.title || pTitle)}</h2>
-                      <p class="protocol-short">${esc(p.shortDesc || pDesc)}</p>
-                    </div>
-                    <div class="protocol-toggle-indicator" aria-hidden="true">
-                      <span class="toggle-icon">${isOpen ? '−' : '+'}</span>
-                    </div>
-                  </header>
-
-                  <div class="protocol-body" ${isOpen ? '' : 'hidden'}>
-                    <div class="protocol-body-inner">
-                      <!-- Summary Highlights -->
-                      <div class="protocol-takeaway-box">
-                        <span class="takeaway-badge">TÓM TẮT ĐIỀU KHOẢN</span>
-                        <ul class="takeaway-list">
-                          ${(p.summary || []).map(item => `<li>${esc(item)}</li>`).join('')}
-                        </ul>
-                      </div>
-
-                      <!-- Detailed Points -->
-                      <div class="protocol-points-list">
-                        ${(p.sections || []).map((sec, idx) => `
-                          <div class="protocol-point-row">
-                            <h3 class="point-heading"><span class="point-num">0${idx + 1}.</span> ${esc(sec.title)}</h3>
-                            <p class="point-desc">${esc(sec.content)}</p>
-                            ${sec.note ? `
-                              <div class="point-tip-box">
-                                <b>Lưu ý nhỏ:</b> <span>${esc(sec.note)}</span>
-                              </div>
-                            ` : ''}
-                          </div>
-                        `).join('')}
-                      </div>
-
-                      <!-- Footer with Permalink -->
-                      <div class="protocol-action-strip">
-                        <a class="protocol-permalink" href="#/policies/${id}">Xem trang điều khoản riêng ↗</a>
-                      </div>
-                    </div>
-                  </div>
-                </article>
-              `;
-            }).join('')}
-          </section>
-
-          <!-- Bottom Human Note -->
-          <div class="ct-protocol-bottom-note">
-            <div class="note-copy">
-              <h3>Bạn có yêu cầu riêng hoặc lịch trình đặc biệt?</h3>
-              <p>Mỗi buổi hẹn và sự kiện đều có tính chất riêng. Nếu bạn có bất kỳ băn khoăn nào về chính sách hoặc cần sắp xếp thời gian linh hoạt, hãy nhắn tin trực tiếp để Hoàn hỗ trợ bạn chu đáo nhất.</p>
-            </div>
-            <div class="note-btns">
-              <a class="btn btn-dark" href="#/contact">NHẮN TIN VỚI HOÀN</a>
-              <a class="btn" href="#/booking/service">ĐẶT LỊCH TRANG ĐIỂM</a>
-            </div>
-          </div>
-        </div>`,
-        'Chính sách',
-        true
-      );
-    }
-
-    const policyIndex = policySections.findIndex(p => p[0] === tab);
-    if (policyIndex === -1) return pagePolicies();
-    const policy = policySections[policyIndex];
-    const pData = policyDetails[tab] || {};
-    const prevPolicy = policyIndex > 0 ? policySections[policyIndex - 1] : null;
-    const nextPolicy = policyIndex < policySections.length - 1 ? policySections[policyIndex + 1] : null;
-
-    return ctPage(
-      'policies',
-      '',
-      `<div class="ct-policy-atelier-wrap">
-        <header class="ct-policy-direct-hero">
-          <div class="direct-hero-top">
-            <span class="direct-hero-meta">QUY ĐỊNH DỊCH VỤ · 0${policyIndex + 1}</span>
-          </div>
-          <h1 class="direct-hero-title">${esc(pData.title || policy[1])}</h1>
-          <p class="direct-hero-lead">${esc(pData.shortDesc || policy[2])}</p>
-        </header>
-
-        <article class="ct-protocol-item is-open is-focused-view" id="policy-${tab}">
-          <div class="protocol-body">
-            <div class="protocol-body-inner">
-              <!-- Summary Highlights -->
-              <div class="protocol-takeaway-box">
-                <span class="takeaway-badge">TÓM TẮT ĐIỀU KHOẢN CỐT LÕI</span>
-                <ul class="takeaway-list">
-                  ${(pData.summary || []).map(item => `<li>${esc(item)}</li>`).join('')}
-                </ul>
-              </div>
-
-              <!-- Detailed Points -->
-              <div class="protocol-points-list">
-                ${(pData.sections || []).map((sec, idx) => `
-                  <div class="protocol-point-row">
-                    <h3 class="point-heading"><span class="point-num">0${idx + 1}.</span> ${esc(sec.title)}</h3>
-                    <p class="point-desc">${esc(sec.content)}</p>
-                    ${sec.note ? `
-                      <div class="point-tip-box">
-                        <b>Lưu ý nhỏ:</b> <span>${esc(sec.note)}</span>
-                      </div>
-                    ` : ''}
-                  </div>
-                `).join('')}
-              </div>
-
-              <!-- Chapter Navigation -->
-              <nav class="direct-policy-pagination" aria-label="Điều hướng chính sách">
-                ${prevPolicy ? `
-                  <a class="paging-link prev" href="#/policies/${prevPolicy[0]}">
-                    <small class="paging-sub">← CHÍNH SÁCH TRƯỚC</small>
-                    <span class="paging-title">${esc(prevPolicy[1])}</span>
-                  </a>
-                ` : '<div class="paging-spacer"></div>'}
-                ${nextPolicy ? `
-                  <a class="paging-link next" href="#/policies/${nextPolicy[0]}">
-                    <small class="paging-sub">CHÍNH SÁCH TIẾP THEO →</small>
-                    <span class="paging-title">${esc(nextPolicy[1])}</span>
-                  </a>
-                ` : '<div class="paging-spacer"></div>'}
-              </nav>
-
-              <!-- Footer with Quick CTAs -->
-              <div class="protocol-action-strip">
-                <a class="btn btn-dark" href="#/booking/service">ĐẶT LỊCH DỊCH VỤ</a>
-                <a class="btn" href="#/contact">NHẮN TIN VỚI HOÀN</a>
-              </div>
-            </div>
-          </div>
-        </article>
-
-        <!-- Other policies quick jumps -->
-        <section class="ct-policy-other-jumps">
-          <h3>Các chính sách dịch vụ khác</h3>
-          <div class="other-jumps-grid">
-            ${policySections.filter(x => x[0] !== tab).map(([oId, oTitle, oDesc], i) => `
-              <a class="other-jump-card" href="#/policies/${oId}">
-                <span class="other-jump-title">${esc(oTitle)}</span>
-                <span class="other-jump-desc">${esc(oDesc)}</span>
-                <span class="other-jump-arrow">Chi tiết →</span>
-              </a>
-            `).join('')}
-          </div>
-        </section>
-      </div>`,
-      [{ label: 'Chính sách', href: '#/policies' }, { label: policy[1] }],
-      true
-    );
+    const policyIndex = policySections.findIndex(([id]) => id === tab);
+    const selected = policyIndex >= 0 ? policySections[policyIndex] : null;
+    const policyBody = (id, heading = 'h3') => policyDetails[id].sections.map(section => `<section class="policy-clause"><${heading}>${esc(section.title)}</${heading}><p>${esc(section.content)}</p>${section.note ? `<p class="policy-note">${esc(section.note)}</p>` : ''}</section>`).join('');
+    const next = selected ? policySections[policyIndex + 1] : null;
+    const contents = policySections.map(([id, label], index) => selected ? `<a href="#/policies/${id}" ${id === tab ? 'aria-current="page"' : ''}><small>${String(index + 1).padStart(2, '0')}</small><span>${esc(label)}</span></a>` : `<button type="button" data-action="policy-scroll" data-id="${id}" aria-controls="policy-${id}" ${index === 0 ? 'aria-current="location"' : ''}><small>${String(index + 1).padStart(2, '0')}</small><span>${esc(label)}</span></button>`).join('');
+    return ctPage('policies', esc(selected ? policyDetails[tab].title : title), `<p class="ct-subtitle">${esc(selected ? selected[2] : subtitle)}</p><div class="policy-document">
+      ${selected ? `<a class="ct-service-back policy-back" href="#/policies">${icon('back')} Toàn bộ chính sách</a>` : ''}
+      <div class="policy-document-layout">
+        <aside class="policy-contents"><div class="policy-desktop-contents"><p>Nội dung chính sách</p><nav aria-label="Mục lục chính sách">${contents}</nav></div><details class="policy-mobile-contents"><summary><span data-policy-current-label>Nội dung chính sách</span>${icon('chevron')}</summary><nav aria-label="Mục lục chính sách">${contents}</nav></details><p>Các điều kiện áp dụng cho lịch hẹn tại Hoàn Makeup Artist.</p></aside>
+        <div class="policy-text">${selected ? `<article class="policy-single">${policyBody(tab, 'h2')}</article>` : policySections.map(([id], index) => `<article class="policy-chapter" id="policy-${id}"><h2><span>${String(index + 1).padStart(2, '0')}</span>${esc(policyDetails[id].title)}</h2>${policyBody(id)}<a class="policy-permalink" href="#/policies/${id}">Xem riêng mục này ${icon('arrow')}</a></article>`).join('')}
+          ${next ? `<a class="policy-next" href="#/policies/${next[0]}"><span><small>Chính sách tiếp theo</small>${esc(policyDetails[next[0]].title)}</span>${icon('arrow')}</a>` : ''}
+          <div class="policy-footnote"><p>Nếu có điểm nào chưa rõ, Hoàn sẵn sàng giải thích thêm trước khi bạn đặt lịch.</p><a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a></div>
+        </div>
+      </div>
+    </div>`, selected ? [{ label: 'Chính sách', href: '#/policies' }, { label: selected[1] }] : 'Chính sách', true);
   }
   function pageContact() {
     const b = state.brand;
@@ -1817,307 +1347,8 @@
     return bookingShell(2,`<h1 class="ct-title">Chọn ngày và giờ</h1><p class="ct-subtitle">Thời gian hiển thị theo giờ Việt Nam.</p><section class="ct-time-layout">${calendarMarkup()}<div><h2>Giờ bắt đầu · ${dateLabel()}</h2><div class="ct-time-slots">${times.map(t=>{const toMinutes=value=>Number(value.slice(0,2))*60+Number(value.slice(3));const start=toMinutes(t),duration=service().duration;const booked=state.appointments.some(a=>a.date===state.booking.date&&activeAppointment(a)&&start<toMinutes(a.time)+(service(a.serviceId)?.duration||90)&&start+duration>toMinutes(a.time));const no=slotUnavailable(state.booking.date,t)||!state.settings.scheduleOpen;return `<button class="btn ${state.booking.time===t&&!no?'btn-dark':''}${no?' time-slot-unavailable':''}" data-action="time-select" data-time="${t}" title="${booked?'Đã có khách đặt khung giờ này':no?'Khung giờ không khả dụng':'Chọn khung giờ '+t}" aria-label="${t}${booked?' - Đã có khách đặt':''}" ${no?'disabled':''}>${t}${booked?'<small>Đã có khách</small>':''}</button>`}).join('')}</div><p>${icon('clock')} Thời lượng: ${service().duration} phút</p><p class="muted">Giờ đã có lịch hoặc được chặn sẽ không thể chọn.</p></div></section>`,'/booking/location','TIẾP TỤC · ĐỊA ĐIỂM');
   }
 
-  let vietnamAdministrativeData = [];
-  let vietnamLegacyDistrictData = [];
-  let vietnamLocationDataStatus = 'loading';
-
-  const CURRENT_TO_LEGACY_PROVINCES = {
-    'Hà Nội': ['Hà Nội'],
-    'Cao Bằng': ['Cao Bằng'],
-    'Tuyên Quang': ['Tuyên Quang', 'Hà Giang'],
-    'Điện Biên': ['Điện Biên'],
-    'Lai Châu': ['Lai Châu'],
-    'Sơn La': ['Sơn La'],
-    'Lào Cai': ['Lào Cai', 'Yên Bái'],
-    'Thái Nguyên': ['Thái Nguyên', 'Bắc Kạn'],
-    'Lạng Sơn': ['Lạng Sơn'],
-    'Quảng Ninh': ['Quảng Ninh'],
-    'Bắc Ninh': ['Bắc Ninh', 'Bắc Giang'],
-    'Phú Thọ': ['Phú Thọ', 'Vĩnh Phúc', 'Hòa Bình'],
-    'Hải Phòng': ['Hải Phòng', 'Hải Dương'],
-    'Hưng Yên': ['Hưng Yên', 'Thái Bình'],
-    'Ninh Bình': ['Ninh Bình', 'Hà Nam', 'Nam Định'],
-    'Thanh Hóa': ['Thanh Hóa'],
-    'Nghệ An': ['Nghệ An'],
-    'Hà Tĩnh': ['Hà Tĩnh'],
-    'Quảng Trị': ['Quảng Trị', 'Quảng Bình'],
-    'Huế': ['Huế', 'Thừa Thiên Huế'],
-    'Đà Nẵng': ['Đà Nẵng', 'Quảng Nam'],
-    'Quảng Ngãi': ['Quảng Ngãi', 'Kon Tum'],
-    'Gia Lai': ['Gia Lai', 'Bình Định'],
-    'Khánh Hòa': ['Khánh Hòa', 'Ninh Thuận'],
-    'Đắk Lắk': ['Đắk Lắk', 'Phú Yên'],
-    'Lâm Đồng': ['Lâm Đồng', 'Đắk Nông', 'Bình Thuận'],
-    'Đồng Nai': ['Đồng Nai', 'Bình Phước'],
-    'Hồ Chí Minh': ['Hồ Chí Minh', 'Bình Dương', 'Bà Rịa - Vũng Tàu'],
-    'Tây Ninh': ['Tây Ninh', 'Long An'],
-    'Đồng Tháp': ['Đồng Tháp', 'Tiền Giang'],
-    'Vĩnh Long': ['Vĩnh Long', 'Bến Tre', 'Trà Vinh'],
-    'An Giang': ['An Giang', 'Kiên Giang'],
-    'Cần Thơ': ['Cần Thơ', 'Sóc Trăng', 'Hậu Giang'],
-    'Cà Mau': ['Cà Mau', 'Bạc Liêu']
-  };
-
-  function locationSearchKey(value) {
-    return String(value || '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/đ/g, 'd')
-      .replace(/Đ/g, 'D')
-      .replace(/^(tinh|thanh pho|tp\.?|quan|huyen|thi xa|phuong|xa|thi tran|dac khu)\s+/i, '')
-      .replace(/[^a-z0-9]+/gi, ' ')
-      .trim()
-      .toLowerCase();
-  }
-
-  function provinceShortName(value) {
-    return String(value || '').replace(/^(Tỉnh|Thành phố)\s+/i, '').trim();
-  }
-
-  function findCurrentProvince(value) {
-    const key = locationSearchKey(value);
-    if (!key) return null;
-    return vietnamAdministrativeData.find(item =>
-      locationSearchKey(item.name) === key || locationSearchKey(provinceShortName(item.name)) === key
-    ) || null;
-  }
-
-  function mapLegacyProvince(value) {
-    const legacyKey = locationSearchKey(value);
-    if (!legacyKey) return null;
-    for (const [currentName, formerNames] of Object.entries(CURRENT_TO_LEGACY_PROVINCES)) {
-      if (formerNames.some(name => locationSearchKey(name) === legacyKey)) {
-        return vietnamAdministrativeData.find(item => locationSearchKey(provinceShortName(item.name)) === locationSearchKey(currentName)) || null;
-      }
-    }
-    return null;
-  }
-
-  function currentWards(cityName) {
-    const province = findCurrentProvince(cityName) || mapLegacyProvince(cityName);
-    return province?.wards?.map(item => item.name) || [];
-  }
-
-  function legacyDistricts(cityName) {
-    const province = findCurrentProvince(cityName) || mapLegacyProvince(cityName);
-    const currentName = provinceShortName(province?.name || cityName);
-    const formerNames = CURRENT_TO_LEGACY_PROVINCES[currentName] || [];
-    const allowed = new Set(formerNames.map(locationSearchKey));
-    const source = allowed.size
-      ? vietnamLegacyDistrictData.filter(item => allowed.has(locationSearchKey(provinceShortName(item.name))))
-      : vietnamLegacyDistrictData;
-    return source.flatMap(item => item.districts || []).map(item => item.name);
-  }
-
-  function exactLocationCandidate(field, value, cityName = state.booking.city) {
-    const key = locationSearchKey(value);
-    if (!key) return '';
-    const candidates = field === 'city'
-      ? vietnamAdministrativeData.map(item => item.name)
-      : field === 'ward'
-        ? currentWards(cityName)
-        : legacyDistricts(cityName);
-    return candidates.find(item => locationSearchKey(item) === key) || '';
-  }
-
-  function locationSearchOptions(field, cityName = state.booking.city) {
-    if (field === 'city') return vietnamAdministrativeData.map(item => item.name);
-    if (field === 'ward') return currentWards(cityName);
-    return legacyDistricts(cityName);
-  }
-
-  function refreshLocationDatalist(input) {
-    if (!input?.dataset?.locationSearch) return;
-    const field = input.dataset.locationSearch;
-    const list = document.getElementById(input.getAttribute('list'));
-    if (!list) return;
-    const query = locationSearchKey(input.value);
-    const options = locationSearchOptions(field).filter(item => !query || locationSearchKey(item).includes(query));
-    list.replaceChildren(...options.slice(0, 80).map(value => {
-      const option = document.createElement('option');
-      option.value = value;
-      return option;
-    }));
-  }
-
-  function validateLocationSearchInput(input) {
-    if (!input?.dataset?.locationSearch || vietnamLocationDataStatus !== 'ready') return true;
-    const field = input.dataset.locationSearch;
-    if (field === 'district' && !input.value.trim()) {
-      input.setCustomValidity('');
-      return true;
-    }
-    const matched = exactLocationCandidate(field, input.value);
-    const valid = Boolean(matched);
-    input.setCustomValidity(valid ? '' : field === 'city'
-      ? 'Vui lòng chọn một tỉnh hoặc thành phố trong danh sách.'
-      : field === 'ward'
-        ? 'Vui lòng chọn một phường, xã hoặc đặc khu thuộc tỉnh/thành đã chọn.'
-        : 'Vui lòng chọn quận/huyện cũ trong danh sách hoặc để trống.');
-    return valid;
-  }
-
-  function locationSearchField({ field, label, value, placeholder, required = false, hint = '' }) {
-    const options = locationSearchOptions(field);
-    const listId = `location-${field}-options`;
-    const countLabel = vietnamLocationDataStatus === 'ready'
-      ? `${options.length.toLocaleString('vi-VN')} mục`
-      : vietnamLocationDataStatus === 'error' ? 'Nhập thủ công' : 'Đang tải...';
-    return `<label class="mockup-field location-search-field">
-      <span class="mockup-label">${label}${required ? ' <span class="mockup-req">*</span>' : ''}</span>
-      <div class="mockup-location-search">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>
-        <input class="mockup-input" type="search" name="${field}" value="${esc(value || '')}" placeholder="${placeholder}" list="${listId}" data-location-search="${field}" autocomplete="off" ${required ? 'required' : ''}>
-        <span class="mockup-location-count">${countLabel}</span>
-        <datalist id="${listId}">${options.slice(0, 80).map(item => `<option value="${esc(item)}"></option>`).join('')}</datalist>
-      </div>
-      ${hint ? `<small class="mockup-location-hint">${hint}</small>` : ''}
-    </label>`;
-  }
-
-  Promise.all([
-    fetch('/data/vietnam-administrative-latest.json').then(response => {
-      if (!response.ok) throw new Error('Không tải được danh mục tỉnh/phường');
-      return response.json();
-    }),
-    fetch('/data/vietnam-legacy-districts.json').then(response => {
-      if (!response.ok) throw new Error('Không tải được danh mục quận/huyện cũ');
-      return response.json();
-    })
-  ]).then(([currentData, legacyData]) => {
-    vietnamAdministrativeData = Array.isArray(currentData) ? currentData : [];
-    vietnamLegacyDistrictData = Array.isArray(legacyData) ? legacyData : [];
-    vietnamLocationDataStatus = vietnamAdministrativeData.length === 34 ? 'ready' : 'error';
-    const matchedProvince = findCurrentProvince(state.booking.city) || mapLegacyProvince(state.booking.city);
-    if (matchedProvince) state.booking.city = matchedProvince.name;
-    saveState();
-    if (location.hash.includes('/booking/location')) render();
-  }).catch(error => {
-    console.error('Không tải được dữ liệu hành chính Việt Nam:', error);
-    vietnamLocationDataStatus = 'error';
-    if (location.hash.includes('/booking/location')) render();
-  });
-
   function pageBookingLocation() {
-    const s = service();
-    const servicePrice = s.price || 650000;
-    const travelFee = Number(state.settings.travelFee || 50000);
-    const totalIllustrated = servicePrice + travelFee;
-    const carSvg = `<svg class="mockup-car-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 10.5 L6.8 5 A2 2 0 0 1 8.7 3.8 h6.6 a2 2 0 0 1 1.9 1.2 l2.3 5.5"></path><rect x="3" y="10" width="18" height="7" rx="1.5"></rect><circle cx="6.8" cy="13.5" r="1.1" fill="currentColor" stroke="none"></circle><circle cx="17.2" cy="13.5" r="1.1" fill="currentColor" stroke="none"></circle><path d="M5.5 17 v2.2" stroke-width="2.2"></path><path d="M18.5 17 v2.2" stroke-width="2.2"></path></svg>`;
-
-    const matchedProvince = findCurrentProvince(state.booking.city) || mapLegacyProvince(state.booking.city);
-    const curCity = matchedProvince?.name || state.booking.city || 'Thành phố Hà Nội';
-    if (matchedProvince && state.booking.city !== matchedProvince.name) state.booking.city = matchedProvince.name;
-
-    const ggMapPinSvg = `<svg class="mockup-map-pin" viewBox="0 0 24 24" width="15" height="15" fill="#111" style="vertical-align:-2.5px;margin-right:6px;display:inline-block;flex-shrink:0;" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>`;
-    const ggMapPinSmallSvg = `<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="vertical-align:-1.5px;margin-right:4px;display:inline-block;" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>`;
-
-    const body = `
-    <h1 class="ct-title">Địa điểm trang điểm</h1>
-    <p class="ct-subtitle">Vui lòng cung cấp địa chỉ để Hoàn có thể di chuyển đến bạn.</p>
-    <div class="mockup-container">
-      <form class="ct-form" data-form="location">
-        <button type="button" class="mockup-option-card ${state.booking.detectedAddress ? 'is-detected' : ''} ${state.booking.locationError ? 'has-error' : ''}" data-action="detect-location" ${state.booking.isDetectingLocation ? 'disabled aria-busy="true"' : ''} title="Nhấp để tự động xác định vị trí của bạn">
-          <div class="mockup-radio-indicator">
-            <div class="mockup-radio-dot"></div>
-          </div>
-          <div class="mockup-option-text">
-            <div class="mockup-option-title">
-              <span>Vị trí của bạn</span>
-              ${state.booking.isDetectingLocation 
-                ? '<span class="mockup-gps-tag loading">⏳ ĐANG XÁC ĐỊNH...</span>' 
-                : (state.booking.locationError ? '<span class="mockup-gps-tag error">CẦN KIỂM TRA</span>' : state.booking.detectedAddress ? `<span class="mockup-gps-tag detected">${ggMapPinSmallSvg} ĐÃ XÁC ĐỊNH</span>` : `<span class="mockup-gps-tag">${ggMapPinSmallSvg} ĐỊNH VỊ</span>`)}
-            </div>
-            <div class="mockup-option-desc">
-              ${state.booking.isDetectingLocation
-                ? '<span style="color:#6b7280;font-weight:500;">Đang xác định tọa độ GPS và địa chỉ của bạn, vui lòng đợi trong giây lát...</span>'
-                : (state.booking.locationError
-                    ? `<span class="mockup-location-error">${esc(state.booking.locationError)}</span>`
-                    : state.booking.detectedAddress
-                    ? `<span style="color:#111;font-weight:600;display:inline-flex;align-items:center;">${ggMapPinSvg}<span>${esc(state.booking.detectedAddress)}</span></span> <span style="font-size:12px;color:#7A1832;text-decoration:underline;margin-left:6px;cursor:pointer;">(Cập nhật lại)</span>`
-                    : 'Nhấn vào đây để tự động xác định vị trí của bạn và điền vào bảng thông tin bên dưới.')}
-            </div>
-          </div>
-        </button>
-
-        <div class="mockup-grid-2">
-          <label class="mockup-field">
-            <span class="mockup-label">Số nhà, tên đường <span class="mockup-req">*</span></span>
-            <input class="mockup-input" type="text" name="address" placeholder="Nhập số nhà, tên đường..." value="${esc(state.booking.address || '')}" required>
-          </label>
-
-          ${locationSearchField({
-            field: 'city',
-            label: 'Tỉnh / thành phố hiện hành',
-            value: curCity,
-            placeholder: 'Gõ tên tỉnh hoặc thành phố...',
-            required: true,
-            hint: 'Danh mục 34 tỉnh/thành; có thể tìm không dấu, ví dụ “ha noi”.'
-          })}
-        </div>
-
-        <div class="mockup-grid-2">
-          ${locationSearchField({
-            field: 'ward',
-            label: 'Phường / xã / đặc khu hiện hành',
-            value: state.booking.ward,
-            placeholder: 'Gõ tên phường, xã hoặc đặc khu...',
-            required: true,
-            hint: `Hiển thị ${currentWards(curCity).length.toLocaleString('vi-VN')} đơn vị trực thuộc ${esc(provinceShortName(curCity))}.`
-          })}
-
-          ${locationSearchField({
-            field: 'district',
-            label: 'Quận / huyện cũ (nếu có)',
-            value: state.booking.district,
-            placeholder: 'Tra cứu quận/huyện trước sáp nhập...',
-            hint: 'Không bắt buộc — chỉ dùng để đối chiếu địa chỉ cũ vì cấp quận/huyện đã kết thúc hoạt động.'
-          })}
-        </div>
-
-        <label class="mockup-field full">
-          <span class="mockup-label">Tòa nhà, tầng, hướng dẫn di chuyển</span>
-          <input class="mockup-input" type="text" name="locationNote" placeholder="Ví dụ: tên tòa nhà, số tầng, màu cửa, điểm nhận biết..." value="${esc(state.booking.locationNote || '')}">
-        </label>
-
-        <label class="mockup-check-box">
-          <input type="checkbox" name="saveLocation" ${state.booking.saveLocation ? 'checked' : ''}>
-          <div>
-            <div class="mockup-check-label">Lưu địa chỉ cho lần sau (tùy chọn)</div>
-            <div class="mockup-check-sub">Thông tin sẽ được lưu an toàn trong tài khoản của bạn.</div>
-          </div>
-        </label>
-
-        <div class="mockup-summary-box">
-          <div class="mockup-summary-left">
-            ${carSvg}
-            <div class="mockup-summary-left-text">
-              <div class="mockup-summary-title">Phí di chuyển</div>
-              <div class="mockup-summary-desc">Được tính theo khu vực trước khi đặt cọc.</div>
-            </div>
-          </div>
-          <div class="mockup-summary-divider"></div>
-          <div class="mockup-summary-right">
-            <div class="mockup-right-tag">Chi phí minh họa theo bản cũ</div>
-            <div class="mockup-price-line">
-              <span>Dịch vụ trang điểm</span>
-              <span>${money(servicePrice)}</span>
-            </div>
-            <div class="mockup-price-line">
-              <span>Phí di chuyển (ví dụ)</span>
-              <span>${money(travelFee)}</span>
-            </div>
-            <div class="mockup-summary-sep"></div>
-            <div class="mockup-total-line">
-              <span>Tổng cộng (minh họa)</span>
-              <span>${money(totalIllustrated)}</span>
-            </div>
-          </div>
-        </div>
-      </form>
-    </div>`;
-
-    return bookingShell(3, body, '/booking/info', 'TIẾP TỤC · THÔNG TIN');
+    return bookingShell(3, bookingLocation ? bookingLocation.html() : `<h1 class="ct-title">Địa điểm trang điểm</h1><p class="ct-subtitle" role="status">Đang tải biểu mẫu địa chỉ…</p>`, '/booking/info', 'TIẾP TỤC · THÔNG TIN');
   }
   function pageBookingInfo() {
     const chevronSvg = `<svg class="mockup-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
@@ -2240,14 +1471,14 @@
     return bookingShell(4, body, '/booking/deposit', 'TIẾP TỤC · ĐẶT CỌC');
   }
   function paymentRows(total,deposit,received=0,travel=state.booking.travelFee) {
-    return `<div class="ct-money-row"><span>Giá dịch vụ</span><strong>${money(total-Number(travel||0))}</strong></div><div class="ct-money-row"><span>Phí di chuyển</span><strong>${money(Number(travel||0))}</strong></div><div class="ct-money-row"><span>Tổng chi phí</span><strong>${money(total)}</strong></div><div class="ct-money-row ct-emphasis"><span>Cọc cần thanh toán</span><strong>${money(deposit)}</strong></div><div class="ct-money-row"><span>Cọc đã nhận</span><strong>${money(received)}</strong></div><div class="ct-money-row"><span>${received?'Còn phải thanh toán':'Còn lại sau khi nhận đủ cọc'}</span><strong>${money(Math.max(0,total-(received||deposit)))}</strong></div>`;
+    return `<div class="ct-money-row"><span>Giá dịch vụ</span><strong>${money(total-Number(travel||0))}</strong></div><div class="ct-money-row"><span>Phí di chuyển</span><strong>${money(Number(travel||0))}</strong></div><div class="ct-money-row"><span>Tổng chi phí</span><strong>${money(total)}</strong></div><div class="ct-money-row ct-emphasis"><span>Cọc yêu cầu</span><strong>${money(deposit)}</strong></div><div class="ct-money-row"><span>Đã thanh toán (sau hoàn)</span><strong>${money(received)}</strong></div><div class="ct-money-row"><span>Còn phải thanh toán</span><strong>${money(Math.max(0,total-received))}</strong></div>`;
   }
-  function paymentQR() {
-    const url = state.settings.paymentQrUrl || '';
+  function paymentQR(settings = state.settings) {
+    const url = settings.paymentQrUrl || '';
     if (!/^\/api\/uploads\?key=references(?:%2F|\/)[a-zA-Z0-9.-]+$/.test(url)) return '';
     return `<figure class="ct-payment-qr"><img src="${esc(url)}" alt="Mã QR nhận tiền của Hoàn"><figcaption>Mã QR nhận tiền · HOÀN</figcaption><a class="link" href="${esc(url)}" target="_blank" rel="noopener">Mở ảnh QR</a></figure>`;
   }
-  function bankReady() { return !!(state.settings.bankName&&state.settings.bankAccount&&state.settings.bankOwner); }
+  function bankReady(settings = state.settings) { return !!(settings.bankName&&settings.bankAccount&&settings.bankOwner); }
   function statusTrack(isPaid, isPending) {
     const isUnpaid = !isPaid && !isPending;
     return `
@@ -2270,61 +1501,56 @@
     `;
   }
   function pageBookingDeposit() {
-    const s = service();
-    const servicePrice = s.price > 0 ? s.price : (s.id === 'bridal' ? 850000 : 650000);
-    const travelFee = Number(state.booking.travelFee || (state.booking.locationType === 'client' ? 50000 : 0));
-    const total = servicePrice + travelFee;
-    const deposit = Math.min(Number(state.settings.deposit || 200000), currentTotal());
+    const apt = getAppointment(state.booking.code);
+    const s = service(apt?.serviceId);
+    if (!apt?.phone || !state.paymentInstructionsByCode?.[apt.code]) {
+      return bookingShell(5, `<h1 class="ct-title">Đặt cọc giữ lịch</h1><section class="ct-summary"><h2>Tạo mã lịch trước khi chuyển khoản</h2><p>Mã lịch và nội dung chuyển khoản được cấp từ hệ thống để Hoàn đối soát chính xác.</p>${depositPreparationError ? `<p role="alert">${esc(depositPreparationError)}</p>` : ''}<button class="btn btn-dark" data-action="ct-prepare-deposit">${state.booking.code ? 'Tải thông tin thanh toán' : 'Tạo mã lịch & xem thanh toán'}</button> <a class="link" href="#/booking/info">Kiểm tra thông tin</a></section>`, null, '');
+    }
+    const instructions = state.paymentInstructionsByCode[apt.code];
+    const total = Number(apt.total);
+    const travelFee = Number(state.bookingDetails?.[apt.code]?.travelFee ?? state.booking.travelFee ?? 0);
+    const servicePrice = Math.max(0, total - travelFee);
+    const deposit = Math.min(Number(instructions.depositRequired ?? state.settings.deposit ?? 200000), total);
     state.booking.deposit = deposit;
-    const code = state.booking.code || ('LK' + Math.floor(1000 + Math.random() * 9000));
-    state.booking.code = code;
-    const apt = getAppointment(code) || state.appointments.find(x => x.code === code);
-    const isPaid = Boolean(apt && apt.paymentStatus === 'received' && Number(apt.deposit) > 0);
+    const code = apt.code;
+    if (deposit === 0) return bookingShell(5, `<h1 class="ct-title">Không yêu cầu đặt cọc</h1><section class="ct-summary"><p>Lịch ${esc(code)} đã được ghi nhận. Bạn thanh toán chi phí theo thỏa thuận với Hoàn.</p>${paymentRows(total,0,Number(apt.finance?.netReceived ?? apt.deposit ?? 0),travelFee)}<a class="btn btn-dark" href="#/booking/confirm">Tiếp tục kiểm tra lịch hẹn →</a></section>`, null, '');
+    const isPaid = Boolean(apt && apt.paymentStatus === 'received' && Number(apt.deposit) >= deposit);
     const isPending = !isPaid && (
       (apt && apt.paymentStatus === 'pending_verification') ||
       Boolean(apt && apt.paymentStatus === 'pending_verification')
     );
-    const paid = isPaid ? Math.min(Number(apt.deposit), deposit) : 0;
+    const paid = Number(apt.finance?.netReceived ?? apt.deposit ?? 0);
     const remaining = Math.max(0, total - paid);
+    const toPay = Math.max(0, deposit - paid);
     const receiptData = state.booking.receiptData || '';
     const receiptName = state.booking.receiptName || '';
 
-    const bankName = state.settings.bankName || '';
-    const bankOwner = state.settings.bankOwner || '';
-    const bankAccount = state.settings.bankAccount || '';
-    const customQr = state.settings.paymentQrUrl && /^\/api\/uploads\?key=references(?:%2F|\/)[a-zA-Z0-9.-]+$/.test(state.settings.paymentQrUrl) ? state.settings.paymentQrUrl : '';
-    const vietQrUrl = bankAccount ? `https://img.vietqr.io/image/MB-${bankAccount}-compact2.png?amount=${deposit}&addInfo=HOAN%20${code}&accountName=${encodeURIComponent(bankOwner)}` : '';
+    const bankName = instructions.bankName || '';
+    const bankOwner = instructions.bankOwner || '';
+    const bankAccount = instructions.bankAccount || '';
+    const customQr = /^\/api\/uploads\?key=references(?:%2F|\/)[a-zA-Z0-9.-]+$/.test(instructions.paymentQrUrl || '') ? instructions.paymentQrUrl : '';
+    const bankCode = /^[a-zA-Z0-9]{2,20}$/.test(instructions.bankCode || '') ? instructions.bankCode : /\bMB\b|quân đội/i.test(bankName) ? 'MB' : '';
+    const vietQrUrl = bankCode && /^\d{4,30}$/.test(bankAccount) && toPay > 0 ? `https://img.vietqr.io/image/${encodeURIComponent(bankCode)}-${bankAccount}-compact2.png?amount=${toPay}&addInfo=${encodeURIComponent('HOAN '+code)}&accountName=${encodeURIComponent(bankOwner)}` : '';
     const qrUrl = customQr || vietQrUrl;
-    const canPay = !!(bankAccount || customQr);
+    const canPay = Boolean((bankName && bankOwner && bankAccount) || customQr);
 
     const body = `
       <div class="ct-deposit-page">
         <!-- Top header row -->
         <div class="ct-deposit-top-bar">
           <div class="ct-deposit-header-left">
-            <div class="ct-deposit-overline">05 / ĐẶT CỌC — THIẾT KẾ ĐỀ XUẤT</div>
+            <div class="ct-deposit-overline">05 / ĐẶT CỌC</div>
             <h1 class="ct-deposit-title">Đặt cọc giữ lịch</h1>
             <p class="ct-deposit-subtitle">Kiểm tra chi phí trước khi chuyển khoản.</p>
           </div>
           
-          <div class="ct-deposit-timer-badge">
-            <div class="timer-top">
-              <svg class="timer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-                <circle cx="12" cy="12" r="10"/>
-                <polyline points="12 6 12 12 16 14"/>
-              </svg>
-              <span class="timer-label">Giữ chỗ:</span>
-              <span class="timer-countdown" id="deposit-timer">15:00</span>
-            </div>
-            <div class="timer-sub">Thời gian minh họa; căn cơ chế giữ chỗ thực tế.</div>
-          </div>
         </div>
 
         <!-- Mobile Deposit Amount Banner -->
         <div class="ct-deposit-mobile-banner">
           <div class="mb-label">Cọc cần thanh toán</div>
           <div class="mb-amount">${money(deposit)}</div>
-          <div class="mb-sub">Cọc minh họa</div>
+          <div class="mb-sub">Mã lịch ${esc(code)}</div>
         </div>
 
         <!-- Main 2-Column Grid -->
@@ -2334,7 +1560,7 @@
             <!-- Tabs -->
             <div class="ct-deposit-tabs">
               <button type="button" class="deposit-tab active">Chuyển khoản / VietQR</button>
-              <button type="button" class="deposit-tab disabled" data-action="ct-tab-momo" title="Cổng thanh toán MoMo">MoMo · Chưa kết nối</button>
+
             </div>
 
             <!-- QR Box with 4 Corner Brackets -->
@@ -2378,7 +1604,7 @@
                   ` : ''}
                 </span>
               </div>
-              <div class="bank-note">Thông tin nhận tiền sẽ do Hoàn thiết lập.</div>
+              <div class="bank-note">Kiểm tra đúng người nhận và nội dung trước khi chuyển tiền.</div>
             </div>
 
             <!-- Transfer Content Box -->
@@ -2396,32 +1622,6 @@
               <div class="deposit-field-sub">Nội dung được tạo theo từng lịch</div>
             </div>
 
-            <!-- Receipt Upload Box -->
-            <div class="ct-deposit-field-group">
-              <label class="deposit-field-label">Đính kèm ảnh chuyển khoản (không bắt buộc)</label>
-              <div class="deposit-upload-dropzone" data-action="ct-trigger-receipt">
-                <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="17 8 12 3 7 8"/>
-                  <line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>
-                <div class="upload-prompt">${receiptData ? '✓ ' + esc(receiptName || 'Đã tải ảnh') : 'Chọn ảnh hoặc kéo thả vào đây'}</div>
-                <div class="upload-hint">JPG, PNG (tối đa 5MB)</div>
-                <input type="file" id="deposit-receipt-file" accept="image/*" style="display:none;">
-              </div>
-              ${receiptData ? `
-                <div class="receipt-attached-card">
-                  <img src="${receiptData}" class="receipt-thumb" alt="Bill đính kèm">
-                  <div class="receipt-info">
-                    <span class="receipt-name">✓ ${esc(receiptName || 'bill-chuyen-khoan.jpg')}</span>
-                    <span class="receipt-status">Đã tải ảnh bill chuyển khoản thành công</span>
-                  </div>
-                  <button type="button" class="btn-remove-receipt" data-action="ct-remove-receipt" title="Gỡ ảnh">×</button>
-                </div>
-              ` : ''}
-              <div class="deposit-field-sub">Ảnh chuyển khoản giúp kiểm tra, không thay thế xác nhận giao dịch.</div>
-            </div>
-
             <!-- Action Buttons: report transfer or proceed -->
             <div class="ct-deposit-actions">
               ${isPaid ? `
@@ -2429,7 +1629,7 @@
               ` : isPending ? `
                 <button type="button" class="btn-deposit-paid btn-deposit-pending" disabled aria-disabled="true">ĐANG CHỜ ĐỐI SOÁT</button>
               ` : `
-                <button type="button" class="btn-deposit-paid" data-action="ct-report-transfer">TÔI ĐÃ CHUYỂN KHOẢN</button>
+                <button type="button" class="btn-deposit-paid" data-action="ct-report-transfer" ${canPay ? '' : 'disabled'}>TÔI ĐÃ CHUYỂN KHOẢN</button>
               `}
               <a href="#/contact" class="btn-deposit-contact">Liên hệ Hoàn</a>
             </div>
@@ -2438,7 +1638,7 @@
                 ? '✓ Quản trị viên đã xác nhận nhận cọc — nhấn để hoàn tất lịch hẹn.' 
                 : isPending
                 ? 'Đã ghi nhận thông báo chuyển khoản — đang chờ đối soát.'
-                : 'Vui lòng quét mã QR hoặc chuyển khoản, sau đó nhấn "Tôi đã chuyển khoản".'}
+                : canPay ? 'Vui lòng quét mã QR hoặc chuyển khoản, sau đó nhấn "Tôi đã chuyển khoản".' : 'Hoàn chưa thiết lập thông tin nhận tiền. Vui lòng liên hệ trước khi chuyển khoản.'}
             </div>
           </div>
 
@@ -2446,7 +1646,7 @@
           <div class="ct-deposit-summary-card">
             <div class="summary-card-header">
               <h2>Chi tiết thanh toán</h2>
-              <span class="summary-sub">Số tiền minh họa theo bản cũ.</span>
+              <span class="summary-sub">Lịch ${esc(code)} · số tiền theo yêu cầu đã lưu.</span>
             </div>
 
             <div class="summary-rows">
@@ -2471,7 +1671,7 @@
                 <strong>${money(deposit)}</strong>
               </div>
               <div class="summary-row">
-                <span>Còn lại sau khi nhận cọc</span>
+                <span>Còn phải thanh toán</span>
                 <span>${money(remaining)}</span>
               </div>
               <div class="summary-row">
@@ -2505,16 +1705,7 @@
             <!-- Status Track -->
             ${statusTrack(isPaid, isPending)}
 
-            <!-- Footnote with Info Icon -->
-            <div class="ct-deposit-footer-info">
-              <div class="info-row">
-                <span class="info-icon">ⓘ</span>
-                <span>Hết thời gian giữ chỗ: kiểm tra lại lịch trước khi thanh toán.</span>
-              </div>
-              <div class="info-row sub-indent">
-                <span>Đã chuyển nhưng hết hạn: liên hệ Hoàn để đối soát.</span>
-              </div>
-            </div>
+            <p class="deposit-actions-sub">Lịch được xác nhận sau khi Hoàn kiểm tra thông tin và nhận đủ cọc yêu cầu.</p>
           </div>
         </div>
       </div>
@@ -2524,18 +1715,15 @@
   }
 
   function pageBookingConfirm() {
-
-    const b = state.booking;
-    const apt = getAppointment(b.code) || state.appointments.find(x => x.code === b.code);
-    const isPaid = apt
-      ? apt.paymentStatus === 'received'
-      : (!!b.depositPaid || b.depositStatus === 'received');
-    const isPending = !isPaid && (
-      (apt && apt.paymentStatus === 'pending_verification') ||
-      !!b.depositReported ||
-      b.depositStatus === 'pending_verification'
-    );
-    return bookingShell(6, `<h1 class="ct-title">Kiểm tra lịch hẹn</h1><section class="ct-two-col"><article><h2>Thông tin buổi hẹn</h2>${[['Dịch vụ',service().name,'service'],['Ngày giờ',dateLabel()+' · '+b.time,'time'],['Địa điểm',[b.address,b.ward,b.district,b.city].filter(Boolean).join(', '),'location'],['Phong cách',b.style,'info'],['Tình trạng da',b.skin,'info'],['Dị ứng',[b.allergy,b.allergyNote].filter(Boolean).join(' · '),'info'],['Khách hàng',b.name+' · '+b.phone,'info'],['Lời nhắn',b.note||'Không có','info']].map(([t,v,p])=>`<div class="ct-review-row"><span>${t}</span><b>${esc(v)}</b><a href="#/booking/${p}">Chỉnh sửa</a></div>`).join('')}<div class="ct-upload-previews">${(b.references||[]).map(r=>`<img src="${r}" alt="Ảnh phong cách đã chọn">`).join('')}</div></article><aside class="ct-summary"><h2>Yêu cầu đặt lịch</h2>${statusTrack(isPaid, isPending)}${paymentRows(currentTotal(),b.deposit,isPaid?b.deposit:0)}<p>Lịch được tạo ở trạng thái chờ xác nhận. Bạn theo dõi và thanh toán cọc tại trang lịch hẹn.</p><button class="btn btn-dark btn-wide" data-action="complete-booking">GỬI YÊU CẦU ĐẶT LỊCH</button></aside></section>`, null, '');
+    const booking = state.booking, appointment = getAppointment(booking.code);
+    if (!appointment?.phone) return bookingShell(6, '<h1 class="ct-title">Kiểm tra lịch hẹn</h1><p class="ct-subtitle">Hoàn tất thông tin và lấy mã lịch trước khi xác nhận.</p><a class="btn" href="#/booking/info">Quay lại thông tin khách hàng</a>', null, '');
+    const details = state.bookingDetails?.[appointment.code] || {};
+    const received = Number(appointment.finance?.netReceived ?? appointment.deposit ?? 0);
+    const deposit = Number(details.depositRequired ?? booking.deposit ?? 0);
+    const isPaid = appointment.paymentStatus === 'received' && received >= deposit;
+    const isPending = !isPaid && appointment.paymentStatus === 'pending_verification';
+    const rows = [['Dịch vụ',service(appointment.serviceId).name],['Ngày giờ',dateLabel(appointment.date)+' · '+appointment.time],['Địa điểm',[appointment.address,appointment.ward,details.city].filter(Boolean).join(', ')],['Phong cách',appointment.style],['Tình trạng da',details.skin],['Dị ứng',[details.allergy,details.allergyNote].filter(Boolean).join(' · ')],['Khách hàng',appointment.customer+' · '+appointment.phone],['Lời nhắn',appointment.note||'Không có']];
+    return bookingShell(6, `<h1 class="ct-title">Kiểm tra lịch hẹn</h1><section class="ct-two-col"><article><h2>Thông tin đã gửi · ${esc(appointment.code)}</h2>${rows.map(([title,value])=>`<div class="ct-review-row"><span>${title}</span><b>${esc(value||'—')}</b></div>`).join('')}<p>Muốn thay đổi thông tin? Gửi yêu cầu tại <a class="link" href="#/booking/${esc(appointment.code)}">trang lịch hẹn</a> để Hoàn kiểm tra.</p></article><aside class="ct-summary"><h2>Thanh toán của lịch hẹn</h2>${statusTrack(isPaid,isPending)}${paymentRows(appointment.total,deposit,received,details.travelFee??0)}<p>Hoàn sẽ xác nhận lịch sau khi kiểm tra thông tin và nhận đủ cọc.</p><button class="btn btn-dark btn-wide" data-action="complete-booking">HOÀN TẤT & XEM LỊCH HẸN</button></aside></section>`, null, '');
   }
   function getAppointment(code=bookingCode) {
     return state.appointments.find(a=>a.code===code);
@@ -2553,18 +1741,23 @@
     if (!a) return missingBooking();
     const meta = state.bookingDetails?.[code] || {};
     const s = service(a.serviceId);
-    const needed = Number(meta.depositRequired || Math.min(Number(state.settings.deposit), a.total));
+    const needed = Number(meta.depositRequired ?? Math.min(Number(state.settings.deposit ?? 200000), a.total));
     const isPaid = a.paymentStatus === 'received' && Number(a.deposit) >= needed;
     const isPending = !isPaid && a.paymentStatus === 'pending_verification';
-    return ctPage('lookup', 'Chi tiết lịch hẹn', `<div class="ct-detail-top"><b>${esc(a.code)}</b><span class="ct-status">${statusLabel(a.status)}</span><span class="ct-status">${isPaid ? 'Đã nhận cọc' : isPending ? 'Chờ đối soát' : 'Chưa thanh toán'}</span></div><section class="ct-two-col"><article><h2>Thông tin buổi hẹn</h2>${[['Dịch vụ',s.name],['Ngày',dateLabel(a.date)],['Giờ bắt đầu',a.time],['Địa điểm',[a.address,a.ward,a.district,meta.city].filter(Boolean).join(', ')],['Khách hàng',a.customer],['Điện thoại',a.phone],['Phong cách',a.style],['Ghi chú',a.note]].map(([t,v])=>`<div class="ct-money-row"><span>${t}</span><b>${esc(v||'—')}</b></div>`).join('')}<div class="ct-upload-previews">${(meta.references||[]).map(r=>`<img src="${r}" alt="Ảnh phong cách tham khảo">`).join('')}</div>${meta.skin?`<p>Tình trạng da: ${esc(meta.skin)} · Dị ứng: ${esc(meta.allergy)} ${esc(meta.allergyNote||'')}</p>`:''}<div class="ct-actions">${a.status!=='cancelled'&&a.status!=='completed'?`<a class="btn" href="#/booking/${code}/reschedule">Yêu cầu đổi lịch</a><a class="btn" href="#/booking/${code}/cancel">Yêu cầu hủy / hoàn cọc</a>`:''}<button class="btn" data-action="ct-calendar-download" data-code="${code}">Thêm vào lịch</button></div><h3>Chuẩn bị cho buổi hẹn</h3><p>Giữ da sạch và dưỡng ẩm nhẹ. Chuẩn bị ảnh trang phục, phong cách nếu có.</p><a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a>${(state.requests||[]).filter(r=>r.code===code).map(r=>`<div class="ct-notice"><b>${esc(r.subject)}</b><p>${esc(r.status==='resolved'?'Đã xử lý':'Chờ xử lý')}</p>${r.reply?`<p>${esc(r.reply)}</p>`:''}</div>`).join('')}</article><aside class="ct-summary"><h2>Thanh toán</h2>${statusTrack(isPaid, isPending)}${paymentRows(a.total,needed,a.deposit,meta.travelFee??Math.max(0,a.total-s.price))}${a.deposit>0?`<a class="btn btn-dark btn-wide" href="#/booking/${code}/receipt">XEM BIÊN NHẬN</a>`:''}${a.deposit<needed&&a.status!=='cancelled'?paymentInstructions(a):''}<button class="btn btn-wide" data-action="ct-refresh">KIỂM TRA TRẠNG THÁI</button></aside></section>`, 'Tra cứu lịch / ' + code);
+    return ctPage('lookup', 'Chi tiết lịch hẹn', `<div class="ct-detail-top"><b>${esc(a.code)}</b><span class="ct-status">${statusLabel(a.status)}</span><span class="ct-status">${isPaid ? 'Đã nhận cọc' : isPending ? 'Chờ đối soát' : 'Chưa thanh toán'}</span></div><section class="ct-two-col"><article><h2>Thông tin buổi hẹn</h2>${[['Dịch vụ',s.name],['Ngày',dateLabel(a.date)],['Giờ bắt đầu',a.time],['Địa điểm',[a.address,a.ward,a.district,meta.city].filter(Boolean).join(', ')],['Khách hàng',a.customer],['Điện thoại',a.phone],['Phong cách',a.style],['Ghi chú',a.note]].map(([t,v])=>`<div class="ct-money-row"><span>${t}</span><b>${esc(v||'—')}</b></div>`).join('')}<div class="ct-upload-previews">${(meta.references||[]).map(r=>`<img src="${r}" alt="Ảnh phong cách tham khảo">`).join('')}</div>${meta.skin?`<p>Tình trạng da: ${esc(meta.skin)} · Dị ứng: ${esc(meta.allergy)} ${esc(meta.allergyNote||'')}</p>`:''}<div class="ct-actions">${a.status!=='cancelled'&&a.status!=='completed'?`<a class="btn" href="#/booking/${code}/reschedule">Yêu cầu đổi lịch</a><a class="btn" href="#/booking/${code}/cancel">Yêu cầu hủy / hoàn cọc</a>`:''}<button class="btn" data-action="ct-calendar-download" data-code="${code}">Thêm vào lịch</button></div><h3>Chuẩn bị cho buổi hẹn</h3><p>Giữ da sạch và dưỡng ẩm nhẹ. Chuẩn bị ảnh trang phục, phong cách nếu có.</p><a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a>${(state.requests||[]).filter(r=>r.code===code).map(r=>`<div class="ct-notice"><b>${esc(r.subject)}</b><p>${esc(r.status==='resolved'?'Đã xử lý':'Chờ xử lý')}</p>${r.reply?`<p>${esc(r.reply)}</p>`:''}</div>`).join('')}</article><aside class="ct-summary"><h2>Thanh toán</h2>${statusTrack(isPaid, isPending)}${paymentRows(a.total,needed,a.deposit,meta.travelFee??Math.max(0,a.total-s.price))}${(a.finance?.received ?? a.deposit)>0?`<a class="btn btn-dark btn-wide" href="#/booking/${code}/receipt">XEM BIÊN NHẬN</a>`:''}${a.deposit<needed&&a.status!=='cancelled'?paymentInstructions(a):''}<button class="btn btn-wide" data-action="ct-refresh">KIỂM TRA TRẠNG THÁI</button></aside></section>`, 'Tra cứu lịch / ' + code);
   }
   function paymentInstructions(a) {
-    if(!bankReady()&&!paymentQR())return `<div class="ct-notice">Hoàn sẽ cung cấp thông tin nhận tiền khi liên hệ với bạn.</div><a class="btn btn-wide" href="#/contact">LIÊN HỆ HOÀN</a>`;
-    return `${paymentQR()}<h3>Thông tin chuyển khoản</h3>${[['Ngân hàng',state.settings.bankName],['Chủ tài khoản',state.settings.bankOwner],['Số tài khoản',state.settings.bankAccount],['Nội dung','HOAN '+a.code]].map(([t,v])=>`<div class="ct-money-row"><span>${t}</span><strong>${esc(v)}</strong><button class="icon-btn" aria-label="Sao chép ${t}" data-action="ct-copy" data-value="${esc(v)}">${icon('content')}</button></div>`).join('')}<p class="muted">Chuyển đúng nội dung. Chỉ thông báo sau khi bạn đã thực hiện giao dịch.</p><button class="btn btn-dark btn-wide" data-action="ct-payment-report" data-code="${a.code}" ${a.paymentStatus==='pending_verification'?'disabled':''}>${a.paymentStatus==='pending_verification'?'ĐANG CHỜ ĐỐI SOÁT':'TÔI ĐÃ CHUYỂN KHOẢN'}</button>`;
+    const settings = state.paymentInstructionsByCode?.[a.code] || state.settings;
+    if (!bankReady(settings) && !settings.paymentQrUrl) return '<p>Hoàn chưa thiết lập tài khoản nhận tiền. Vui lòng liên hệ trước khi chuyển khoản.</p>';
+    return `${paymentQR(settings)}<h3>Thông tin chuyển khoản</h3>${[['Ngân hàng',settings.bankName],['Chủ tài khoản',settings.bankOwner],['Số tài khoản',settings.bankAccount],['Nội dung','HOAN '+a.code]].map(([title,value])=>`<div class="ct-money-row"><span>${title}</span><strong>${esc(value||'—')}</strong><button class="icon-btn" aria-label="Sao chép ${title}" data-action="ct-copy" data-value="${esc(value||'')}" >${icon('content')}</button></div>`).join('')}<p class="muted">Kiểm tra đúng người nhận. Chỉ báo chuyển khoản sau khi bạn đã thực hiện giao dịch.</p><button class="btn btn-dark btn-wide" data-action="ct-payment-report" data-code="${a.code}" ${a.paymentStatus==='pending_verification'?'disabled':''}>${a.paymentStatus==='pending_verification'?'ĐANG CHỜ ĐỐI SOÁT':'TÔI ĐÃ CHUYỂN KHOẢN'}</button>`;
   }
   function pageReceipt(code) {
-    const a=getAppointment(code);if(!a)return missingBooking();if(!a.deposit)return ctPage('lookup','Chưa có biên nhận',`<p class="ct-subtitle">Khoản cọc chưa được xác minh.</p><a class="btn" href="#/booking/${code}">QUAY LẠI LỊCH HẸN</a>`);
-    return ctPage('lookup','Biên nhận đặt cọc',`<article class="ct-receipt">${brandMarkup()}<p class="ct-status">ĐÃ NHẬN CỌC</p><h2>${esc(a.code)}</h2>${[['Khách hàng',a.customer],['Dịch vụ',service(a.serviceId).name],['Ngày giờ',dateLabel(a.date)+' · '+a.time]].map(([t,v])=>`<div class="ct-money-row"><span>${t}</span><b>${esc(v)}</b></div>`).join('')}<div class="ct-money-row"><span>Tổng chi phí</span><b>${money(a.total)}</b></div><div class="ct-money-row ct-emphasis"><span>Khoản cọc đã nhận</span><b>${money(a.deposit)}</b></div><div class="ct-money-row"><span>Còn phải thanh toán</span><b>${money(Math.max(0,a.total-a.deposit))}</b></div><p>Khoản cọc được trừ vào tổng chi phí của buổi hẹn.</p></article><div class="ct-center-cta"><button class="btn btn-dark" data-action="print">IN / LƯU PDF</button><a class="btn" href="#/booking/${code}">TRỞ VỀ LỊCH HẸN</a></div>`,'Lịch hẹn / Biên nhận');
+    const appointment = getAppointment(code);
+    if (!appointment) return missingBooking();
+    const finance = appointment.finance || { received: Number(appointment.deposit||0), refunded:0, netReceived:Number(appointment.deposit||0), remaining:Math.max(0,appointment.total-Number(appointment.deposit||0)) };
+    if (!finance.received) return ctPage('lookup','Chưa có biên nhận',`<p class="ct-subtitle">Chưa có khoản thu đã được Hoàn đối soát.</p><a class="btn" href="#/booking/${esc(code)}">QUAY LẠI LỊCH HẸN</a>`);
+    const history = state.paymentHistoryByCode?.[code] || finance.entries || [];
+    return ctPage('lookup','Biên nhận thanh toán',`<article class="ct-receipt">${brandMarkup()}<p class="ct-status">GIAO DỊCH ĐÃ ĐỐI SOÁT</p><h2>${esc(appointment.code)}</h2>${[['Khách hàng',appointment.customer],['Dịch vụ',service(appointment.serviceId).name],['Ngày giờ',dateLabel(appointment.date)+' · '+appointment.time]].map(([title,value])=>`<div class="ct-money-row"><span>${title}</span><b>${esc(value)}</b></div>`).join('')}${[['Tổng chi phí',appointment.total],['Tổng tiền đã nhận',finance.received],['Đã hoàn cho khách',finance.refunded],['Thực nhận sau hoàn',finance.netReceived],['Còn phải thanh toán',appointment.status==='cancelled'?0:finance.remaining]].map(([title,value])=>`<div class="ct-money-row"><span>${title}</span><b>${money(value)}</b></div>`).join('')}${history.length?`<h3>Lịch sử thu / hoàn</h3>${history.map(entry=>`<div class="ct-money-row"><span>${esc(({deposit:'Thu cọc',balance:'Thu phần còn lại',refund:'Hoàn tiền',opening:'Số dư đã nhận chuyển sang',opening_refund:'Khoản hoàn chuyển sang'})[entry.kind]||entry.kind)}${!entry.kind.startsWith('opening')&&entry.occurredAt?' · '+esc(new Date(entry.occurredAt).toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'})):''}</span><b>${money(entry.amount)}</b></div>`).join('')}`:''}<p>Khoản đã thanh toán được trừ vào tổng chi phí. Biên nhận phản ánh những giao dịch Hoàn đã kiểm tra.</p></article><div class="ct-center-cta"><button class="btn btn-dark" data-action="print">IN / LƯU PDF</button><a class="btn" href="#/booking/${esc(code)}">TRỞ VỀ LỊCH HẸN</a></div>`,'Lịch hẹn / Biên nhận');
   }
   function pageReschedule(code) {
     const a=getAppointment(code);if(!a)return missingBooking();
@@ -2581,7 +1774,7 @@
 
   const adminLinks = [
     ['overview','grid','Tổng quan'],['appointments','calendar','Lịch hẹn'],['schedule','clock','Lịch làm việc'],
-    ['services','tag','Dịch vụ'],['customers','user','Khách hàng'],['payments','card','Tiền cọc'],['promotions','ticket','Mã ưu đãi'],
+    ['services','tag','Dịch vụ'],['customers','user','Khách hàng'],['payments','card','Thu chi & tiền cọc'],['promotions','ticket','Mã ưu đãi'],
     ['gallery','image','Bộ sưu tập'],['content','content','Nội dung website'],['notifications','bell','Thông báo'],['requests','mail','Yêu cầu hỗ trợ'],
     ['reports','report','Báo cáo'],['permissions','shield','Phân quyền'],['audit','log','Nhật ký'],['settings','settings','Cài đặt'],
     ['visitors','user','Khách truy cập website']
@@ -2608,26 +1801,26 @@
     const todayRows = appts.filter(a=>a.date===today && a.status!=='cancelled');
     const pending = appts.filter(a=>a.status==='pending').length;
     const paymentPending = appts.filter(a=>a.paymentStatus==='pending_verification').length;
-    const deposits = appts.filter(a=>a.paymentStatus==='received').reduce((n,a)=>n+Number(a.deposit||0),0);
+    const deposits = appts.reduce((sum,appointment)=>sum+Number(appointment.finance?.netReceived ?? appointment.deposit ?? 0),0);
     const rescheduleRequests = (state.requests || []).filter(r => r.code && /đổi lịch|đổi ngày|reschedule/i.test(String(r.subject || '')) && ['pending','in_progress'].includes(r.status || 'pending')).length;
-    const revenue = appts.filter(a=>a.date.startsWith(currentMonth)&&a.status!=='cancelled').reduce((n,a)=>n+Number(a.total||0),0);
-    const body = `${state.backendError?`<div class="data-alert">Không thể tải dữ liệu: ${state.backendError}</div>`:''}<section class="stat-grid"><div class="stat-card"><small>Lịch hôm nay</small><strong class="numeric">${String(todayRows.length).padStart(2,'0')}</strong><span>Dữ liệu cập nhật trực tiếp</span></div><div class="stat-card"><small>Chờ xác nhận</small><strong class="numeric">${String(pending).padStart(2,'0')}</strong><span>${pending?'Cần kiểm tra lịch mới':'Không có lịch chờ'}</span></div><div class="stat-card"><small>Tiền cọc đã nhận</small><strong class="numeric">${money(deposits)}</strong><span>${paymentPending} giao dịch chờ đối soát</span></div><div class="stat-card"><small>Doanh thu tháng</small><strong class="numeric">${money(revenue)}</strong><span>Không gồm lịch đã hủy</span></div></section><section class="admin-grid"><div class="admin-section"><div class="section-head"><h2>Dòng lịch hôm nay</h2><a class="link wine" href="#/admin/appointments">Xem toàn bộ lịch hẹn →</a></div>${appointmentsTable(todayRows)}</div><aside class="admin-section"><h2>Cần xử lý</h2><div class="task-item"><span class="task-num numeric">${String(pending).padStart(2,'0')}</span><div><b>Lịch chờ xác nhận</b><small class="muted">Cập nhật theo dữ liệu thật</small></div>→</div><div class="task-item"><span class="task-num numeric">${String(paymentPending).padStart(2,'0')}</span><div><b>Giao dịch cần đối soát</b><small class="muted">Chưa ghi nhận tiền cọc</small></div>→</div><div class="task-item"><span class="task-num numeric">${String(rescheduleRequests).padStart(2,'0')}</span><div><b>Yêu cầu đổi lịch</b><small class="muted">${rescheduleRequests?'Cần kiểm tra lịch mới':'Không có yêu cầu mới'}</small></div>→</div></aside></section><section class="admin-grid rule"><div class="admin-section"><h2>Doanh thu 7 ngày</h2>${lineChart()}</div><div class="admin-section"><h2>Hiệu suất dịch vụ</h2>${barChart()}</div></section>`;
+    const revenue = cashNet(actualCashEntries().filter(entry => transactionDay(entry).startsWith(currentMonth)));
+    const body = `${state.backendError?`<div class="data-alert">Không thể tải dữ liệu: ${state.backendError}</div>`:''}<section class="stat-grid"><div class="stat-card"><small>Lịch hôm nay</small><strong class="numeric">${String(todayRows.length).padStart(2,'0')}</strong><span>Dữ liệu cập nhật trực tiếp</span></div><div class="stat-card"><small>Chờ xác nhận</small><strong class="numeric">${String(pending).padStart(2,'0')}</strong><span>${pending?'Cần kiểm tra lịch mới':'Không có lịch chờ'}</span></div><div class="stat-card"><small>Thực còn giữ từ khách</small><strong class="numeric">${money(deposits)}</strong><span>${paymentPending} giao dịch chờ đối soát</span></div><div class="stat-card"><small>Thu ròng tháng</small><strong class="numeric">${money(revenue)}</strong><span>Tiền thực thu trừ tiền đã hoàn</span></div></section><section class="admin-grid"><div class="admin-section"><div class="section-head"><h2>Dòng lịch hôm nay</h2><a class="link wine" href="#/admin/appointments">Xem toàn bộ lịch hẹn →</a></div>${appointmentsTable(todayRows)}</div><aside class="admin-section"><h2>Cần xử lý</h2><div class="task-item"><span class="task-num numeric">${String(pending).padStart(2,'0')}</span><div><b>Lịch chờ xác nhận</b><small class="muted">Cập nhật theo dữ liệu thật</small></div>→</div><div class="task-item"><span class="task-num numeric">${String(paymentPending).padStart(2,'0')}</span><div><b>Giao dịch cần đối soát</b><small class="muted">Chưa ghi nhận tiền cọc</small></div>→</div><div class="task-item"><span class="task-num numeric">${String(rescheduleRequests).padStart(2,'0')}</span><div><b>Yêu cầu đổi lịch</b><small class="muted">${rescheduleRequests?'Cần kiểm tra lịch mới':'Không có yêu cầu mới'}</small></div>→</div></aside></section><section class="admin-grid rule"><div class="admin-section"><h2>Thu ròng 7 ngày</h2>${lineChart()}</div><div class="admin-section"><h2>Hiệu suất dịch vụ</h2>${barChart()}</div></section>`;
     return adminShell('overview',body,'Tổng quan hôm nay',formatLongDate(new Date()),`<button class="btn" data-action="export-report">${icon('download')} Xuất báo cáo</button><button class="btn btn-dark" data-action="new-appointment">${icon('plus')} Tạo lịch hẹn</button>`);
   }
 
   function appointmentsTable(rows) {
     return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Giờ</th><th>Khách hàng</th><th>Dịch vụ</th><th>Khu vực</th><th>Thanh toán</th><th>Trạng thái</th><th style="min-width:320px;">Thao tác</th></tr></thead><tbody>${rows.length?rows.map(a=>{
       const isConf = (a.status === 'confirmed' || a.paymentStatus === 'received');
-      return `<tr class="clickable-row" data-action="admin-view-appointment" data-code="${a.code}" title="Nhấp vào dòng để xem chi tiết lịch hẹn"><td class="numeric"><b>${a.time}</b></td><td><b class="row-hover-link">${esc(a.customer)}</b><br><small class="numeric" style="color:#6b7280;">${a.phone}</small></td><td>${service(a.serviceId).name}</td><td>${a.district||'—'}</td><td class="numeric">${a.deposit>0?'Đã cọc '+money(a.deposit):'Chờ đối soát'}</td><td><span class="badge ${a.status==='confirmed'?'success':a.status==='pending'?'warning':''}">${statusLabel(a.status)}</span></td><td><div class="table-actions"><button class="action-btn action-btn-view" data-action="admin-view-appointment" data-code="${a.code}" title="Xem chi tiết lịch hẹn">${icon('eye')}<span>Xem</span></button><button class="action-btn action-btn-edit" data-action="admin-edit-appointment" data-code="${a.code}" title="Chỉnh sửa thông tin lịch hẹn">${icon('edit')}<span>Sửa</span></button><button class="action-btn action-btn-delete" data-action="admin-delete-appointment" data-code="${a.code}" title="Xóa lịch hẹn khỏi hệ thống">${icon('trash')}<span>Xóa</span></button><button class="action-btn action-btn-status" data-action="admin-status" data-code="${a.code}" title="Đổi trạng thái lịch">${icon('clock')}<span>Trạng thái</span></button>${!isConf?`<button class="action-btn action-btn-deposit" data-action="admin-confirm-deposit" data-code="${a.code}" title="Quản trị duyệt cọc">${icon('check')}<span>Duyệt cọc</span></button>`:`<button class="action-btn action-btn-reset" data-action="admin-reset-deposit" data-code="${a.code}" title="Trả về chờ đối soát"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg><span>Hoàn cọc</span></button>`}</div></td></tr>`;
+      return `<tr class="clickable-row" data-action="admin-view-appointment" data-code="${a.code}" title="Nhấp vào dòng để xem chi tiết lịch hẹn"><td class="numeric"><b>${a.time}</b></td><td><b class="row-hover-link">${esc(a.customer)}</b><br><small class="numeric" style="color:#6b7280;">${a.phone}</small></td><td>${service(a.serviceId).name}</td><td>${esc(a.ward || state.bookingDetails?.[a.code]?.city || a.district || '—')}<br>${adminLocations?.shortcut(a, state.bookingDetails?.[a.code]) || ''}</td><td class="numeric">${a.deposit>0?'Đã thu '+money(a.finance?.netReceived ?? a.deposit):a.paymentStatus==='pending_verification'?'Chờ đối soát':'Chưa thanh toán'}</td><td><span class="badge ${a.status==='confirmed'?'success':a.status==='pending'?'warning':''}">${statusLabel(a.status)}</span></td><td><div class="table-actions"><button class="action-btn action-btn-view" data-action="admin-view-appointment" data-code="${a.code}" title="Xem chi tiết lịch hẹn">${icon('eye')}<span>Xem</span></button><button class="action-btn action-btn-edit" data-action="admin-edit-appointment" data-code="${a.code}" title="Chỉnh sửa thông tin lịch hẹn">${icon('edit')}<span>Sửa</span></button><button class="action-btn action-btn-delete" data-action="admin-delete-appointment" data-code="${a.code}" title="Xóa lịch hẹn khỏi hệ thống">${icon('trash')}<span>Xóa</span></button><button class="action-btn action-btn-status" data-action="admin-status" data-code="${a.code}" title="Đổi trạng thái lịch">${icon('clock')}<span>Trạng thái</span></button>${!isConf?`<button class="action-btn action-btn-deposit" data-action="admin-confirm-deposit" data-code="${a.code}" title="Quản trị duyệt cọc">${icon('check')}<span>Duyệt cọc</span></button>`:`<button class="action-btn action-btn-reset" data-action="admin-reset-deposit" data-code="${a.code}" title="Ghi phiếu hoàn tiền"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg><span>Hoàn cọc</span></button>`}</div></td></tr>`;
     }).join(''):'<tr><td colspan="7"><div class="empty-table">Chưa có lịch hẹn. Lịch khách đặt sẽ xuất hiện tại đây.</div></td></tr>'}</tbody></table></div>`;
   }
 
   function lineChart() {
     const days = Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);return localIso(d)});
-    const values = days.map(day=>state.appointments.filter(a=>a.date===day&&a.status!=='cancelled').reduce((n,a)=>n+Number(a.total||0),0));
-    const max = Math.max(...values,1);
-    const points = values.map((v,i)=>[i*95,150-(v/max)*112]);
-    return `<div class="chart"><div class="chart-line"><svg viewBox="0 0 600 180" role="img" aria-label="Doanh thu thực tế trong bảy ngày"><polyline fill="none" stroke="#7a1832" stroke-width="3" points="${points.map(p=>p.join(',')).join(' ')}"></polyline>${points.map(p=>`<circle cx="${p[0]}" cy="${p[1]}" r="5" fill="#7a1832"></circle>`).join('')}</svg></div></div>`;
+    const values = days.map(day => cashNet(actualCashEntries().filter(entry => transactionDay(entry) === day)));
+    const min = Math.min(0,...values), max = Math.max(...values,1), range = Math.max(1,max-min);
+    const points = values.map((value,index)=>[index*95,150-((value-min)/range)*112]);
+    return `<div class="chart"><div class="chart-line"><svg viewBox="0 0 600 180" role="img" aria-label="Thu ròng thực tế trong bảy ngày, tính theo ngày giao dịch"><polyline fill="none" stroke="#7a1832" stroke-width="3" points="${points.map(p=>p.join(',')).join(' ')}"></polyline>${points.map(p=>`<circle cx="${p[0]}" cy="${p[1]}" r="5" fill="#7a1832"></circle>`).join('')}</svg></div></div>`;
   }
   function barChart() {
     const total=Math.max(state.appointments.filter(a=>a.status!=='cancelled').length,1);
@@ -2693,28 +1886,7 @@
             <option value="cancelled" ${a.status === 'cancelled' ? 'selected' : ''}>Đã hủy</option>
           </select>
         </div>
-        <div class="field">
-          <label>Trạng thái thanh toán</label>
-          <select id="modal-edit-payment">
-            <option value="received" ${a.paymentStatus === 'received' ? 'selected' : ''}>Đã nhận cọc</option>
-            <option value="pending_verification" ${a.paymentStatus === 'pending_verification' ? 'selected' : ''}>Chờ đối soát</option>
-            <option value="unverified" ${a.paymentStatus === 'unverified' ? 'selected' : ''}>Chưa thanh toán</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>Tiền cọc (VNĐ)</label>
-          <input id="modal-edit-deposit" type="number" step="10000" value="${a.deposit || 0}">
-        </div>
-        <div class="field">
-          <label>Trạng thái hoàn cọc</label>
-          <select id="modal-edit-refund-status">
-            <option value="none" ${(!a.refundStatus || a.refundStatus === 'none') ? 'selected' : ''}>Không áp dụng</option>
-            <option value="pending" ${a.refundStatus === 'pending' ? 'selected' : ''}>Chờ hoàn</option>
-            <option value="approved" ${a.refundStatus === 'approved' ? 'selected' : ''}>Đã duyệt hoàn</option>
-            <option value="paid" ${a.refundStatus === 'paid' ? 'selected' : ''}>Đã hoàn tiền</option>
-            <option value="rejected" ${a.refundStatus === 'rejected' ? 'selected' : ''}>Từ chối hoàn</option>
-          </select>
-        </div>
+        <div class="field full"><label>Thanh toán đã đối soát</label><p>Thực nhận: <b>${money(a.finance?.netReceived ?? a.deposit)}</b> · Còn phải thu: <b>${money(a.finance?.remaining ?? Math.max(0, a.total - a.deposit))}</b></p><small>Ghi nhận thu hoặc hoàn tại mục Thu chi & tiền cọc để giữ lịch sử giao dịch.</small></div>
         <div class="field">
           <label>Tổng chi phí (VNĐ)</label>
           <input id="modal-edit-total" type="number" step="10000" value="${a.total || 0}">
@@ -3141,19 +2313,12 @@
   }
 
   function adminCustomers() {
-    const body = `<div class="toolbar"><input id="customer-search" placeholder="Tìm tên, số điện thoại, email..."><select><option>Tất cả khách hàng</option><option>Khách quay lại</option><option>Khách mới</option></select></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Khách hàng</th><th>Liên hệ</th><th>Số lần đặt</th><th>Tổng chi tiêu</th><th>Ghi chú</th><th style="min-width:120px;">Thao tác</th></tr></thead><tbody id="customer-body">${state.customers.map((c,i)=>`<tr><td><b>${c.name}</b></td><td>${c.phone}<br><small>${c.email}</small></td><td>${c.visits}</td><td>${money(c.spent)}</td><td>${c.note}</td><td><button class="action-btn action-btn-edit" data-action="edit-customer" data-index="${i}">${icon('edit')}<span>Chỉnh sửa</span></button></td></tr>`).join('')}</tbody></table></div>`;
+    const body = `<div class="toolbar"><input id="customer-search" placeholder="Tìm tên, số điện thoại, email..."><select><option>Tất cả khách hàng</option><option>Khách quay lại</option><option>Khách mới</option></select></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Khách hàng</th><th>Liên hệ</th><th>Số lần đặt</th><th>Tổng chi tiêu</th><th>Ghi chú</th><th style="min-width:120px;">Thao tác</th></tr></thead><tbody id="customer-body">${state.customers.map((c,i)=>`<tr><td><b>${c.name}</b></td><td>${c.phone}<br><small>${c.email}</small></td><td>${c.visits}</td><td>${money(c.spent)}</td><td>${c.note}</td><td><button class="action-btn action-btn-edit" data-action="edit-customer" data-index="${i}">${icon('edit')}<span>Chỉnh sửa</span></button><br>${adminLocations?.customerShortcut(c) || ''}</td></tr>`).join('')}</tbody></table></div>`;
     return adminShell('customers',body,'Khách hàng','Lịch sử đặt lịch, thông tin liên hệ và ghi chú phục vụ.',`<button class="btn" data-action="export-customers">${icon('download')} Xuất danh sách</button><button class="btn btn-dark" data-action="add-customer">${icon('plus')} Thêm khách hàng</button>`);
   }
 
   function adminPayments() {
-    const rows = state.appointments;
-    const currentMonth = localIso(new Date()).slice(0,7);
-    const received=rows.filter(r=>r.paymentStatus==='received' && String(r.updatedAt || r.createdAt || '').startsWith(currentMonth)).reduce((n,r)=>n+Number(r.deposit||0),0);
-    const pending=rows.filter(r=>r.paymentStatus==='pending_verification').length;
-    const refund=rows.filter(r=>r.status==='cancelled'&&r.deposit>0).reduce((n,r)=>n+Number(r.deposit),0);
-    const due=rows.filter(r=>r.status!=='cancelled').reduce((n,r)=>n+Math.max(0,Number(r.total)-Number(r.deposit||0)),0);
-    const body = `<section class="stat-grid"><div class="stat-card"><small>Đã nhận tháng này</small><strong class="numeric">${money(received)}</strong></div><div class="stat-card"><small>Chờ đối soát</small><strong class="numeric">${String(pending).padStart(2,'0')}</strong></div><div class="stat-card"><small>Cần hoàn</small><strong class="numeric">${money(refund)}</strong></div><div class="stat-card"><small>Còn phải thu</small><strong class="numeric">${money(due)}</strong></div></section><div class="toolbar"><input id="payment-search" placeholder="Tìm mã lịch hoặc khách hàng..."><select><option>Tất cả giao dịch</option><option>Đã nhận</option><option>Chờ đối soát</option><option>Hoàn cọc</option></select></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Mã lịch</th><th>Khách hàng</th><th>Số tiền</th><th>Thời gian tạo</th><th>Trạng thái</th><th style="min-width:140px;">Thao tác</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td class="numeric">${r.code}</td><td>${r.customer}</td><td><b class="numeric">${money(r.deposit||0)}</b></td><td class="numeric">${r.createdAt||'—'}</td><td><span class="badge ${r.paymentStatus==='received'?'success':'warning'}">${r.paymentStatus==='received'?'Đã nhận':r.paymentStatus==='pending_verification'?'Chờ đối soát':'Chưa thanh toán'}</span></td><td>${r.paymentStatus==='received'?`<button class="action-btn action-btn-view" data-action="payment-receipt" data-code="${r.code}">${icon('card')}<span>Biên nhận</span></button>`:`<button class="action-btn action-btn-deposit" data-action="admin-confirm-deposit" data-code="${r.code}">${icon('check')}<span>Duyệt cọc</span></button>`}</td></tr>`).join(''):'<tr><td colspan="6"><div class="empty-table">Chưa có giao dịch đặt cọc.</div></td></tr>'}</tbody></table></div>`;
-    return adminShell('payments',body,'Tiền cọc & thanh toán','Đối soát giao dịch, theo dõi công nợ và xử lý hoàn cọc.',`<button class="btn" data-action="export-payments">${icon('download')} Xuất giao dịch</button><button class="btn btn-dark" data-action="manual-payment">${icon('plus')} Ghi nhận thanh toán</button>`);
+    return adminShell('payments', financeAdmin?.html() || '<p role="status">Đang tải sổ thu chi…</p>', 'Thu chi & tiền cọc', 'Theo dõi từng khoản thu, hoàn tiền và số còn phải thu.');
   }
 
   function adminPromotions() {
@@ -3915,11 +3080,11 @@
 
   function adminReports() {
     const active=state.appointments.filter(a=>a.status!=='cancelled');
-    const revenue=active.reduce((n,a)=>n+Number(a.total||0),0);
-    const average=active.length?Math.round(revenue/active.length):0;
+    const revenue=state.appointments.reduce((sum,appointment)=>sum+Number(appointment.finance?.netReceived ?? appointment.deposit ?? 0),0);
+    const average=active.length?Math.round(active.reduce((sum,appointment)=>sum+Number(appointment.total||0),0)/active.length):0;
     const repeat=state.customers.length?Math.round(state.customers.filter(c=>c.visits>1).length/state.customers.length*100):0;
     const districts={};active.forEach(a=>{const key=a.district||'Chưa xác định';districts[key]=(districts[key]||0)+1});
-    const body = `<div class="toolbar"><select id="report-range"><option>30 ngày gần nhất</option><option>7 ngày gần nhất</option><option>Quý này</option></select><button class="btn btn-sm" data-action="refresh-report">Cập nhật</button></div><section class="stat-grid"><div class="stat-card"><small>Tổng doanh thu</small><strong class="numeric">${money(revenue)}</strong><span>Dữ liệu lịch không hủy</span></div><div class="stat-card"><small>Số lịch</small><strong class="numeric">${String(active.length).padStart(2,'0')}</strong><span>Lịch thực tế</span></div><div class="stat-card"><small>Giá trị trung bình</small><strong class="numeric">${money(average)}</strong></div><div class="stat-card"><small>Tỷ lệ quay lại</small><strong class="numeric">${repeat}%</strong></div></section><section class="admin-grid"><div class="admin-section"><h2>Doanh thu theo ngày</h2>${lineChart()}</div><div class="admin-section"><h2>Cơ cấu dịch vụ</h2>${barChart()}<h2 style="margin-top:28px">Khu vực phổ biến</h2>${Object.entries(districts).length?Object.entries(districts).sort((a,b)=>b[1]-a[1]).slice(0,4).map(r=>`<div class="summary-row"><span>${r[0]}</span><b class="numeric">${Math.round(r[1]/Math.max(active.length,1)*100)}%</b></div>`).join(''):'<div class="empty-table">Chưa có dữ liệu khu vực.</div>'}</div></section>`;
+    const body = `<div class="toolbar"><a class="btn" href="#/admin/payments">Xem sổ giao dịch & lọc kỳ thu chi →</a></div><section class="stat-grid"><div class="stat-card"><small>Tổng thực nhận</small><strong class="numeric">${money(revenue)}</strong><span>Số đã thu trừ số đã hoàn, gồm số dư cũ</span></div><div class="stat-card"><small>Số lịch</small><strong class="numeric">${String(active.length).padStart(2,'0')}</strong><span>Lịch thực tế</span></div><div class="stat-card"><small>Giá trị lịch trung bình</small><strong class="numeric">${money(average)}</strong></div><div class="stat-card"><small>Tỷ lệ quay lại</small><strong class="numeric">${repeat}%</strong></div></section><section class="admin-grid"><div class="admin-section"><h2>Thu ròng 7 ngày</h2>${lineChart()}</div><div class="admin-section"><h2>Cơ cấu dịch vụ</h2>${barChart()}<h2 style="margin-top:28px">Khu vực phổ biến</h2>${Object.entries(districts).length?Object.entries(districts).sort((a,b)=>b[1]-a[1]).slice(0,4).map(r=>`<div class="summary-row"><span>${r[0]}</span><b class="numeric">${Math.round(r[1]/Math.max(active.length,1)*100)}%</b></div>`).join(''):'<div class="empty-table">Chưa có dữ liệu khu vực.</div>'}</div></section>`;
     return adminShell('reports',body,'Báo cáo','Theo dõi doanh thu, dịch vụ và hành vi đặt lịch.',`<button class="btn btn-dark" data-action="export-report">${icon('download')} Xuất báo cáo</button>`);
   }
 
@@ -3936,17 +3101,20 @@
 
   function adminSettings() {
     const s=state.settings;
-    const input=(name,label,type='text')=>`<div class="field"><label>${label}</label><input name="${name}" type="${type}" value="${esc(s[name]||'')}"></div>`;
-    return adminShell('settings',`<form class="manage-card" data-form="settings"><h2>Thiết lập đặt lịch</h2><div class="form-grid">${input('bookingWindow','Số ngày mở lịch','number')}${input('deposit','Mức cọc tiêu chuẩn','number')}${input('travelFee','Phí di chuyển mặc định','number')}</div><h2 style="margin-top:30px">Tài khoản nhận cọc</h2><p>Chỉ nhập tài khoản thật do bạn quản lý. Khách sẽ nhận nội dung chuyển khoản theo mã lịch.</p><div class="form-grid">${input('bankName','Ngân hàng')}${input('bankAccount','Số tài khoản')}${input('bankOwner','Chủ tài khoản')}</div><h3>Mã QR nhận tiền của bạn</h3><p>Tải ảnh QR gốc từ ứng dụng ngân hàng. Ảnh sẽ hiển thị ở bước đặt cọc và chi tiết lịch hẹn.</p>${paymentQR()}<label class="btn">Tải / thay ảnh QR<input type="file" accept="image/png,image/jpeg,image/webp" data-payment-qr hidden></label><p>Đối soát thủ công tại mục Tiền cọc. Chưa kết nối thanh toán tự động hoặc MoMo.</p><button class="btn btn-dark">Lưu thiết lập</button></form><form class="manage-card" data-form="contact-settings" style="margin-top:25px"><h2>Thông tin liên hệ</h2><div class="form-grid"><div class="field"><label>Số điện thoại / Zalo</label><input name="phone" value="${esc(state.brand.phone==='0901 234 567'?'':state.brand.phone)}"></div><div class="field"><label>Email</label><input name="email" type="email" value="${esc(state.brand.email||'')}"></div></div><button class="btn btn-dark">Lưu thông tin liên hệ</button></form>`,'Cài đặt','Thiết lập lịch, tài khoản nhận tiền và thông tin liên hệ.');
+    const input=(name,label,type='text')=>{const seedBank=s.bankAccount==='0901234567'&&s.bankOwner==='NGUYEN HOAN';return `<div class="field"><label>${label}</label><input name="${name}" type="${type}" value="${esc(seedBank&&['bankAccount','bankOwner'].includes(name)?'':s[name]??'')}"></div>`;};
+    return adminShell('settings',`<form class="manage-card" data-form="settings"><h2>Thiết lập đặt lịch</h2><div class="form-grid">${input('bookingWindow','Số ngày mở lịch','number')}${input('deposit','Mức cọc tiêu chuẩn','number')}${input('travelFee','Phí di chuyển mặc định','number')}</div><h2 style="margin-top:30px">Tài khoản nhận cọc</h2><p>Chỉ nhập tài khoản thật do bạn quản lý. Khách sẽ nhận nội dung chuyển khoản theo mã lịch.</p><div class="form-grid">${input('bankName','Ngân hàng')}${input('bankAccount','Số tài khoản')}${input('bankOwner','Chủ tài khoản')}${input('bankCode','Mã ngân hàng VietQR (ví dụ MB, VCB)')}</div><h3>Mã QR nhận tiền của bạn</h3><p>Tải ảnh QR gốc từ ứng dụng ngân hàng. Ảnh sẽ hiển thị ở bước đặt cọc và chi tiết lịch hẹn.</p>${paymentQR()}<label class="btn">Tải / thay ảnh QR<input type="file" accept="image/png,image/jpeg,image/webp" data-payment-qr hidden></label><p>Đối soát thủ công tại mục Tiền cọc. Chưa kết nối thanh toán tự động hoặc MoMo.</p><button class="btn btn-dark">Lưu thiết lập</button></form><form class="manage-card" data-form="contact-settings" style="margin-top:25px"><h2>Thông tin liên hệ</h2><div class="form-grid"><div class="field"><label>Số điện thoại / Zalo</label><input name="phone" value="${esc(state.brand.phone==='0901 234 567'?'':state.brand.phone)}"></div><div class="field"><label>Email</label><input name="email" type="email" value="${esc(state.brand.email||'')}"></div></div><button class="btn btn-dark">Lưu thông tin liên hệ</button></form>`,'Cài đặt','Thiết lập lịch, tài khoản nhận tiền và thông tin liên hệ.');
   }
 
   function modal(title, content, confirmLabel = 'Lưu', onConfirm = '', confirmClass = 'btn-dark') {
     const isWide = content.includes('admin-preview-grid');
-    $('#modal-root').innerHTML = `<div class="modal-backdrop" role="presentation" data-action="modal-backdrop"><section class="modal ${isWide ? 'modal-wide' : ''}" role="dialog" aria-modal="true" aria-labelledby="modal-title"><h2 id="modal-title">${title}</h2><div>${content}</div><div class="modal-actions"><button class="btn" data-action="close-modal">Hủy</button><button class="btn ${confirmClass}" data-action="modal-confirm" data-confirm="${onConfirm}">${confirmLabel}</button></div></section></div>`;
+    adminLocations?.beforeRender($('#modal-root'));
+    const actions = !onConfirm || onConfirm === 'close-modal' ? `<button class="btn ${confirmClass}" data-action="close-modal">${confirmLabel === 'Lưu' ? 'Đóng' : confirmLabel}</button>` : `<button class="btn" data-action="close-modal">Hủy</button><button class="btn ${confirmClass}" data-action="modal-confirm" data-confirm="${onConfirm}">${confirmLabel}</button>`;
+    $('#modal-root').innerHTML = `<div class="modal-backdrop" role="presentation" data-action="modal-backdrop"><section class="modal ${isWide ? 'modal-wide' : ''}" role="dialog" aria-modal="true" aria-labelledby="modal-title"><h2 id="modal-title">${title}</h2><div>${content}</div><div class="modal-actions">${actions}</div></section></div>`;
     bindAdminRecordForm();
+    adminLocations?.mount(document);
     setTimeout(() => $('.modal input, .modal select, .modal textarea')?.focus(), 0);
   }
-  const closeModal = () => { $('#modal-root').innerHTML = ''; };
+  const closeModal = () => { adminLocations?.beforeRender($('#modal-root')); $('#modal-root').innerHTML = ''; };
 
   function downloadText(filename, content) {
     const blob = new Blob([content], {type:'text/plain;charset=utf-8'});
@@ -3954,6 +3122,25 @@
     a.href = URL.createObjectURL(blob); a.download = filename; a.click();
     setTimeout(()=>URL.revokeObjectURL(a.href),500);
   }
+
+  function exportAdminRecords(action) {
+    if (action === 'export-payments') return financeAdmin?.exportLedger();
+    const rows = action === 'export-report'
+      ? [['Mã chứng từ','Mã lịch','Loại','Tiền vào','Tiền ra','Thời gian giao dịch','Phương thức','Mã đối chiếu','Ghi chú'], ...(state.paymentTransactions || []).map(entry => [entry.id,entry.appointmentCode,({deposit:'Thu cọc',balance:'Thu phần còn lại',refund:'Hoàn tiền',opening:'Số dư chuyển sang',opening_refund:'Khoản hoàn chuyển sang'})[entry.kind] || entry.kind,['refund','opening_refund'].includes(entry.kind)?0:entry.amount,['refund','opening_refund'].includes(entry.kind)?entry.amount:0,entry.kind.startsWith('opening')?'Không xác định (dữ liệu cũ)':entry.occurredAt,entry.method,entry.reference,entry.note])]
+      : action === 'export-appointments'
+      ? [['Mã lịch','Khách hàng','Điện thoại','Ngày hẹn','Giờ','Địa chỉ','Tổng chi phí','Thực nhận', ...(adminLocations?.exportHeaders || [])], ...state.appointments.map(appointment => [appointment.code,appointment.customer,appointment.phone,appointment.date,appointment.time,[appointment.address,appointment.ward,state.bookingDetails?.[appointment.code]?.city].filter(Boolean).join(', '),appointment.total,appointment.finance?.netReceived ?? appointment.deposit,...(adminLocations?.exportColumns(appointment,state.bookingDetails?.[appointment.code]) || [])])]
+      : action === 'export-customers' ? [['Khách hàng','Điện thoại','Email','Số lần đặt','Ghi chú'], ...state.customers.map(customer => [customer.name,customer.phone,customer.email,customer.visits,customer.note])]
+      : [['Thời gian','Người thực hiện','Hành động','Đối tượng'], ...(state.audit || []).map(entry => [entry.time,entry.user,entry.action,entry.target])];
+    const quote = value => { const text = String(value ?? ''); return '"' + (/^[=+@\-\t\r]/.test(text) ? "'" : '') + text.replaceAll('"','""') + '"'; };
+    downloadText(action+'-'+localIso()+'.csv', '\uFEFF'+rows.map(row => row.map(quote).join(',')).join('\r\n'));
+  }
+
+  const transactionDay = entry => {
+    const date = new Date(entry.occurredAt);
+    return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date) : '';
+  };
+  const actualCashEntries = () => (state.paymentTransactions || []).filter(entry => ['deposit','balance','refund'].includes(entry.kind));
+  const cashNet = entries => entries.reduce((sum, entry) => sum + (entry.kind === 'refund' ? -1 : 1) * Number(entry.amount || 0), 0);
 
   // Progressive motion: content and navigation remain usable without animation APIs.
   let motionObserver = null;
@@ -3967,6 +3154,7 @@
     motionRoute = location.hash;
     const main = document.querySelector('.couture main');
     if (!main || new URLSearchParams(location.search).get('cmsPreview') === '1' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (main.querySelector('.policy-document, .support-desk, .support-article')) return;
     const cleanups = [];
     const animations = new Set();
     const animate = (node, frames, options) => {
@@ -4079,10 +3267,17 @@
     return '';
   }
 
+  let policyContentsCleanup = () => {};
+  function mountPolicyContents() {
+    policyContentsCleanup();
+    policyContentsCleanup = policyNavigation ? policyNavigation(document) : () => {};
+  }
+
   let lastRenderedPath = '';
 
   function render() {
     siteTools?.beforeRender();
+    adminLocations?.beforeRender($('#app'));
     const raw = location.hash.slice(1) || '/';
     const [path, queryString=''] = raw.split('?');
     const query = new URLSearchParams(queryString);
@@ -4091,8 +3286,9 @@
     const serviceFilter = path === '/services' ? query.get('filter') : null;
     const routeKey = serviceFilter && serviceFilter !== 'all' ? `/services/${serviceFilter}` : path;
     const routeChanged = routeKey !== lastRenderedPath;
+    const policyContentsOpen = !routeChanged && appRoot.querySelector('.policy-mobile-contents')?.open;
     const previousScroll = { x: window.scrollX, y: window.scrollY };
-    const activeField = typeof appRoot?.contains === 'function' && appRoot.contains(document.activeElement) && document.activeElement?.matches?.('input, textarea, select')
+    const activeField = typeof appRoot?.contains === 'function' && appRoot.contains(document.activeElement) && document.activeElement?.matches?.('input, textarea, select, [data-support-panel]')
       ? document.activeElement
       : null;
     const focusState = activeField ? {
@@ -4128,7 +3324,12 @@
       else if (path === '/admin/settings') html = adminSettings();
       else html = `<div class="page">${publicHeader()}<main class="help-wrap"><h1>Không tìm thấy trang</h1><a class="btn btn-dark" href="#/">Về trang chủ</a></main></div>`;
     }
+    bookingLocation?.beforeRender(path);
     appRoot.innerHTML = html;
+    if (policyContentsOpen) {
+      const contents = appRoot.querySelector('.policy-mobile-contents');
+      if (contents) contents.open = true;
+    }
     lastRenderedPath = routeKey;
     siteTools?.mount(path);
     if (path === '/admin/appointments' && query.get('code')) {
@@ -4136,7 +3337,6 @@
     }
     mountCoutureMotion(path);
     if (path === '/booking/deposit') {
-      initDepositTimer();
       initDepositSync();
     }
     document.title = path.startsWith('/admin') ? 'Quản trị — HOÀN' : 'HOÀN — Makeup Artist';
@@ -4156,54 +3356,29 @@
       }
       window.scrollTo(previousScroll.x, previousScroll.y);
     }
-  }
-
-  function initDepositTimer() {
-    if (typeof setInterval === 'undefined') return;
-    if (window._depositTimerInterval) clearInterval(window._depositTimerInterval);
-    let seconds = 15 * 60;
-    const el = document.querySelector ? document.querySelector('#deposit-timer') : null;
-    if (!el) return;
-    window._depositTimerInterval = setInterval(() => {
-      const target = document.querySelector ? document.querySelector('#deposit-timer') : null;
-      if (!target) { clearInterval(window._depositTimerInterval); return; }
-      if (seconds <= 0) {
-        clearInterval(window._depositTimerInterval);
-        target.textContent = '00:00';
-        return;
-      }
-      seconds--;
-      const m = String(Math.floor(seconds / 60)).padStart(2, '0');
-      const s = String(seconds % 60).padStart(2, '0');
-      target.textContent = `${m}:${s}`;
-    }, 1000);
+    mountPolicyContents();
+    bookingLocation?.mount(path);
+    adminLocations?.mount(document);
+    financeAdmin?.mount();
   }
 
   function initDepositSync() {
     if (typeof setInterval === 'undefined') return;
     if (window._depositSyncInterval) clearInterval(window._depositSyncInterval);
-    window._depositSyncInterval = setInterval(async () => {
-      if (location.hash !== '#/booking/deposit') {
-        clearInterval(window._depositSyncInterval);
-        return;
-      }
+    const update = async () => {
+      if (location.hash.split('?')[0] !== '#/booking/deposit') { clearInterval(window._depositSyncInterval); return; }
+      const { code, phone } = state.booking;
+      if (!code || !phone || depositPreparation) return;
       try {
-        const data = await api();
-        if (data && data.appointments) {
-          state.appointments = data.appointments;
-          const code = state.booking.code || (state.appointments[0]?.code);
-          const apt = state.appointments.find(a => a.code === code);
-          const isPaidNow = Boolean(apt && apt.paymentStatus === 'received' && Number(apt.deposit) > 0);
-          const isPendingNow = Boolean(apt && apt.paymentStatus === 'pending_verification');
-          if (isPaidNow !== !!state.booking.depositPaid || isPendingNow !== (state.booking.depositStatus === 'pending_verification')) {
-            state.booking.depositPaid = isPaidNow;
-            state.booking.depositStatus = isPaidNow ? 'received' : isPendingNow ? 'pending_verification' : null;
-            saveState();
-            render();
-          }
-        }
-      } catch(e){}
-    }, 1200);
+        const before = getAppointment(code);
+        const previous = JSON.stringify([before?.deposit,before?.paymentStatus,before?.finance,state.paymentInstructionsByCode?.[code]]);
+        const appointment = await lookupOwnBooking(code, phone);
+        if (location.hash.split('?')[0] !== '#/booking/deposit') return;
+        if (previous !== JSON.stringify([appointment.deposit,appointment.paymentStatus,appointment.finance,state.paymentInstructionsByCode?.[code]])) render();
+      } catch { /* Keep the last verified instructions until a retry succeeds. */ }
+    };
+    if (!state.paymentInstructionsByCode?.[state.booking.code]) update();
+    window._depositSyncInterval = setInterval(update, 7000);
   }
 
   let requestFilterState = { status: 'all', kind: 'all', search: '' };
@@ -4498,7 +3673,7 @@
     const form=event.target,kind=form.dataset.form;
     if(!['contact','booking-request','site-search','support-search','resolve-request','contact-settings','content'].includes(kind))return;
     event.preventDefault();event.stopImmediatePropagation();const data=Object.fromEntries(new FormData(form));
-    if(kind==='site-search'||kind==='support-search')return route('/'+(kind==='site-search'?'search':'support')+'?q='+encodeURIComponent(data.q||''));
+    if(kind==='site-search'||kind==='support-search')return route('/'+(kind==='site-search'?'search':'support')+'?q='+encodeURIComponent(data.q||'')+(kind==='support-search'&&data.category?'&category='+encodeURIComponent(data.category):''));
     if(kind==='contact-settings'){try{await api({action:'saveContent',key:'brand',value:{...state.brand,...data}});Object.assign(state.brand,data);toast('Đã lưu thông tin liên hệ');}catch(error){toast(error.message);}return;}
     if(kind==='content'){
       try {
@@ -4602,50 +3777,11 @@
       if(action==='start-booking'){
         startNewBooking();
       }else if(action==='admin-confirm-deposit'||action==='ct-admin-confirm-deposit'){
-        const c=el.dataset.code||bookingCode||'HOAN-MAU-001';
-        el.disabled=true;
-        try{
-          let a=getAppointment(c);
-          const dep=(a&&Number(a.deposit)>0)?Number(a.deposit):Number(state.settings.deposit||200000);
-          const res=await api({action:'updateAppointment',code:c,status:'confirmed',deposit:dep,paymentStatus:'received'});
-          if(a){
-            Object.assign(a,res.appointment||{status:'confirmed',paymentStatus:'received',deposit:dep});
-          }else{
-            a=res.appointment||{code:c,customer:state.booking.name||'Khách hàng',phone:state.booking.phone||'0901234567',serviceId:state.booking.serviceId||'party',date:state.booking.date||localIso(),time:state.booking.time||'10:00',address:'Đường Châu Văn Liêm, Phường Phú Đô, Nam Từ Liêm',total:700000,deposit:dep,status:'confirmed',paymentStatus:'received'};
-            state.appointments.unshift(a);
-          }
-          if(state.booking.code===c || bookingCode===c || !state.booking.code || (state.appointments[0] && state.appointments[0].code === c)){
-            state.booking.depositPaid=true;
-            state.booking.depositStatus='received';
-            state.booking.code=c;
-          }
-          saveState();
-          toast(`✓ Quản trị viên đã xác nhận cọc & duyệt lịch hẹn ${c}!`);
-          render();
-        }catch(err){
-          toast(err.message||'Lỗi khi xác nhận cọc');
-          el.disabled=false;
-        }
+        if (!financeAdmin) return toast('Đang tải sổ thu chi. Vui lòng thử lại.');
+        financeAdmin.open(el.dataset.code || state.booking.code || '', 'deposit');
       }else if(action==='admin-reset-deposit'||action==='ct-admin-reset-deposit'){
-        const c=el.dataset.code||bookingCode||'HOAN-MAU-001';
-        el.disabled=true;
-        try{
-          let a=getAppointment(c);
-          const res=await api({action:'updateAppointment',code:c,status:'pending',deposit:0,paymentStatus:'pending_verification'});
-          if(a){
-            Object.assign(a,res.appointment||{status:'pending',paymentStatus:'pending_verification',deposit:0});
-          }
-          if(state.booking.code===c || bookingCode===c || !state.booking.code || (state.appointments[0] && state.appointments[0].code === c)){
-            state.booking.depositPaid=false;
-            state.booking.depositStatus='pending_verification';
-          }
-          saveState();
-          toast(`↺ Đã chuyển lịch ${c} về trạng thái Chờ đối soát!`);
-          render();
-        }catch(err){
-          toast(err.message||'Lỗi khi chuyển trạng thái');
-          el.disabled=false;
-        }
+        if (!financeAdmin) return toast('Đang tải sổ thu chi. Vui lòng thử lại.');
+        financeAdmin.open(el.dataset.code || state.booking.code || '', 'refund');
       }else if(action==='ct-copy-transfer'){
         const val=document.getElementById('transfer-code-val')?.value||'';
         if(val){
@@ -4667,9 +3803,9 @@
       }else if(action==='ct-open-deposit-policy'){
         modal('Chính sách đặt cọc giữ lịch', `
           <div style="font-size:14px;line-height:1.6;color:#333;text-align:left;">
-            <p style="margin-bottom:12px;"><strong>1. Mức cọc tiêu chuẩn:</strong> Mức cọc là <strong>200.000đ</strong> cho mỗi lịch hẹn. Khoản cọc này đảm bảo chuyên viên dành trọn khung giờ phục vụ riêng cho bạn và sẽ được trừ 100% vào tổng chi phí dịch vụ.</p>
-            <p style="margin-bottom:12px;"><strong>2. Đối soát & Giữ chỗ:</strong> Khi bạn bấm <em>"Tôi đã chuyển khoản"</em>, hệ thống ghi nhận lịch ở trạng thái <em>"Chờ đối soát"</em>. Chuyên viên sẽ đối soát giao dịch và gửi xác nhận chính thức qua SMS/Zalo.</p>
-            <p style="margin-bottom:0;"><strong>3. Thời gian hoàn tất:</strong> Vui lòng chuyển khoản trong thời gian giữ chỗ 15 phút để đảm bảo khung giờ không bị giải phóng cho khách hàng khác.</p>
+            <p style="margin-bottom:12px;"><strong>1. Mức cọc tiêu chuẩn:</strong> Mức cọc là <strong>${money(state.booking.deposit ?? state.settings.deposit ?? 200000)}</strong> theo lịch hẹn đã tạo. Khoản cọc này đảm bảo chuyên viên dành trọn khung giờ phục vụ riêng cho bạn và sẽ được trừ 100% vào tổng chi phí dịch vụ.</p>
+            <p style="margin-bottom:12px;"><strong>2. Đối soát & Giữ chỗ:</strong> Khi bạn bấm <em>"Tôi đã chuyển khoản"</em>, hệ thống ghi nhận lịch ở trạng thái <em>"Chờ đối soát"</em>. Hoàn sẽ đối soát giao dịch và cập nhật xác nhận trên trang lịch hẹn.</p>
+            <p style="margin-bottom:0;"><strong>3. Thời gian hoàn tất:</strong> Lịch được xác nhận sau khi Hoàn đối soát khoản cọc và kiểm tra khung giờ.</p>
           </div>
         `, 'Đã hiểu', 'close-modal');
       }else if(action==='ct-open-reschedule-policy'){
@@ -4697,18 +3833,13 @@
           if (consent.focus) consent.focus();
           return;
         }
-        b.depositConsent=true;
-        b.depositReported=true;
-        b.depositStatus='pending_verification';
-
-        let a = getAppointment(b.code);
-        if(a){
-          a.paymentStatus = 'pending_verification';
-          try { api({action:'reportPayment', code: a.code}).catch(()=>{}); } catch(e){}
-        }
-        saveState();
-        toast('✓ Đã ghi nhận! Vui lòng chờ Hoàn kiểm tra và xác nhận cọc.');
-        render();
+        if (!b.code || !getAppointment(b.code)?.phone) return toast('Vui lòng tạo mã lịch trước khi báo chuyển khoản.');
+        el.disabled = true;
+        const result = await api({ action: 'reportPayment', code: b.code, phone: b.phone });
+        if (!result.appointment) throw new Error('Chưa gửi được thông báo chuyển khoản.');
+        Object.assign(getAppointment(b.code), result.appointment);
+        b.depositConsent = true; b.depositReported = true; b.depositStatus = 'pending_verification';
+        saveState(); render(); toast('Đã gửi thông báo. Hoàn sẽ kiểm tra giao dịch thực tế.');
       }else if(action==='ct-deposit-confirmed-proceed'){
         const consent = document.querySelector ? document.querySelector('#deposit-policy-consent') : null;
         if(consent && !consent.checked){
@@ -4724,39 +3855,37 @@
         route('/booking/deposit');
       }else if(action==='ct-contact-attach'){
         document.getElementById('contact-file-input')?.click();
+      }else if(action==='ct-prepare-deposit'){
+        el.disabled = true;
+        try { await prepareDepositBooking(true); render(); } catch (error) { render(); toast(error.message); }
       }else if(action==='ct-next'){
+
         const step=Number(el.dataset.step),form=document.querySelector('.ct-booking form');
+        if(step===3 && !bookingLocation?.validate()) return;
         if(form){
-          if (form.dataset.form === 'location') form.querySelectorAll('[data-location-search]').forEach(validateLocationSearchInput);
           if(!form.reportValidity())return;
           Object.assign(state.booking,Object.fromEntries(new FormData(form)));
           for(const box of form.querySelectorAll('input[type=checkbox][name]'))state.booking[box.name]=box.checked;
         }
         if(step===1&&service().contact)return route('/contact');
         if(step===2){if(!state.booking.time||slotUnavailable(state.booking.date,state.booking.time)||!state.settings.scheduleOpen)return toast('Vui lòng chọn một khung giờ còn trống.');}
-        if(step===3){state.booking.locationType='client';state.booking.travelFee=Number(state.settings.travelFee||50000);}
-        saveState();route(el.dataset.next);
+        if(step===3){state.booking.locationType='client';state.booking.district='';state.booking.travelFee=Math.max(0,Number(state.settings.travelFee??50000)||0);}
+        saveState();
+        if (step === 4) { el.disabled = true; el.textContent = 'Đang tạo mã lịch…'; await prepareDepositBooking(true); }
+        route(el.dataset.next);
       }else if(action==='ct-date'){state.booking.date=el.dataset.date;state.booking.time=defaultBookingTime(el.dataset.date);saveState();render();}
       else if(action==='ct-month'){const d=new Date((state.calendarMonth||state.booking.date).slice(0,7)+'-01T12:00:00');d.setMonth(d.getMonth()+Number(el.dataset.delta));state.calendarMonth=localIso(d);render();}
       else if(action==='look-book'){state.booking.serviceId=el.dataset.id;state.booking.style=el.dataset.style;saveState();route(service().contact?'/contact':'/booking/time');}
       else if(action==='ct-copy'){await navigator.clipboard.writeText(el.dataset.value);toast('Đã sao chép');}
-      else if(action==='ct-refresh'){await hydrateBackend();toast('Đã cập nhật trạng thái');}
+      else if(action==='ct-refresh'){const code=(location.hash.match(/^#\/booking\/([^/?]+)/)||[])[1];const appointment=code&&getAppointment(code);if(appointment?.phone){await lookupOwnBooking(code,appointment.phone);render();}else await hydrateBackend();toast('Đã cập nhật trạng thái');}
       else if(action==='ct-payment-report'){
         el.disabled=true;
         try {
           const requestedCode = el.dataset.code;
-          const latest = await api();
-          state.appointments = latest.appointments || [];
-          let appointment = state.appointments.find(item => item.code === requestedCode);
-          if (!appointment) {
-            const b = state.booking;
-            if (!b.name?.trim() || !b.phone?.trim() || !b.date || !b.time || !b.serviceId) throw new Error('Vui lòng hoàn tất thông tin đặt lịch trước khi báo chuyển khoản.');
-            const created = await api({ action: 'createAppointment', ...b, customer: b.name, paymentStatus: 'unverified' });
-            appointment = created.appointment;
-            state.appointments.unshift(appointment);
-            state.booking.code = appointment.code;
-          }
-          const result = await api({action:'reportPayment',code:appointment.code});
+          const phone = getAppointment(requestedCode)?.phone || verifiedBookings.get(requestedCode)?.appointment?.phone || (state.booking.code === requestedCode ? state.booking.phone : '');
+          if (!requestedCode || !phone) { route('/lookup'); throw new Error('Vui lòng tra cứu lịch bằng mã và số điện thoại trước khi báo chuyển khoản.'); }
+          const appointment = await lookupOwnBooking(requestedCode, phone);
+          const result = await api({action:'reportPayment',code:appointment.code,phone:appointment.phone});
           if (!result.appointment) throw new Error('Không thể gửi yêu cầu đối soát.');
           Object.assign(appointment, result.appointment);
           state.booking.depositReported = true;
@@ -4829,8 +3958,7 @@
         const response = await fetch('/api/data?code=' + encodeURIComponent(String(data.code || '')) + '&phone=' + encodeURIComponent(String(data.phone || '')));
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Chưa tìm thấy lịch phù hợp.');
-        state.appointments = [result.appointment, ...state.appointments.filter(item => item.code !== result.appointment.code)];
-        state.bookingDetails = { ...state.bookingDetails, [result.appointment.code]: result.bookingDetails || {} };
+        retainVerifiedBooking(result);
         route('/booking/' + result.appointment.code);
       } catch (error) {
         const status = form.querySelector('[role=status]');
@@ -4866,16 +3994,11 @@
   });
 
   document.addEventListener('input', (event) => {
+    if (event.target.matches('[data-support-search]')) { filterSupportAnswers(event.target.value); return; }
     if (event.target.tagName === 'SELECT') return;
-    if (event.target.matches('[data-location-search]')) {
-      event.target.setCustomValidity('');
-      refreshLocationDatalist(event.target);
-    }
-    const bookingForm=event.target.closest('form[data-form="info"], form[data-form="location"]');
-    if(bookingForm && event.target.name && !event.target.matches('[data-location-search]')) {
-      const nextValue=event.target.type==='checkbox'?event.target.checked:event.target.value;
-      if(bookingForm.dataset.form==='location' && ['address','city','district','ward'].includes(event.target.name) && state.booking[event.target.name]!==nextValue) resetLocationConfirmation();
-      state.booking[event.target.name]=nextValue;
+    const bookingForm=event.target.closest('form[data-form="info"]');
+    if(bookingForm && event.target.name) {
+      state.booking[event.target.name]=event.target.type==='checkbox'?event.target.checked:event.target.value;
       saveState();
     }
     const contentForm = event.target.closest('form[data-form="content"]');
@@ -4947,73 +4070,10 @@
     if (event.target.matches('[data-action="gallery-upload"]')) {
       toast('Đã chọn '+event.target.files.length+' ảnh. Ảnh sẽ xuất hiện sau khi đăng.');
     }
-    if (event.target.closest('form[data-form="info"], form[data-form="location"]') && event.target.name) {
-      const locationForm=event.target.closest('form[data-form="location"]');
-      const nextValue=event.target.type==='checkbox'?event.target.checked:event.target.value;
-      if(locationForm && ['address','city','district','ward'].includes(event.target.name) && state.booking[event.target.name]!==nextValue) resetLocationConfirmation();
-      if (!event.target.matches('[data-location-search]')) state.booking[event.target.name]=nextValue;
-
-      if (event.target.name === 'city') {
-        const matched = findCurrentProvince(event.target.value) || mapLegacyProvince(event.target.value);
-        if (!matched) {
-          validateLocationSearchInput(event.target);
-          event.target.reportValidity();
-          return;
-        }
-        state.booking.city = matched.name;
-        state.booking.district = '';
-        state.booking.ward = '';
-        event.target.value = matched.name;
-        event.target.setCustomValidity('');
-        for (const field of ['ward', 'district']) {
-          const dependentInput = locationForm?.querySelector(`[name="${field}"]`);
-          if (!dependentInput) continue;
-          dependentInput.value = '';
-          dependentInput.setCustomValidity('');
-          refreshLocationDatalist(dependentInput);
-          const count = dependentInput.closest('.mockup-location-search')?.querySelector('.mockup-location-count');
-          if (count) count.textContent = `${locationSearchOptions(field).length.toLocaleString('vi-VN')} mục`;
-        }
-        const wardHint = locationForm?.querySelector('[name="ward"]')?.closest('.mockup-field')?.querySelector('.mockup-location-hint');
-        if (wardHint) wardHint.textContent = `Hiển thị ${currentWards(matched.name).length.toLocaleString('vi-VN')} đơn vị trực thuộc ${provinceShortName(matched.name)}.`;
-        saveState();
-        return;
-      }
-
-      if (event.target.name === 'district') {
-        const matched = exactLocationCandidate('district', event.target.value);
-        if (event.target.value.trim() && !matched) {
-          validateLocationSearchInput(event.target);
-          event.target.reportValidity();
-          return;
-        }
-        state.booking.district = matched || '';
-        event.target.value = matched || '';
-        event.target.setCustomValidity('');
-        saveState();
-        return;
-      }
-
-      if (event.target.name === 'ward') {
-        const matched = exactLocationCandidate('ward', event.target.value);
-        if (!matched) {
-          validateLocationSearchInput(event.target);
-          event.target.reportValidity();
-          return;
-        }
-        state.booking.ward = matched;
-        event.target.value = matched;
-        event.target.setCustomValidity('');
-        saveState();
-        return;
-      }
-
+    if (event.target.closest('form[data-form="info"]') && event.target.name) {
+      state.booking[event.target.name]=event.target.type==='checkbox'?event.target.checked:event.target.value;
       saveState();
     }
-  });
-
-  document.addEventListener('focusin', event => {
-    if (event.target.matches('[data-location-search]')) refreshLocationDatalist(event.target);
   });
 
   function renderAdminRecordForm({ title = '', desc = '', price = 450000, duration = 60, image = 'natural.png', tag = 'Tự nhiên', serviceId = '', isService = true }) {
@@ -5073,7 +4133,8 @@
     }
     else if (action === 'go-step') {
       const form = document.querySelector('.ct-booking form');
-      if (form) {
+      if (location.hash.split('?')[0] === '#/booking/location' && ['/booking/info','/booking/deposit','/booking/confirm'].includes(el.dataset.target) && !bookingLocation?.validate()) return;
+      if (form && form.dataset.form !== 'location') {
         Object.assign(state.booking, Object.fromEntries(new FormData(form)));
         for (const box of form.querySelectorAll('input[type=checkbox][name]')) state.booking[box.name] = box.checked;
         saveState();
@@ -5090,7 +4151,7 @@
         location.hash.includes('/booking/service') ? 1 : 1
       );
       const form = document.querySelector('.ct-booking form');
-      if (form) {
+      if (form && form.dataset.form !== 'location') {
         Object.assign(state.booking, Object.fromEntries(new FormData(form)));
         for (const box of form.querySelectorAll('input[type=checkbox][name]')) state.booking[box.name] = box.checked;
         saveState();
@@ -5124,131 +4185,6 @@
       state.booking.time = el.dataset.time; saveState(); render();
     }
     else if (action === 'location-type') { state.booking.locationType = el.dataset.type; state.booking.travelFee = el.dataset.type==='artist'?0:50000; saveState(); render(); }
-    else if (action === 'detect-location') {
-      if (state.booking.isDetectingLocation) return;
-      state.booking.isDetectingLocation = true;
-      state.booking.locationError = '';
-      render();
-      toast('Đang xin quyền GPS để xác định vị trí của bạn...');
-
-      const failLocation = (message) => {
-        state.booking.isDetectingLocation = false;
-        state.booking.locationError = message;
-        saveState();
-        render();
-        toast(message);
-      };
-
-      const applyLocationResult = (data) => {
-        state.booking.isDetectingLocation = false;
-        if (!data || (!data.address && !data.fullAddress && !data.city)) {
-          failLocation('Đã lấy được tọa độ nhưng chưa đọc được địa chỉ. Vui lòng nhập địa chỉ bên dưới.');
-          return false;
-        }
-
-        let address = data.address || '';
-        let city = data.city || 'Hà Nội';
-        let district = data.district || '';
-        let ward = data.ward || '';
-
-        // Chuẩn hóa trường hợp dịch vụ bản đồ vẫn trả tên đơn vị trước sắp xếp.
-        if (address.includes('Châu Văn Liêm') || data.fullAddress?.includes('Châu Văn Liêm')) {
-          address = address || 'Đường Châu Văn Liêm';
-          city = 'Hà Nội';
-          district = 'Nam Từ Liêm';
-          ward = 'Phường Từ Liêm';
-        }
-        if (district === 'Từ Liêm' || district === 'Phường Từ Liêm') district = 'Nam Từ Liêm';
-        if (ward === 'Xuân Phong') ward = 'Phường Xuân Phương';
-        // Chuẩn hóa theo mô hình hành chính 2 cấp hiện hành. Tên tỉnh cũ được
-        // ánh xạ sang tỉnh/thành sau sáp nhập; quận/huyện chỉ lưu để đối chiếu.
-        const matchedCity = findCurrentProvince(city) || mapLegacyProvince(city);
-        if (matchedCity) city = matchedCity.name;
-
-        const matchedDistrict = exactLocationCandidate('district', district, city);
-        if (matchedDistrict) district = matchedDistrict;
-
-        const matchedWard = exactLocationCandidate('ward', ward, city);
-        if (matchedWard) ward = matchedWard;
-
-        const fullAddr = [address, ward, city].filter(Boolean).join(', ');
-
-        if (!address.trim()) {
-          if (city) state.booking.city = city;
-          if (district) state.booking.district = district;
-          if (ward) state.booking.ward = ward;
-          failLocation('Đã lấy được GPS nhưng chưa tìm thấy số nhà hoặc tên đường. Vui lòng nhập phần còn thiếu bên dưới.');
-          return false;
-        }
-
-        state.booking.detectedAddress = fullAddr;
-        state.booking.locationError = '';
-        state.booking.address = address;
-        state.booking.city = city;
-        state.booking.district = district;
-        state.booking.ward = ward;
-
-        saveState();
-        render();
-        toast('Đã xác định vị trí: ' + fullAddr);
-        return true;
-      };
-
-      if (!navigator.geolocation) {
-        failLocation('Thiết bị hoặc trình duyệt này không hỗ trợ GPS. Vui lòng nhập địa chỉ bên dưới.');
-        return;
-      }
-
-      if (!window.isSecureContext && !['localhost', '127.0.0.1'].includes(location.hostname)) {
-        failLocation('Định vị chỉ hoạt động trên kết nối HTTPS an toàn. Vui lòng mở lại website bằng HTTPS.');
-        return;
-      }
-
-      const requestPosition = options => new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, options));
-      let position;
-      try {
-        try {
-          position = await requestPosition({ enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
-        } catch (firstError) {
-          if (firstError?.code === 1) throw firstError;
-          position = await requestPosition({ enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
-        }
-      } catch (error) {
-        console.warn('Geolocation error:', error);
-        if (error?.code === 1) failLocation('Quyền định vị đang bị chặn. Hãy cho phép Vị trí trong cài đặt trình duyệt rồi thử lại.');
-        else if (error?.code === 3) failLocation('GPS phản hồi quá lâu. Hãy bật định vị trên thiết bị, di chuyển đến nơi thoáng hơn rồi thử lại.');
-        else failLocation('Thiết bị chưa cung cấp được vị trí. Hãy bật GPS rồi thử lại hoặc nhập địa chỉ bên dưới.');
-        return;
-      }
-
-      const lat = Number(position.coords.latitude);
-      const lon = Number(position.coords.longitude);
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-        failLocation('Tọa độ GPS không hợp lệ. Vui lòng thử lại hoặc nhập địa chỉ bên dưới.');
-        return;
-      }
-
-      try {
-        const res = await api({ action: 'reverseGeocode', lat, lon });
-        applyLocationResult(res);
-      } catch (apiError) {
-        try {
-          const bdcRes = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&localityLanguage=vi`);
-          if (!bdcRes.ok) throw new Error('Không đọc được địa chỉ.');
-          const bdc = await bdcRes.json();
-          const city = bdc.city || bdc.principalSubdivision || '';
-          applyLocationResult({
-            fullAddress: [bdc.locality, city].filter(Boolean).join(', '),
-            address: '',
-            city,
-            district: bdc.locality || '',
-            ward: ''
-          });
-        } catch (fallbackError) {
-          failLocation('Đã lấy được GPS nhưng dịch vụ địa chỉ đang tạm thời gián đoạn. Vui lòng nhập địa chỉ bên dưới.');
-        }
-      }
-    }
     else if (action === 'payment-method') { state.booking.payment = el.dataset.method; saveState(); render(); }
     else if (action === 'complete-booking') {
       const b=state.booking;
@@ -5261,6 +4197,11 @@
       const origText = el.textContent;
       el.textContent='Đang gửi yêu cầu...';
       try {
+        if (b.code && getAppointment(b.code)?.phone) {
+          if (b.serverBookingFingerprint && b.serverBookingFingerprint !== bookingFingerprint(b)) { toast('Lịch đã được gửi trước đó. Vui lòng gửi yêu cầu thay đổi tại trang lịch hẹn.'); route('/booking/' + b.code); return; }
+          bookingCode = b.code; saveState(); route('/booking/success'); return;
+        }
+        requireBookingLocation(b);
         const result=await api({action:'createAppointment',...b,customer:b.name,paymentStatus:b.depositReported?'pending_verification':'not_paid'});
         bookingCode=result.appointment.code;
         try { if (!isPreview) localStorage.setItem('hoanLastBookingCode',bookingCode); } catch {}
@@ -5275,16 +4216,19 @@
     else if (action === 'save-look') { el.textContent = '♥ Đã lưu phong cách'; toast('Đã lưu phong cách vào lịch đặt'); }
     else if (action === 'gallery-filter') route('/gallery?filter='+el.dataset.filter);
     else if (action === 'accordion') { const open = el.getAttribute('aria-expanded')==='true'; el.setAttribute('aria-expanded', String(!open)); el.lastElementChild.textContent = open?'+':'−'; el.nextElementSibling.classList.toggle('open',!open); }
-    else if (action === 'policy-toggle') {
-      const item = el.closest('.ct-protocol-item');
-      if (item) {
-        const isOpen = item.classList.toggle('is-open');
-        el.setAttribute('aria-expanded', String(isOpen));
-        const indicator = el.querySelector('.toggle-icon');
-        if (indicator) indicator.textContent = isOpen ? '−' : '+';
-        const body = item.querySelector('.protocol-body');
-        if (body) body.hidden = !isOpen;
+    else if (action === 'support-select') {
+      const mobile = window.matchMedia('(max-width: 700px)').matches;
+      selectSupportAnswer(el.dataset.id, { scroll: mobile, focus: mobile || event.detail === 0 });
+      return;
+    }
+    else if (action === 'policy-scroll') {
+      const contents = el.closest('.policy-mobile-contents');
+      if (contents) {
+        contents.open = false;
+        if (event.detail === 0) contents.querySelector('summary').focus({ preventScroll: true });
       }
+      document.getElementById('policy-'+el.dataset.id)?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
+      return;
     }
     else if (action === 'policy-tab') route('/policies?tab='+el.dataset.tab);
     else if (action === 'filter-policy') {
@@ -5306,7 +4250,7 @@
     else if (action === 'support-lookup') route('/booking/'+($('#support-code')?.value || bookingCode));
     else if (action === 'add-calendar') { const s=service(); const start=state.booking.date.replaceAll('-','')+'T'+state.booking.time.replace(':','')+'00'; location.href=`data:text/calendar;charset=utf-8,BEGIN:VCALENDAR%0AVERSION:2.0%0ABEGIN:VEVENT%0ADTSTART:${start}%0ASUMMARY:${encodeURIComponent(s.name+' - HOÀN')}%0AEND:VEVENT%0AEND:VCALENDAR`; }
     else if (action === 'download-confirmation') downloadText('xac-nhan-'+bookingCode+'.txt','XÁC NHẬN LỊCH HẸN\\nMã: '+bookingCode+'\\nDịch vụ: '+service().name+'\\nNgày: '+dateLabel()+' '+state.booking.time);
-    else if (action === 'download-receipt') downloadText('bien-nhan-'+bookingCode+'.txt','BIÊN NHẬN ĐẶT CỌC\\nMã lịch: '+bookingCode+'\\nĐã nhận: '+money(state.booking.deposit)+'\\nMã giao dịch: MB2409120930');
+    else if (action === 'download-receipt') route('/booking/'+bookingCode+'/receipt');
     else if (action === 'print') window.print();
     else if (action === 'confirm-reschedule') { try{const a=getAppointment(el.dataset.code);const result=await api({action:'updateAppointment',code:a.code,date:'2026-09-19',time:'10:00'});Object.assign(a,result.appointment);toast('Đổi lịch thành công');route('/booking/'+a.code);}catch(error){toast(error.message)} }
     else if (action === 'confirm-cancel') { if (!$('#cancel-confirm')?.checked) return toast('Vui lòng xác nhận điều kiện hủy lịch'); try{const a=getAppointment(el.dataset.code);const result=await api({action:'updateAppointment',code:a.code,status:'cancelled'});Object.assign(a,result.appointment);toast('Đã hủy lịch hẹn');route('/booking/'+a.code);}catch(error){toast(error.message)} }
@@ -5346,9 +4290,9 @@
             <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Số điện thoại</span><b class="numeric">${a.phone || '—'}</b></div>
             <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Dịch vụ</span><b>${s.name} (${dur} phút)</b></div>
             <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Thời gian</span><b class="numeric">${a.time} – ${endTime}, ${a.date}</b></div>
-            <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Địa điểm</span><b>${a.address || a.district || 'Tại Studio HOÀN'}</b></div>
+            ${adminLocations?.html(a, state.bookingDetails?.[a.code]) || `<div class="summary-row"><span>Địa điểm</span><b>${esc(a.address || a.district || 'Chưa cung cấp địa chỉ')}</b></div>`}
             <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Tổng chi phí</span><b class="numeric">${money(a.total)}</b></div>
-            <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Tiền cọc</span><b class="numeric">${a.deposit > 0 ? 'Đã nhận ' + money(a.deposit) : 'Chờ đối soát'}</b></div>
+            <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Thực nhận sau hoàn</span><b class="numeric">${money(a.finance?.netReceived ?? a.deposit)}</b></div>
             ${a.note ? `<div style="background:#f9fafb;padding:8px 12px;border-radius:6px;font-size:13px;color:#4b5563;"><b>Ghi chú:</b> ${esc(a.note)}</div>` : ''}
             <div style="display:flex;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6;flex-wrap:wrap;">
               <button class="btn btn-sm btn-dark" data-action="admin-status" data-code="${a.code}">Đổi trạng thái</button>
@@ -5582,9 +4526,9 @@
       }
     }
     else if (action === 'block-time') modal('Chặn khung giờ',`<div class="form-grid"><div class="field"><label>Ngày</label><input id="modal-block-date" type="date" value="${localIso()}"></div><div class="field"><label>Giờ bắt đầu</label><input id="modal-block-time" type="time" value="07:00"></div></div><div class="field"><label>Lý do</label><input id="modal-block-reason" value="Việc cá nhân"></div>`,'Chặn giờ','block-time');
-    else if (action === 'manual-payment') { const paymentCode=el.dataset.code || (bookingCode==='CHƯA TẠO'?'':bookingCode);modal('Ghi nhận thanh toán',`<div class="field"><label>Mã lịch</label><input id="modal-payment-code" value="${paymentCode}"></div><div class="field"><label>Số tiền</label><input id="modal-payment-amount" type="number" value="${state.settings.deposit||200000}"></div>`,'Ghi nhận','manual-payment'); }
+    else if (action === 'manual-payment') { financeAdmin ? financeAdmin.open(el.dataset.code || '', 'deposit') : toast('Đang tải sổ thu chi. Vui lòng thử lại.'); }
     else if (action === 'payment-receipt') route('/booking/'+el.dataset.code+'/receipt');
-    else if (action?.startsWith('export')) downloadText(action+'.csv','HOÀN Makeup Artist\\nDữ liệu xuất ngày 04/09/2026');
+    else if (action?.startsWith('export')) exportAdminRecords(action);
     else if (action === 'refresh-report') toast('Đã cập nhật số liệu báo cáo');
     else if (action === 'edit-role' || action === 'role-members' || action === 'add-role') toast('Đã mở thiết lập phân quyền');
     else if (action === 'close-modal') closeModal();
@@ -5661,9 +4605,6 @@
       const date = $('#modal-edit-date')?.value;
       const time = $('#modal-edit-time')?.value;
       const status = $('#modal-edit-status')?.value;
-      const paymentStatus = $('#modal-edit-payment')?.value;
-      const refundStatus = $('#modal-edit-refund-status')?.value;
-      const deposit = Number($('#modal-edit-deposit')?.value || 0);
       const total = Number($('#modal-edit-total')?.value || 0);
       const address = $('#modal-edit-address')?.value?.trim();
       const note = $('#modal-edit-note')?.value?.trim();
@@ -5681,9 +4622,6 @@
           date,
           time,
           status,
-          paymentStatus,
-          refundStatus,
-          deposit,
           total,
           address,
           note
@@ -5854,10 +4792,7 @@
       saveState();
       route(service().contact ? '/contact' : '/booking/time');
     }
-    else if (action === 'manual-payment') {
-      try { const code=$('#modal-payment-code').value.trim();const result=await api({action:'updateAppointment',code,deposit:Number($('#modal-payment-amount').value)});const a=getAppointment(code);if(a)Object.assign(a,result.appointment);toast('Đã ghi nhận tiền cọc vào dữ liệu thật'); }
-      catch(error){toast(error.message);return;}
-    }
+
     closeModal(); render();
   }
 
@@ -5916,18 +4851,44 @@
     if (event.key && !['hoanDepositSyncTrigger', 'hoanMakeupDraft', 'hoanLastBookingCode'].includes(event.key)) return;
     const currentRoute = (location.hash.slice(1) || '/').split('?')[0];
     if (currentRoute === '/admin/content' || currentRoute === '/admin/content-pages') return;
+    const currentBooking = state.booking;
     state = loadState();
+    if (currentRoute.startsWith('/booking/')) state.booking = currentBooking;
     if (typeof window !== 'undefined') window.state = state;
     await hydrateBackend(true);
     render();
   });
   if (!location.hash) location.hash = '#/';
   if (typeof document.createElement === 'function' && location.origin) {
+    import('/policy-navigation.js?v=1.0').then(({ mountPolicyNavigation }) => {
+      policyNavigation = mountPolicyNavigation;
+      mountPolicyContents();
+    }).catch(error => console.error('Không tải được mục lục chính sách:', error));
+    import('/admin-location.js?v=3.5').then(({ createAdminLocations }) => {
+      adminLocations = createAdminLocations({ getState: () => state, modal, toast });
+      window.HoanAdminLocations = adminLocations;
+      if (location.hash.startsWith('#/admin')) render();
+    }).catch(error => console.error('Không tải được bản đồ quản trị:', error));
+    import('/finance-admin.js?v=2.0').then(({ createFinanceAdmin }) => {
+      financeAdmin = createFinanceAdmin({ getState: () => state, api, refresh: () => hydrateBackend(), toast, esc, money });
+      window.HoanFinanceAdmin = financeAdmin;
+      if (location.hash.startsWith('#/admin')) render();
+    }).catch(error => console.error('Không tải được quản lý thu chi:', error));
+    import('/booking-location.js?v=9.3').then(({ createBookingLocation }) => {
+      bookingLocation = createBookingLocation({ getBooking: () => state.booking, getService: service, getSettings: () => state.settings, save: saveState, render, esc, money });
+      if (location.hash.split('?')[0] === '#/booking/location') render();
+      return bookingLocation.load();
+    }).catch(() => {
+      if (location.hash.split('?')[0] === '#/booking/location') {
+        const status = document.querySelector('.ct-subtitle');
+        if (status) status.textContent = 'Chưa tải được biểu mẫu địa chỉ. Vui lòng tải lại trang.';
+      }
+    });
     import('/site-tools.js?v=146.0').then(({ createSiteTools }) => {
       siteTools = createSiteTools({ getState: () => state, render, renderPathHtml, hydrateBackend, adminShell, publicHeader, publicFooter, esc, toast, icon });
       siteTools.start();
     }).catch(error => console.error('Không tải được công cụ website:', error));
-    import('/scroll-enhancements.js?v=1.0').then(() => {
+    import('/scroll-enhancements.js?v=1.4').then(() => {
       if (typeof window.initHoanScroll === 'function') window.initHoanScroll();
     }).catch(() => {});
   }
