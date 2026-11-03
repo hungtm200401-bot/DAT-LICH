@@ -11,6 +11,13 @@ Project full-stack gồm website giới thiệu/đặt lịch và hệ thống q
 - Khung giờ khách đặt được kiểm tra trùng và phản ánh ngay trong trang “Lịch làm việc”.
 - Thống kê tổng quan, doanh thu và tỷ lệ dịch vụ được tính trực tiếp từ lịch thật.
 
+## Quy trình phát triển với Spec Kit
+
+Repo đã có skill Spec Kit cho Codex và nguyên tắc phát triển trong `AGENTS.md`.
+Các file này đi cùng code qua Git. Máy Windows muốn có công cụ dùng chung chỉ
+cần chạy `CAI_SPEC_KIT.bat` một lần; sau đó dùng `speckit-project "D:\Projects\DuAnKhac"`
+để áp dụng cho dự án khác. Xem [hướng dẫn Spec Kit](docs/SPEC_KIT.md).
+
 ## Chạy trên máy tính
 
 Yêu cầu Node.js `>=22.13.0`.
