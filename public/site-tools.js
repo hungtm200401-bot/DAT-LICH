@@ -1,3 +1,4 @@
+import { createVisitorWorkspace } from './visitor-workspace.js?v=1.0';
 import { packEditorHtml, bindPackEditor } from './cms/pack-editor.js';
 import { workspaceHtml, packManagerHtml } from './cms/workspace.js';
 import { outlineHtml } from './cms/outline.js';
@@ -60,6 +61,8 @@ export function createSiteTools(ctx) {
     try { drawStudioNavigation(); } catch (e) {}
   }
   const request = createCmsApi(adminHeaders);
+  const visitorWorkspace = createVisitorWorkspace({ request, esc, toast, adminShell:ctx.adminShell });
+  window.HoanVisitorAdmin = visitorWorkspace;
   const library = createContentLibrary({
     request, esc, toast, isAdmin, getState: ctx.getState, builtinMedia: studioMediaCatalog, adminHeaders,
     getContext: () => ({ pages, drafts: serverDrafts, path: selected, fields: draft, blocks: getBlocks() }),
@@ -1259,177 +1262,7 @@ export function createSiteTools(ctx) {
   const time = value => new Date(value).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false });
   const duration = seconds => `${Math.floor(Number(seconds || 0) / 60)} phút ${Number(seconds || 0) % 60} giây`;
   function visitorsPage() {
-    return ctx.adminShell('visitors', `
-      <div class="visit-page-container">
-        <div class="visit-overview-header">
-          <div class="visit-title-area">
-            <div class="visit-badge-live">
-              <span class="pulse-indicator"></span>
-              <strong>Dữ liệu lưu lượng trực tuyến thời gian thực</strong>
-            </div>
-            <p class="visit-subtitle">Theo dõi nguồn truy cập, thời gian hoạt động và hành trình khách hàng trên website (Giờ Việt Nam UTC+7).</p>
-          </div>
-          <div class="visit-status-chips">
-            <span class="status-chip">Cập nhật mỗi 10 giây</span>
-            <span class="status-chip">Nguồn Facebook & đa kênh</span>
-            <span class="status-chip">Lưu lịch sử 90 ngày</span>
-          </div>
-        </div>
-
-        <!-- Segmented Tab Navigation -->
-        <div class="visitor-tab-bar" role="tablist">
-          <button class="visitor-tab-btn ${activeVisitorTab === 'live' ? 'active' : ''}" data-action="set-visitor-tab" data-tab="live">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-            <span>Khách & Hành trình</span>
-            <span class="visitor-tab-badge" id="tab-live-badge">${report?.summary?.active || 0}</span>
-          </button>
-          <button class="visitor-tab-btn ${activeVisitorTab === 'analytics' ? 'active' : ''}" data-action="set-visitor-tab" data-tab="analytics">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-            <span>Biểu đồ & Báo cáo</span>
-          </button>
-          <button class="visitor-tab-btn ${activeVisitorTab === 'campaign' ? 'active' : ''}" data-action="set-visitor-tab" data-tab="campaign">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-            <span>Tạo link & Mã QR Hub</span>
-          </button>
-        </div>
-
-        <div class="toolbar visit-filters">
-          <label>
-            <span>Thời gian:</span>
-            <select id="visit-days">
-              ${[1, 7, 30, 90].map(value => `<option value="${value}" ${days === String(value) ? 'selected' : ''}>${value} ngày gần nhất</option>`).join('')}
-            </select>
-          </label>
-          <label>
-            <span>Nguồn:</span>
-            <select id="visit-source">
-              <option value="">Tất cả nguồn</option>
-              <option value="facebook" ${source === 'facebook' ? 'selected' : ''}>Facebook & MXH</option>
-              <option value="direct" ${source === 'direct' ? 'selected' : ''}>Trực tiếp</option>
-            </select>
-          </label>
-          <label class="active-toggle-label">
-            <input id="visit-active" type="checkbox" ${onlyActive ? 'checked' : ''}>
-            <span>Chỉ khách đang online</span>
-          </label>
-          <div class="filter-actions-group">
-            <button class="btn btn-refresh" data-visit-admin="refresh">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
-              <span>Làm mới</span>
-            </button>
-            <button class="btn btn-export" data-visit-admin="export">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              <span>Xuất CSV</span>
-            </button>
-          </div>
-        </div>
-
-        <div id="visit-report" aria-live="polite">
-          <div class="visit-loading">
-            <div class="loading-spinner"></div>
-            <span>Đang kết nối dữ liệu máy chủ…</span>
-          </div>
-        </div>
-
-        <div class="visit-pagination">
-          <button class="btn" data-visit-admin="prev">← Trang trước</button>
-          <span id="visit-page-label" class="page-indicator">Đang tải...</span>
-          <button class="btn" data-visit-admin="next">Trang sau →</button>
-        </div>
-
-        <section id="visit-detail" hidden></section>
-
-        <!-- Upgraded Campaign Link & QR Hub -->
-        <section class="cms-panel visit-share visitor-section-campaign" data-section="campaign" ${activeVisitorTab !== 'campaign' ? 'style="display:none;"' : ''}>
-          <div class="share-head-group">
-            <span class="share-tag">CHIẾN DỊCH QUẢNG BÁ & QR MARKETING</span>
-            <h2>Tạo link chia sẻ Facebook & Mã QR tiếp thị</h2>
-            <p>Chọn trang đích cần quảng bá, chọn kênh và đặt tên chiến dịch để phân biệt lưu lượng khách hàng tự động.</p>
-          </div>
-          
-          <div class="campaign-builder-grid">
-            <div class="campaign-form-col">
-              <form id="visit-share-form">
-                <label class="field">
-                  <span>Trang đích cần quảng bá:</span>
-                  <select name="targetPage" id="visit-target-page" class="admin-select-field">
-                    <option value="#/">Trang chủ — Giới thiệu tổng quan (#/)</option>
-                    <option value="#/services">Bảng giá & Tất cả dịch vụ (#/services)</option>
-                    <option value="#/services/bridal">Dịch vụ Makeup Cô dâu cao cấp (#/services/bridal)</option>
-                    <option value="#/services/party">Dịch vụ Makeup Dự tiệc & Sự kiện (#/services/party)</option>
-                    <option value="#/gallery">Bộ sưu tập tác phẩm thực tế (#/gallery)</option>
-                    <option value="#/about">Về Hoàn & Triết lý vẻ đẹp (#/about)</option>
-                    <option value="#/book">Đặt lịch hẹn trực tuyến (#/book)</option>
-                  </select>
-                </label>
-                <label class="field">
-                  <span>Website công khai:</span>
-                  <input name="website" type="url" placeholder="https://ten-mien-cua-ban.vn/" value="${esc(location.protocol === 'https:' && !location.hostname.includes('localhost') ? location.origin + '/' : 'https://hoanmakeup.com/')}" required>
-                </label>
-                <label class="field">
-                  <span>Tên bài đăng / chiến dịch:</span>
-                  <input name="campaign" placeholder="vi-du: makeup-co-dau-thang-9" maxlength="120" required>
-                </label>
-                <div class="field-split-row" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-                  <label class="field" style="margin-bottom:0;">
-                    <span>Tên khách Facebook (tự động nhận diện khi khách click):</span>
-                    <input name="fbName" placeholder="Ví dụ: Thảo Vy (Cô dâu tháng 10)" maxlength="80">
-                  </label>
-                  <label class="field" style="margin-bottom:0;">
-                    <span>Link Facebook cá nhân (tự động dẫn link đến khách):</span>
-                    <input name="fbUrl" placeholder="https://www.facebook.com/thaovy hoặc thaovy.bridal" maxlength="300">
-                  </label>
-                </div>
-                <div class="share-presets-row">
-                  <span class="presets-label">Gợi ý nhanh:</span>
-                  <span class="share-chip" role="button" tabindex="0" data-action="set-campaign-preset" data-source="facebook" data-val="facebook-post-co-dau">Bài viết Facebook</span>
-                  <span class="share-chip" role="button" tabindex="0" data-action="set-campaign-preset" data-source="instagram" data-val="instagram-bio-link">Link Bio Instagram</span>
-                  <span class="share-chip" role="button" tabindex="0" data-action="set-campaign-preset" data-source="tiktok" data-val="tiktok-video-review">Video TikTok</span>
-                  <span class="share-chip" role="button" tabindex="0" data-action="set-campaign-preset" data-source="zalo" data-val="zalo-tu-van-khach">Tư vấn Zalo</span>
-                </div>
-                <button class="btn btn-dark" type="submit">
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-                  <span>Tạo link & Mã QR</span>
-                </button>
-              </form>
-            </div>
-
-            <div class="campaign-output-col">
-              <div class="qr-preview-card">
-                <div class="qr-preview-header">
-                  <span class="qr-card-title">MÃ QR & LINK TIẾP THỊ</span>
-                  <span class="qr-card-badge">Quét tức thì</span>
-                </div>
-                <div class="qr-canvas-area" id="visit-qr-container">
-                  <div class="qr-placeholder">
-                    <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-                    <span>Mã QR sẽ hiển thị tại đây sau khi tạo link</span>
-                  </div>
-                </div>
-                <div class="visit-share-copy-row">
-                  <label class="field" style="width:100%;">
-                    <span>Đường dẫn UTM hoàn chỉnh:</span>
-                    <div class="copy-input-wrap">
-                      <input id="visit-share-link" readonly placeholder="Link UTM sau khi tạo sẽ hiển thị tại đây..." style="flex:1;">
-                      <button class="btn btn-dark" data-visit-admin="copy">Sao chép link</button>
-                      <button class="btn btn-download-qr" data-action="download-qr" disabled title="Tải mã QR SVG">Tải mã QR</button>
-                    </div>
-                  </label>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <details class="cms-auth">
-          <summary>Khóa quản trị hệ thống</summary>
-          <div style="display:flex;gap:10px;margin-top:10px;">
-            <input id="cms-admin-token" type="password" autocomplete="off" aria-label="Khóa quản trị" placeholder="Nhập khóa quản trị...">
-            <button class="btn" data-cms-action="token">Áp dụng khóa quản trị</button>
-          </div>
-        </details>
-      </div>
-    `, 'Khách truy cập website', 'Theo dõi nguồn vào, thời gian và hành trình trên website. Giờ Việt Nam (UTC+7).', '<a class="btn" href="#/admin/content">Nội dung website</a>');
+    return visitorWorkspace.html();
   }
   async function loadReport() {
     if (reportLoading || currentPath() !== '/admin/visitors') return;
@@ -2151,7 +1984,7 @@ export function createSiteTools(ctx) {
           }
         }
       }
-      if (path === '/admin/visitors') { drawReport(); void loadReport(); refreshTimer = setInterval(() => { if (!document.hidden) void loadReport(); }, 10000); }
+      if (path === '/admin/visitors') visitorWorkspace.mount();
       return;
     }
     linkedFields(path); applyContent(path); consentPanel(); trackPage();
@@ -3514,6 +3347,7 @@ export function createSiteTools(ctx) {
     finally { polling = false; }
   }
   function beforeRender() {
+    visitorWorkspace.unmount();
     if (!isPreview || !previewDraft) return;
     if (previewDraft.brand) ctx.getState().brand = previewDraft.brand;
     if (previewDraft.settings) ctx.getState().settings = previewDraft.settings;

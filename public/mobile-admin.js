@@ -60,9 +60,14 @@
   };
   const icon = name => `<svg class="ma-ico" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.chevron}</svg>`;
 
+  function notificationBell() {
+    const unread=(state().notifications||[]).filter(row=>row.status==='unread').length;
+    return '<a class="ma-icon-btn ma-bell" href="#/admin/notifications" aria-label="Thông báo, '+unread+' chưa đọc">'+icon('bell')+(unread?'<b class="ma-notice-count">'+(unread>99?'99+':unread)+'</b>':'')+'</a>';
+  }
+
   function top(title = '', back = '', home = false) {
-    if (home) return `<header class="ma-top ma-home"><a class="ma-brand" href="#/admin">HOÀN <small>ADMIN MOBILE</small></a><a class="ma-icon-btn ma-bell" href="#/admin/notifications" aria-label="Thông báo">${icon('bell')}</a></header>`;
-    return `<header class="ma-top"><a class="ma-icon-btn" href="${back || '#/admin'}" aria-label="Quay lại">${icon('back')}</a><div class="ma-top-title">${esc(title)}</div><a class="ma-icon-btn ma-bell" href="#/admin/notifications" aria-label="Thông báo">${icon('bell')}</a></header>`;
+    if (home) return `<header class="ma-top ma-home"><a class="ma-brand" href="#/admin">HOÀN <small>ADMIN MOBILE</small></a>${notificationBell()}</header>`;
+    return `<header class="ma-top"><a class="ma-icon-btn" href="${back || '#/admin'}" aria-label="Quay lại">${icon('back')}</a><div class="ma-top-title">${esc(title)}</div>${notificationBell()}</header>`;
   }
 
   function bottom(active = 'overview') {
@@ -243,15 +248,8 @@
       </form>`,{ title:'Lịch hẹn', back:`#/admin/appointments/${encodeURIComponent(a.code)}`, nav:false });
   }
 
-  function notifications(raw) {
-    const q = queryOf(raw), tab = q.get('tab') || 'all';
-    const entries = notificationEntries().filter(n => tab === 'unread' ? n.unread : true);
-    return shell(`<div class="ma-title-row"><h1>Thông báo</h1><button class="ma-link ma-icon-btn" data-ma-action="read-all">Đọc tất cả</button></div>
-      <div class="ma-underline-tabs"><a class="${tab === 'all' ? 'active':''}" href="#/admin/notifications?tab=all">Tất cả</a><a class="${tab === 'unread' ? 'active':''}" href="#/admin/notifications?tab=unread">Chưa đọc</a></div>
-      ${search('Tìm thông báo...')}
-      <div>${entries.map(notificationItem).join('') || '<div class="ma-empty"><h2>Không có thông báo</h2><p>Thông báo mới sẽ xuất hiện tại đây.</p></div>'}</div>
-      <a class="ma-settings-link" href="#/admin/notification-settings">${icon('sliders')}<span>Tùy chọn thông báo</span>${icon('chevron')}</a>
-    `,{ title:'', back:'#/admin', nav:false });
+  function notifications(_raw) {
+    return shell('<h1>Thông báo</h1>' + (window.HoanNoticeAdmin?.content({ mobile:true }) || '<p role="status">Đang tải thông báo…</p>'), { title:'', back:'#/admin', nav:false });
   }
 
   function notificationEntries() {
@@ -479,6 +477,7 @@
     if(path==='/admin' || path==='/admin/') return dashboard();
     if(path==='/admin/services') return mobileServices();
     if(path==='/admin/settings') return mobileSettings();
+    if(path==='/admin/visitors') return shell('<h1>Khách truy cập</h1>'+(window.HoanVisitorAdmin?.content()||'<p role="status">Đang tải thống kê…</p>'), { home:true, active:'overview' });
     if(path==='/admin/notifications') return notifications(raw);
     if(path==='/admin/notification-settings') return notificationSettings();
     if(path==='/admin/push') return pushPage();
@@ -541,11 +540,7 @@
         return;
       }
       if(action==='copy'){ await navigator.clipboard.writeText(el.dataset.value || ''); toast('Đã sao chép'); return; }
-      if(action==='read-all'){
-        await api({action:'markNotificationsRead'});
-        (state().notifications || []).forEach(notification => { notification.status = 'read'; });
-        ui.notificationRead=true; refresh(); toast('Đã đánh dấu các thông báo là đã đọc'); return;
-      }
+      if(action==='read-all'){ toast('Tích ô ở từng thông báo để đánh dấu đã đọc.'); return; }
       if(action==='cancel-sheet'){ cancelSheet(el.dataset.code); return; }
       if(action==='close-sheet'){ $('#modal-root').innerHTML=''; return; }
       if(action==='confirm-cancel'){

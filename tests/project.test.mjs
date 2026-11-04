@@ -38,11 +38,12 @@ test("prevents selecting an occupied booking time", async () => {
   assert.match(source, /el\.disabled \|\| slotUnavailable/);
 });
 
-test("lets admins mark all notifications as read", async () => {
-  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  assert.match(source, /mark-all-notifications-read/);
-  assert.match(source, /markNotificationsRead/);
-  assert.match(source, /Đã đánh dấu toàn bộ thông báo là đã đọc/);
+test("lets admins check one notification as read without a read-all control", async () => {
+  const source = await readFile(new URL("../public/admin-notifications.js", import.meta.url), "utf8");
+  assert.match(source, /data-notice-read/);
+  assert.match(source, /api\(\{action:'markNotificationsRead',id\}\)/);
+  assert.doesNotMatch(source, /data-action="mark-all-notifications-read"/);
+  assert.match(source, /Chưa đọc/);
 });
 
 test("applies approved reschedule requests to the appointment", async () => {

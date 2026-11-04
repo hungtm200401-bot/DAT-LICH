@@ -8,7 +8,7 @@
     // handlers to an already running legacy app. The version loader refreshes it.
     const existing = typeof document.getElementById === 'function' && document.getElementById('app');
     if (window.state && existing?.childElementCount) { window.__hoanAppBuild = 'legacy'; return; }
-    window.__hoanAppBuild = 'location-auto-fill-1';
+    window.__hoanAppBuild = 'admin-operations-1';
   }
 
   // Guaranteed critical schedule styles injection (bulletproof against browser CSS caching)
@@ -3068,14 +3068,7 @@
   }
 
   function adminNotifications() {
-    const notifications = (state.notifications || []).slice().sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-    const unread = notifications.filter(n => n.status === 'unread').length;
-    const appointments = notifications.filter(n => String(n.type || '').startsWith('appointment.')).length;
-    const consultations = notifications.filter(n => n.type === 'consultation.created').length;
-    const href = n => n.entityType === 'appointment' ? `#/admin/appointments?code=${encodeURIComponent(n.entityId || '')}` : '#/admin/requests';
-    const typeLabel = n => n.type === 'payment.reported' || n.type === 'payment.refund' ? 'Tiền cọc' : n.type === 'consultation.created' ? 'Tư vấn' : n.type === 'appointment.request' ? 'Yêu cầu lịch' : 'Lịch đặt';
-    const body = `<section class="stat-grid"><div class="stat-card"><small>Chưa đọc</small><strong class="numeric">${String(unread).padStart(2,'0')}</strong><span>Cần xử lý</span></div><div class="stat-card"><small>Lịch đặt</small><strong class="numeric">${String(appointments).padStart(2,'0')}</strong><span>Lịch mới hoặc tiền cọc</span></div><div class="stat-card"><small>Yêu cầu tư vấn</small><strong class="numeric">${String(consultations).padStart(2,'0')}</strong><span>Tách khỏi lịch đã đặt</span></div><div class="stat-card"><small>Tổng sự kiện</small><strong class="numeric">${String(notifications.length).padStart(2,'0')}</strong><span>Dữ liệu thật từ hệ thống</span></div></section><div class="table-wrap"><table class="data-table"><thead><tr><th>Loại</th><th>Thông báo</th><th>Chi tiết</th><th>Thời gian</th><th>Trạng thái</th></tr></thead><tbody>${notifications.length ? notifications.map(n => `<tr><td><span class="badge ${n.status === 'unread' ? 'warning' : ''}">${esc(typeLabel(n))}</span></td><td><b>${esc(n.title || 'Thông báo')}</b><div class="muted">${esc(n.message || '')}</div></td><td><a class="link" href="${href(n)}">${n.entityType === 'appointment' ? 'Mở lịch hẹn' : 'Mở yêu cầu'}</a></td><td class="numeric">${formatReqTime(n.createdAt)}</td><td>${n.status === 'unread' ? 'Chưa đọc' : 'Đã xem'}</td></tr>`).join('') : '<tr><td colspan="5"><div class="empty-table">Chưa có sự kiện cần thông báo.</div></td></tr>'}</tbody></table></div>`;
-    return adminShell('notifications',body,'Thông báo','Theo dõi đúng sự kiện lịch đặt, tiền cọc và yêu cầu tư vấn.', `<button class="btn" data-action="mark-all-notifications-read" ${unread ? '' : 'disabled'}>${icon('check')} Đánh dấu đã đọc</button>`);
+    return adminShell('notifications', window.HoanNoticeAdmin?.content() || '<p role="status">Đang tải thông báo…</p>', 'Thông báo', 'Tích từng thông báo để đánh dấu đã đọc.');
   }
 
   function adminReports() {
@@ -4444,16 +4437,7 @@
       route('/admin/notifications');
     }
     else if (action === 'mark-all-notifications-read') {
-      const unread = (state.notifications || []).filter(notification => notification.status === 'unread');
-      if (!unread.length) return;
-      try {
-        await api({ action: 'markNotificationsRead' });
-        state.notifications = state.notifications.map(notification => notification.status === 'unread' ? { ...notification, status: 'read', readAt: new Date().toISOString() } : notification);
-        render();
-        toast('Đã đánh dấu toàn bộ thông báo là đã đọc.');
-      } catch (error) {
-        toast(error.message || 'Không thể cập nhật thông báo.');
-      }
+      toast('Tích ô ở từng thông báo để đánh dấu đã đọc.');
     }
     else if (action === 'goto-profile') {
       route('/admin/permissions');
@@ -4884,9 +4868,14 @@
         if (status) status.textContent = 'Chưa tải được biểu mẫu địa chỉ. Vui lòng tải lại trang.';
       }
     });
-    import('/site-tools.js?v=146.0').then(({ createSiteTools }) => {
+    import('/admin-notifications.js?v=1.0').then(({ createAdminNotifications }) => {
+      window.HoanNoticeAdmin = createAdminNotifications({ getState: () => state, api, render, toast, esc });
+      if (location.hash.split('?')[0] === '#/admin/notifications') render();
+    }).catch(error => console.error('Không tải được thông báo:', error));
+    import('/site-tools.js?v=147.0').then(({ createSiteTools }) => {
       siteTools = createSiteTools({ getState: () => state, render, renderPathHtml, hydrateBackend, adminShell, publicHeader, publicFooter, esc, toast, icon });
       siteTools.start();
+      if (location.hash.split('?')[0] === '#/admin/visitors') render();
     }).catch(error => console.error('Không tải được công cụ website:', error));
     import('/scroll-enhancements.js?v=1.4').then(() => {
       if (typeof window.initHoanScroll === 'function') window.initHoanScroll();

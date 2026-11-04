@@ -1,0 +1,2 @@
+# Validation
+Start npm.cmd run dev; run node scripts/verify-admin-operations.mjs with TEST_BASE_URL if nondefault port. Fixtures only. Test individual checkbox and read-link distinction, badge desktop/mobile, reload, API rejection, concurrent reads, visitor page/filter/detail/errors/export/campaign and responsive overflow. Run build/core checks, review staged files and validate staged checkout before push.
