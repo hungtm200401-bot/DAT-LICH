@@ -1,4 +1,6 @@
 import vinext from "vinext";
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { defineConfig, type UserConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json" with { type: "json" };
 import { sites } from "./build/sites-vite-plugin.ts";
@@ -13,6 +15,9 @@ const { d1, r2 } = hostingConfig;
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
+const checkoutCacheKey = createHash("sha256")
+  .update(fileURLToPath(new URL(".", import.meta.url)))
+  .digest("hex").slice(0, 12);
 
 const getBindingConfig = (command: string) => ({
   main: "./worker/index.ts",
@@ -46,6 +51,9 @@ export default defineConfig(async ({ command }): Promise<UserConfig> => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   const config: UserConfig = {
+    // Linked node_modules must not let review checkouts overwrite live caches.
+    // Keep the node_modules/.vite prefix required by the CommonJS dev plugin.
+    cacheDir: fileURLToPath(new URL(`./node_modules/.vite-hoan-${checkoutCacheKey}-${command}/`, import.meta.url)),
     server: {
       host: "0.0.0.0",
       allowedHosts: true,
