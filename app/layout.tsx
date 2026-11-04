@@ -28,7 +28,7 @@ export default function RootLayout({
     <html lang="vi" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
-        <meta name="hoan-build" content="admin-operations-1" />
+        <meta name="hoan-build" content="admin-settings-1" />
         <script src="/client-bootstrap.js?v=5.7" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -50,6 +50,7 @@ export default function RootLayout({
         <link rel="stylesheet" href="/finance-admin.css?v=1.0" />
         <link rel="stylesheet" href="/policy-navigation.css?v=1.0" />
         <link rel="stylesheet" href="/admin-operations.css?v=1.0" />
+        <link rel="stylesheet" href="/admin-settings.css?v=1.0" />
       </head>
       <body suppressHydrationWarning>
         {children}

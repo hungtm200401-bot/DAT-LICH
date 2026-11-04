@@ -8,7 +8,7 @@
     // handlers to an already running legacy app. The version loader refreshes it.
     const existing = typeof document.getElementById === 'function' && document.getElementById('app');
     if (window.state && existing?.childElementCount) { window.__hoanAppBuild = 'legacy'; return; }
-    window.__hoanAppBuild = 'admin-operations-1';
+    window.__hoanAppBuild = 'admin-settings-1';
   }
 
   // Guaranteed critical schedule styles injection (bulletproof against browser CSS caching)
@@ -3093,9 +3093,7 @@
   }
 
   function adminSettings() {
-    const s=state.settings;
-    const input=(name,label,type='text')=>{const seedBank=s.bankAccount==='0901234567'&&s.bankOwner==='NGUYEN HOAN';return `<div class="field"><label>${label}</label><input name="${name}" type="${type}" value="${esc(seedBank&&['bankAccount','bankOwner'].includes(name)?'':s[name]??'')}"></div>`;};
-    return adminShell('settings',`<form class="manage-card" data-form="settings"><h2>Thiết lập đặt lịch</h2><div class="form-grid">${input('bookingWindow','Số ngày mở lịch','number')}${input('deposit','Mức cọc tiêu chuẩn','number')}${input('travelFee','Phí di chuyển mặc định','number')}</div><h2 style="margin-top:30px">Tài khoản nhận cọc</h2><p>Chỉ nhập tài khoản thật do bạn quản lý. Khách sẽ nhận nội dung chuyển khoản theo mã lịch.</p><div class="form-grid">${input('bankName','Ngân hàng')}${input('bankAccount','Số tài khoản')}${input('bankOwner','Chủ tài khoản')}${input('bankCode','Mã ngân hàng VietQR (ví dụ MB, VCB)')}</div><h3>Mã QR nhận tiền của bạn</h3><p>Tải ảnh QR gốc từ ứng dụng ngân hàng. Ảnh sẽ hiển thị ở bước đặt cọc và chi tiết lịch hẹn.</p>${paymentQR()}<label class="btn">Tải / thay ảnh QR<input type="file" accept="image/png,image/jpeg,image/webp" data-payment-qr hidden></label><p>Đối soát thủ công tại mục Tiền cọc. Chưa kết nối thanh toán tự động hoặc MoMo.</p><button class="btn btn-dark">Lưu thiết lập</button></form><form class="manage-card" data-form="contact-settings" style="margin-top:25px"><h2>Thông tin liên hệ</h2><div class="form-grid"><div class="field"><label>Số điện thoại / Zalo</label><input name="phone" value="${esc(state.brand.phone==='0901 234 567'?'':state.brand.phone)}"></div><div class="field"><label>Email</label><input name="email" type="email" value="${esc(state.brand.email||'')}"></div></div><button class="btn btn-dark">Lưu thông tin liên hệ</button></form>`,'Cài đặt','Thiết lập lịch, tài khoản nhận tiền và thông tin liên hệ.');
+    return adminShell('settings', window.HoanSettingsView?.content() || '<p role="status">Đang tải cài đặt…</p>', 'Cài đặt', 'Quản lý lịch hẹn, tài khoản nhận tiền và thông tin liên hệ.');
   }
 
   function modal(title, content, confirmLabel = 'Lưu', onConfirm = '', confirmClass = 'btn-dark') {
@@ -4866,6 +4864,16 @@
       if (location.hash.split('?')[0] === '#/booking/location') {
         const status = document.querySelector('.ct-subtitle');
         if (status) status.textContent = 'Chưa tải được biểu mẫu địa chỉ. Vui lòng tải lại trang.';
+      }
+    });
+    import('/admin-settings.js?v=1.0').then(({ createAdminSettings }) => {
+      window.HoanSettingsView = createAdminSettings({ getState: () => state, esc, icon, paymentQR });
+      if (location.hash.split('?')[0] === '#/admin/settings') render();
+    }).catch(error => {
+      console.error('Không tải được cài đặt:', error);
+      if (location.hash.split('?')[0] === '#/admin/settings') {
+        const status = document.querySelector('[role="status"]');
+        if (status) status.textContent = 'Chưa tải được cài đặt. Vui lòng tải lại trang.';
       }
     });
     import('/admin-notifications.js?v=1.0').then(({ createAdminNotifications }) => {

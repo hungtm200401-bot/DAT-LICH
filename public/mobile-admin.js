@@ -421,32 +421,7 @@
   }
 
   function mobileSettings() {
-    const s = state().settings || {};
-    const b = state().brand || {};
-    return shell(`
-      <h1>Cài đặt vận hành</h1>
-      <p style="margin:-2px 0 14px;color:#657083;font-size:12px">Tài khoản nhận cọc, hotline và nhận lịch</p>
-      <form class="ma-form" data-ma-form="save-mobile-settings">
-        <div class="ma-summary" style="margin-bottom:12px"><b>Tài khoản nhận tiền cọc</b></div>
-        <div class="ma-form-grid">
-          ${field('bankName','Ngân hàng','text',s.bankName || 'MB Bank (Ngân hàng Quân Đội)',true,'Tên ngân hàng')}
-          ${field('bankAccount','Số tài khoản','text',s.bankAccount==='0901234567'&&s.bankOwner==='NGUYEN HOAN'?'':s.bankAccount || '',true,'Số tài khoản nhận cọc')}
-          ${field('bankOwner','Chủ tài khoản','text',s.bankAccount==='0901234567'&&s.bankOwner==='NGUYEN HOAN'?'':s.bankOwner || '',true,'Tên chủ tài khoản')}
-        </div>
-
-        <div class="ma-summary" style="margin:16px 0 12px"><b>Chính sách cọc & Hotline</b></div>
-        <div class="ma-form-grid">
-          ${field('deposit','Mức cọc tối thiểu (VNĐ)','number',s.deposit || '200000',true,'Số tiền cọc')}
-          ${field('travelFee','Phí di chuyển / km (VNĐ)','number',s.travelFee || '50000',false,'Phí di chuyển')}
-          ${field('bookingWindow','Số ngày nhận lịch trước','number',s.bookingWindow || '60',true,'Số ngày')}
-          ${field('phone','Hotline / Zalo tư vấn','tel',b.phone || s.phone || '0988123456',true,'Số điện thoại tư vấn')}
-        </div>
-
-        <div class="ma-form-footer" style="margin-top:20px">
-          <button class="ma-btn primary" type="submit">Lưu cài đặt</button>
-        </div>
-      </form>
-    `, { title: 'Cài đặt', back: '#/admin/account', active: 'customers' });
+    return shell('<h1>Cài đặt</h1><p class="settings-mobile-intro">Lịch hẹn, tài khoản nhận tiền và liên hệ.</p>' + (window.HoanSettingsView?.content() || '<p role="status">Đang tải cài đặt…</p>'), { title: '', back: '#/admin/account', active: 'customers' });
   }
 
   function settingsLink(ico,label,href,status='') { return `<a class="ma-settings-link" href="${href.startsWith('#') ? href : '#'+href}">${icon(ico)}<span>${label}</span>${status?`<small>${status}</small>`:'<span></span>'}${icon('chevron')}</a>`; }
