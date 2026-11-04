@@ -9,7 +9,7 @@
 - [x] T004 Browser acceptance scripts and build/core checks.
 ## US3
 - [x] T005 Stage scoped changes and validate staged checkout independently of prior local edits.
-- [ ] T006 Commit and push the verified scoped changes to origin/main.
+- [x] T006 Commit and push the verified scoped changes to origin/main.
 
 Dependencies: T001 -> T002 -> T003 -> T004 -> T005. Shared files sequential; independent checks may run together. Requirements checklist 6/6 satisfied; no extension hooks configured. Runtime results recorded separately after execution.
 
@@ -20,3 +20,4 @@ Dependencies: T001 -> T002 -> T003 -> T004 -> T005. Shared files sequential; ind
 - Fixed visitor detail Escape handling locally to avoid invoking legacy CMS keyboard handlers outside this screen.
 - `git diff --cached --check` PASS; reviewed staged diff: no payments, booking, location, date picker, CMS behavior or tracking API changes. Shared integration functions transplanted onto HEAD; all existing unrelated working edits remain unstaged.
 - Remote main matched initial HEAD before commit; no force operations planned.
+- Commit `bce739e` pushed successfully to `origin/main`; Git reported `39b64e8..bce739e main -> main`.
