@@ -39,6 +39,13 @@ npm run dev
 
 Mở địa chỉ Vite hiển thị trong terminal, thường là `http://localhost:5173/`. Website dùng hash route; trang quản trị tại `/#/admin`, lịch làm việc tại `/#/admin/schedule`.
 
+Quản trị yêu cầu khóa thật ở cả localhost và LAN. Khởi tạo một lần bằng
+`node scripts/admin-key.mjs --init`, mở file `.dev.vars` trên máy để lấy giá trị
+`ADMIN_TOKEN`, khởi động lại dev rồi nhập khóa tại màn Đăng nhập quản trị.
+Trình duyệt nhận phiên có hạn 8 giờ. Bản local dùng loopback, bản online cần HTTPS.
+Giữ `.dev.vars` trên máy và đặt `ADMIN_TOKEN` online bằng secret của nền tảng.
+Xem [bảo vệ, sao lưu và khôi phục dữ liệu](docs/BAO_VE_DU_LIEU.md).
+
 Nếu PowerShell báo lỗi `npm.ps1 cannot be loaded`, dùng `npm.cmd` thay cho `npm` trong các lệnh trên, hoặc mở Command Prompt:
 
 ```bash
@@ -53,6 +60,14 @@ npm.cmd run dev
 - `db/schema.ts`: schema D1/Drizzle.
 - `drizzle/`: migration cơ sở dữ liệu.
 - `.openai/hosting.json`: cấu hình triển khai Sites và D1.
+
+## Địa chỉ đặt lịch
+
+Trang đặt lịch chỉ có **Dùng vị trí hiện tại** và bốn trường địa chỉ cũ, không
+hiển thị hoặc tải bản đồ. Khách có thể nhập hoàn toàn thủ công mà không cấp quyền GPS.
+GPS chỉ gợi ý địa chỉ khi dữ liệu đủ tin cậy; **Tiếp tục** xác nhận địa chỉ hiện tại.
+Sửa tỉnh/phường/đường sẽ hủy tọa độ cũ. Bản đồ quản trị vẫn giữ nguyên.
+Xem [hướng dẫn địa chỉ và GPS](docs/BOOKING_ADDRESS.md).
 
 ## Lưu ý thanh toán
 

@@ -1,10 +1,16 @@
 import { reverseGeocode } from "../../../lib/reverse-geocode.mjs";
 import { cleanBookingLocation } from "../../../public/location-utils.js";
 import { summarizePayments, validateMoneySettings, validatePayment, validateVndAmount } from "../../../public/finance-utils.js";
-import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { appointments, customers, paymentTransactions, scheduleSlots, services, siteContent } from "../../../db/schema";
-import { siteAdmin } from "../../../lib/site-admin";
+import { appointments, bookingSmsChallenges, bookingVerifiedPhones, customers, paymentTransactions, scheduleSlots, services, siteContent } from "../../../db/schema";
+import { privateHeaders, sameOrigin, siteAdmin } from "../../../lib/site-admin";
+import { limitSensitiveRequest, readBoundedObject } from "../../../lib/data-guards";
+import { appointmentTimeErrors, bookingAddressErrors, contactErrors, fieldFrom, formError, normalizePhone, samePhone, validEmail, validPhone } from "../../../lib/form-errors";
+import { dataErrorMessage } from "../../../lib/data-errors.mjs";
+import { bookingTimeError, validBookingDateTime } from "../../../lib/booking-validation.mjs";
+import { approvedBookingPhone, bookingPhoneRequired, bookingSmsEnabled, handleBookingSms } from "../../../lib/booking-sms";
+import { bookingGoogleEnabled, handleBookingGoogle } from "../../../lib/booking-google";
 
 const initialServices = [
   { id: "personal", name: "Trang điểm cá nhân", duration: 60, price: 450000, description: "Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.", enabled: true, contact: false, sortOrder: 1 },
@@ -40,20 +46,7 @@ const initialSettings = {
 };
 
 function messageFor(error: unknown) {
-  const message = error instanceof Error ? error.message : "Lỗi không xác định";
-  const ledgerMessages: Record<string,string> = {
-    PAYMENT_REFUND_EXCEEDS_RECEIVED: "Khoản hoàn vượt số tiền thực còn giữ của lịch này.",
-    PAYMENT_EXCEEDS_TOTAL: "Số tiền thu vượt phần còn phải thanh toán.",
-    PAYMENT_CANCELLED: "Lịch đã hủy chỉ có thể ghi nhận hoàn tiền.",
-    PAYMENT_HISTORY_EXISTS: "Lịch có lịch sử thu/hoàn tiền không được xóa. Hãy hủy lịch để giữ chứng từ.",
-    PAYMENT_TOTAL_BELOW_RECEIVED: "Tổng chi phí không được thấp hơn số tiền thực còn giữ.",
-    PAYMENT_IMMUTABLE: "Giao dịch đã ghi sổ không thể sửa hoặc xóa.",
-    payment_bank_reference_unique: "Mã giao dịch ngân hàng đã được ghi nhận. Hãy đối chiếu sổ giao dịch.",
-  };
-  for (const [code,label] of Object.entries(ledgerMessages)) if(message.includes(code)) return label;
-  return message.includes("no such table")
-    ? "Cơ sở dữ liệu chưa được khởi tạo. Hãy triển khai migration rồi thử lại."
-    : message;
+  return dataErrorMessage(error);
 }
 
 function text(value: unknown, fallback = "") {
@@ -80,36 +73,27 @@ function parseJson<T>(value: string | undefined, fallback: T): T {
   }
 }
 
-const initialAppointments: Array<typeof appointments.$inferInsert> = [];
-
-const initialScheduleSlots: Array<typeof scheduleSlots.$inferInsert> = [];
-
 async function ensureDefaults() {
   const db = getDb();
   const existingServices = await db.select({ id: services.id }).from(services).limit(1);
-  if (!existingServices.length) await db.insert(services).values(initialServices);
-
-  const contentRows = await db.select().from(siteContent);
+  if (!existingServices.length) await db.insert(services).values(initialServices).onConflictDoNothing();
+  const contentRows = await db.select({ key: siteContent.key }).from(siteContent).where(sql`${siteContent.key} IN ('brand', 'settings')`);
   const keys = new Set(contentRows.map((row) => row.key));
   const missing = [
     !keys.has("brand") ? { key: "brand", value: JSON.stringify(initialBrand) } : null,
     !keys.has("settings") ? { key: "settings", value: JSON.stringify(initialSettings) } : null,
   ].filter(Boolean) as Array<{ key: string; value: string }>;
-  if (missing.length) await db.insert(siteContent).values(missing);
+  if (missing.length) await db.insert(siteContent).values(missing).onConflictDoNothing();
+}
 
-  // Remove only explicitly known legacy test appointment codes.
-  try {
-    for (const code of ['HMA-090926-BQ0', 'HMA-090926-MQ3', 'HMA-100926-MS7', 'HMA-090926-BIQ', 'HMA-180926-6W2']) {
-      await db.delete(appointments).where(eq(appointments.code, code));
-    }
-  } catch { /* ignore */ }
-
+function notificationValues(notification: Record<string, string>) {
+  const id = "NT-" + crypto.randomUUID().slice(0, 8).toUpperCase();
+  const record = { id, ...notification, status: "unread", createdAt: new Date().toISOString() };
+  return { key: "notification:" + id, value: JSON.stringify(record), updatedAt: record.createdAt };
 }
 
 async function createNotification(db: ReturnType<typeof getDb>, notification: Record<string, string>) {
-  const id = "NT-" + crypto.randomUUID().slice(0, 8).toUpperCase();
-  const record = { id, ...notification, status: "unread", createdAt: new Date().toISOString() };
-  await db.insert(siteContent).values({ key: "notification:" + id, value: JSON.stringify(record), updatedAt: record.createdAt });
+  await db.insert(siteContent).values(notificationValues(notification));
 }
 
 async function snapshot() {
@@ -117,7 +101,7 @@ async function snapshot() {
   const db = getDb();
   const [serviceRows, appointmentRows, customerRows, slotRows, contentRows, paymentRows] = await Promise.all([
     db.select().from(services).orderBy(asc(services.sortOrder)),
-    db.select().from(appointments).orderBy(desc(appointments.createdAt)),
+    db.select().from(appointments).where(isNull(appointments.archivedAt)).orderBy(desc(appointments.createdAt)),
     db.select().from(customers).orderBy(desc(customers.updatedAt)),
     db.select().from(scheduleSlots).orderBy(asc(scheduleSlots.slotDate), asc(scheduleSlots.slotTime)),
     db.select().from(siteContent),
@@ -133,65 +117,148 @@ async function snapshot() {
     brand: parseJson(content.brand, initialBrand),
     settings: configuredPaymentSettings(parseJson(content.settings, initialSettings)),
     bookingDetails: Object.fromEntries(contentRows.filter(r=>r.key.startsWith("booking:")).map(r=>[r.key.slice(8), parseJson(r.value, {})])),
-    requests: contentRows.filter(r=>r.key.startsWith("request:")).map(r=>parseJson(r.value, {})),
+    requests: contentRows.filter(r=>r.key.startsWith("request:")).map(r=>parseJson<Record<string, unknown>>(r.value, {})).filter(record=>!record.archivedAt),
     notifications: contentRows.filter(r=>r.key.startsWith("notification:")).map(r=>parseJson(r.value, {})),
     serverTime: new Date().toISOString(),
   };
 }
 
+async function lookupBooking(code: string, phone: string) {
+  if (!code || !phone || code.length > 60 || phone.length > 30) {
+    return formError({
+      ...(!code || code.length > 60 ? { code: "Vui lòng nhập mã lịch hẹn." } : {}),
+      ...(!phone || phone.length > 30 ? { phone: "Vui lòng nhập số điện thoại đã dùng khi đặt lịch." } : {}),
+    });
+  }
+  const db = getDb();
+  const [appointment] = await db.select().from(appointments).where(and(eq(appointments.code, code), isNull(appointments.archivedAt))).limit(1);
+  if (!appointment || !samePhone(appointment.phone, phone)) {
+    return Response.json({ error: "Không tìm thấy lịch phù hợp." }, { status: 404, headers: privateHeaders });
+  }
+  const [details] = await db.select().from(siteContent).where(eq(siteContent.key, "booking:" + appointment.code)).limit(1);
+  const [paymentSettingsRow] = await db.select().from(siteContent).where(eq(siteContent.key, "settings")).limit(1);
+  const paymentSettings = configuredPaymentSettings(parseJson<Record<string,unknown>>(paymentSettingsRow?.value, initialSettings));
+  const bookingDetails = parseJson<Record<string,unknown>>(details?.value, {});
+  const paymentInstructions = {
+    bankName: text(paymentSettings.bankName), bankAccount: text(paymentSettings.bankAccount), bankOwner: text(paymentSettings.bankOwner),
+    bankCode: text(paymentSettings.bankCode), paymentQrUrl: text(paymentSettings.paymentQrUrl),
+    depositRequired: Math.max(0, Math.min(appointment.total, integer(bookingDetails.depositRequired, integer(paymentSettings.deposit, 200000)))),
+  };
+  const rows = await db.select().from(paymentTransactions).where(eq(paymentTransactions.appointmentCode, appointment.code)).orderBy(desc(paymentTransactions.occurredAt));
+  const { entries: _entries, ...finance } = summarizePayments(appointment, rows);
+  return Response.json({
+    appointment: { ...appointment, finance },
+    paymentHistory: rows.map(({ kind, amount, occurredAt }) => ({ kind, amount, occurredAt })),
+    bookingDetails, paymentInstructions,
+  }, { headers: privateHeaders });
+}
+
+const minutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+const publicSettingKeys = ["bookingWindow", "deposit", "travelFee", "scheduleOpen", "timezone"] as const;
+
+async function availableHours(date: string, serviceId: string) {
+  if (!validBookingDateTime(date, "00:00") || !serviceId || serviceId.length > 100) {
+    return Response.json({ error: "Ngày hoặc dịch vụ không hợp lệ." }, { status: 400, headers: privateHeaders });
+  }
+  const db = getDb();
+  const [settingsRow] = await db.select().from(siteContent).where(eq(siteContent.key, "settings")).limit(1);
+  const settings = parseJson<Record<string, unknown>>(settingsRow?.value, initialSettings);
+  if (settings.scheduleOpen === false || bookingTimeError(date, "23:59", settings.bookingWindow ?? 60)) {
+    return Response.json({ times: [] }, { headers: privateHeaders });
+  }
+  const [[selected], occupied, slots] = await Promise.all([
+    db.select({ duration: services.duration }).from(services)
+      .where(and(eq(services.id, serviceId), eq(services.enabled, true), eq(services.contact, false))).limit(1),
+    db.all<{ starts: number; ends: number }>(sql`SELECT starts, ends FROM occupied_booking_intervals WHERE slot_date = ${date}`),
+    db.select({ time: scheduleSlots.slotTime }).from(scheduleSlots).where(and(eq(scheduleSlots.slotDate, date), eq(scheduleSlots.status, "available"))),
+  ]);
+  if (!selected) return Response.json({ times: [] }, { headers: privateHeaders });
+  const hours = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0") + ":00");
+  const times = [...new Set([...hours, ...slots.map(slot => slot.time)])].sort().filter(time => {
+    if (bookingTimeError(date, time, settings.bookingWindow ?? 60)) return false;
+    const start = minutes(time);
+    const end = start + selected.duration;
+    return !occupied.some(interval => start < interval.ends && end > interval.starts);
+  });
+  return Response.json({ times }, { headers: privateHeaders });
+}
+
 export async function GET(request: Request) {
   try {
-    const url = new URL(request.url);
-    const lookupCode = text(url.searchParams.get("code")).toUpperCase();
-    const lookupPhone = text(url.searchParams.get("phone")).replace(/\s+/g, "");
-    if (lookupCode || lookupPhone) {
-      if (!lookupCode || !lookupPhone || lookupCode.length > 60 || lookupPhone.length > 30) {
-        return Response.json({ error: "Mã lịch hoặc số điện thoại không hợp lệ." }, { status: 400 });
-      }
-      await ensureDefaults();
-      const db = getDb();
-      const [appointment] = await db.select().from(appointments).where(eq(appointments.code, lookupCode)).limit(1);
-      if (!appointment || appointment.phone.replace(/\s+/g, "") !== lookupPhone) {
-        return Response.json({ error: "Không tìm thấy lịch phù hợp." }, { status: 404 });
-      }
-      const [details] = await db.select().from(siteContent).where(eq(siteContent.key, "booking:" + appointment.code)).limit(1);
-      const [paymentSettingsRow] = await db.select().from(siteContent).where(eq(siteContent.key,"settings")).limit(1);
-      const paymentSettings = configuredPaymentSettings(parseJson<Record<string,unknown>>(paymentSettingsRow?.value,initialSettings));
-      const bookingDetails = parseJson<Record<string,unknown>>(details?.value,{});
-      const paymentInstructions = {bankName:text(paymentSettings.bankName),bankAccount:text(paymentSettings.bankAccount),bankOwner:text(paymentSettings.bankOwner),bankCode:text(paymentSettings.bankCode),paymentQrUrl:text(paymentSettings.paymentQrUrl),depositRequired:Math.max(0,Math.min(appointment.total,integer(bookingDetails.depositRequired,integer(paymentSettings.deposit,200000))))};
-      const rows = await db.select().from(paymentTransactions).where(eq(paymentTransactions.appointmentCode,appointment.code)).orderBy(desc(paymentTransactions.occurredAt));
-      const {entries: _entries,...finance} = summarizePayments(appointment,rows);
-      return Response.json({ appointment:{...appointment,finance}, paymentHistory:rows.map(({kind,amount,occurredAt})=>({kind,amount,occurredAt})), bookingDetails, paymentInstructions }, { headers: { "Cache-Control": "no-store" } });
+    const params = new URL(request.url).searchParams;
+    if (params.has("code") || params.has("phone")) {
+      return Response.json({ error: "Tải lại trang để tra cứu lịch bằng biểu mẫu bảo mật." }, { status: 405, headers: privateHeaders });
     }
-
-    const data = await snapshot();
-    if (await siteAdmin(request)) return Response.json(data, { headers: { "Cache-Control": "no-store", "Vary": "Authorization" } });
-    const privateSettingKeys = new Set(["bankName", "bankAccount", "bankOwner"]);
-    const publicSettings = Object.fromEntries(Object.entries(data.settings).filter(([key]) => !privateSettingKeys.has(key)));
+    if (params.get("admin") === "1") {
+      if (!await siteAdmin(request)) return Response.json({ error: "Cần đăng nhập quản trị." }, { status: 401, headers: privateHeaders });
+      if (params.get("view") === "archive") {
+        const db = getDb();
+        const rawOffset = Number(params.get("offset"));
+        const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.min(100000, Math.trunc(rawOffset))) : 0;
+        const rows = await db.select({ code: appointments.code, customer: appointments.customer, date: appointments.date, time: appointments.time, archivedAt: appointments.archivedAt })
+          .from(appointments).where(isNotNull(appointments.archivedAt)).orderBy(desc(appointments.archivedAt), asc(appointments.code)).limit(26).offset(offset);
+        return Response.json({ appointments: rows.slice(0, 25), hasNext: rows.length > 25 }, { headers: privateHeaders });
+      }
+      return Response.json(await snapshot(), { headers: privateHeaders });
+    }
+    if (params.has("availability")) {
+      const limit = await limitSensitiveRequest(request, "availability");
+      return limit || await availableHours(text(params.get("availability")), text(params.get("service")));
+    }
+    await ensureDefaults();
+    const db = getDb();
+    const [serviceRows, contentRows] = await Promise.all([
+      db.select().from(services).where(eq(services.enabled, true)).orderBy(asc(services.sortOrder)),
+      db.select().from(siteContent).where(sql`${siteContent.key} IN ('brand', 'settings')`),
+    ]);
+    const content = Object.fromEntries(contentRows.map(row => [row.key, row.value]));
+    const settings = parseJson<Record<string, unknown>>(content.settings, initialSettings);
     return Response.json({
-      services: data.services,
-      appointments: data.appointments.map(({ code, date, time, serviceId, status }) => ({ code, date, time, serviceId, status })),
-      scheduleSlots: data.scheduleSlots,
-      brand: data.brand,
-      settings: publicSettings,
-      serverTime: data.serverTime,
-    }, { headers: { "Cache-Control": "no-store" } });
+      services: serviceRows,
+      brand: parseJson(content.brand, initialBrand),
+      settings: {
+        ...Object.fromEntries(publicSettingKeys.filter(key => Object.hasOwn(settings, key)).map(key => [key, settings[key]])),
+        bookingSmsEnabled: bookingSmsEnabled(),
+        bookingGoogleEnabled: bookingGoogleEnabled(),
+      },
+      serverTime: new Date().toISOString(),
+    }, { headers: privateHeaders });
   } catch (error) {
-    return Response.json({ error: messageFor(error) }, { status: 500 });
+    return Response.json({ error: messageFor(error) }, { status: 500, headers: privateHeaders });
   }
 }
 
 export async function POST(request: Request) {
+  if (!sameOrigin(request)) return Response.json({ error: "Nguồn yêu cầu không hợp lệ." }, { status: 403, headers: privateHeaders });
   try {
-    const payload = await request.json() as Record<string, unknown>;
+    let payload: Record<string, unknown>;
+    try { payload = await readBoundedObject(request, 256 * 1024); }
+    catch { return Response.json({ error: 'Dữ liệu yêu cầu không hợp lệ.' }, { status: 400, headers: privateHeaders }); }
     const action = text(payload.action);
     if (action === "reverseGeocode") return reverseGeocode(payload);
-    const db = getDb();
-    await ensureDefaults();
+    if (action === "validateBookingLocation") {
+      const fields = bookingAddressErrors(payload);
+      return Object.keys(fields).length ? formError(fields) : Response.json({ ok: true }, { headers: privateHeaders });
+    }
+    if (action === "lookupBooking") {
+      const limited = await limitSensitiveRequest(request, "appointment-access");
+      return limited || await lookupBooking(text(payload.code).toUpperCase(), normalizePhone(payload.phone));
+    }
+    if (action === "startBookingOtp" || action === "verifyBookingOtp") {
+      return await handleBookingSms(request, payload, action === "startBookingOtp" ? "start" : "check");
+    }
+    if (action === "startBookingGoogle" || action === "finishBookingGoogle") {
+      return await handleBookingGoogle(request, payload, action === "startBookingGoogle" ? "start" : "finish");
+    }
+    if (action === "createRequest" && payload.purpose === "booking-code-recovery") {
+      return Response.json({ error: "Trang lấy lại mã đã chuyển sang xác minh OTP. Vui lòng tải lại trang." }, { status: 410, headers: privateHeaders });
+    }
 
     const adminActions = [
       "updateAppointment",
       "deleteAppointment",
+      "archiveAppointment",
+      "restoreAppointment",
       "setScheduleSlot",
       "saveContent",
       "saveService",
@@ -201,74 +268,65 @@ export async function POST(request: Request) {
       "deleteRequest",
       "markNotificationsRead",
       "recordPayment",
+      "validateServicePack",
     ];
     if (adminActions.includes(action)) {
       if (!await siteAdmin(request)) {
-        return Response.json({ error: "Yêu cầu quyền quản trị để thực hiện thao tác này." }, { status: 401 });
+        return Response.json({ error: "Yêu cầu quyền quản trị để thực hiện thao tác này." }, { status: 401, headers: privateHeaders });
       }
     }
+    if (action === "validateServicePack") {
+      const title = text(payload.title);
+      if (!title) return formError({ title: "Vui lòng nhập tên gói dịch vụ." });
+      if (title.length > 140) return formError({ title: "Tên gói dịch vụ tối đa 140 ký tự." });
+      return Response.json({ ok: true }, { headers: privateHeaders });
+    }
+    if (action === "reportPayment" || (action === "createRequest" && text(payload.code))) {
+      if (!await siteAdmin(request)) {
+        const limited = await limitSensitiveRequest(request, "appointment-access");
+        if (limited) return limited;
+      }
+    }
+    if (action === "createAppointment" || (action === "createRequest" && !text(payload.code))) {
+      const limited = await limitSensitiveRequest(request, "appointment-create");
+      if (limited) return limited;
+    }
+    const db = getDb();
+    await ensureDefaults();
 
     if (action === "createAppointment") {
       const customer = text(payload.customer);
       const phone = text(payload.phone).replace(/\s+/g, "");
+      const email = text(payload.email);
       const serviceId = text(payload.serviceId);
       const date = text(payload.date);
       const time = text(payload.time);
-      if (!customer || !phone || !serviceId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) {
-        return Response.json({ error: "Vui lòng nhập đủ họ tên, số điện thoại, dịch vụ, ngày và giờ." }, { status: 400 });
+      const adminBooking = await siteAdmin(request);
+      const fields = { ...contactErrors(payload, "customer"), ...appointmentTimeErrors(date, time) };
+      if (!adminBooking && !email) fields.email = "Vui lòng nhập địa chỉ email.";
+      if (!serviceId) fields.serviceId = "Vui lòng chọn dịch vụ.";
+      if (payload.form === "booking-info") {
+        if (!text(payload.style)) fields.style = "Vui lòng chọn phong cách trang điểm.";
+        if (payload.consent !== true) fields.consent = "Vui lòng đồng ý chính sách đặt lịch và bảo mật.";
+        if (payload.locationType !== "artist") Object.assign(fields, bookingAddressErrors(payload));
       }
+      if (Object.keys(fields).length) return formError(fields);
       const [selectedService] = await db.select().from(services).where(eq(services.id, serviceId)).limit(1);
-      if (!selectedService?.enabled) return Response.json({ error: "Dịch vụ hiện không khả dụng." }, { status: 400 });
-      if (new Date(date+'T'+time+':00+07:00').getTime()<=Date.now()) return Response.json({error:'Vui lòng chọn thời gian trong tương lai.'},{status:400});
-      const dayBookings=await db.select().from(appointments).where(and(eq(appointments.date,date),ne(appointments.status,'cancelled'),ne(appointments.status,'completed')));
-      const allServices=await db.select().from(services);
-      const minutes=(t:string)=>Number(t.slice(0,2))*60+Number(t.slice(3));
-      const start=minutes(time),end=start+selectedService.duration;
-      const busy=dayBookings.some(a=>start<minutes(a.time)+(allServices.find(s=>s.id===a.serviceId)?.duration||90)&&end>minutes(a.time));
-      const dayBlocks=await db.select().from(scheduleSlots).where(and(eq(scheduleSlots.slotDate,date),eq(scheduleSlots.status,'blocked')));
-      const blocked=dayBlocks.some(a=>minutes(a.slotTime)>=start&&minutes(a.slotTime)<end);
-      if(busy||blocked)return Response.json({error:'Thời gian này đã có lịch hoặc bị chặn. Vui lòng chọn giờ khác.'},{status:409});
-
-      const suffix = crypto.getRandomValues(new Uint32Array(1))[0].toString(36).slice(-3).toUpperCase().padStart(3, "0");
-      const [year, month, day] = date.split("-");
-      const code = `HMA-${day}${month}${year.slice(-2)}-${suffix}`;
+      if (!selectedService?.enabled) return formError({ serviceId: "Dịch vụ hiện không khả dụng. Vui lòng chọn dịch vụ khác." });
       const [settingsRow] = await db.select().from(siteContent).where(eq(siteContent.key,"settings")).limit(1);
       const settings = parseJson<Record<string, unknown>>(settingsRow?.value, initialSettings);
+      const timeError = bookingTimeError(date, time, settings.bookingWindow ?? 60);
+      if (timeError) return formError({ time: timeError });
       if (settings.scheduleOpen === false) return Response.json({error:"Hiện đang tạm ngừng nhận lịch."},{status:409});
+      const needsVerification = bookingSmsEnabled() && !adminBooking;
+      const approval = needsVerification ? await approvedBookingPhone(payload.phoneProof, phone) : null;
+      if (needsVerification && !approval) return bookingPhoneRequired();
+      const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase();
+      const [year, month, day] = date.split("-");
+      const code = `HMA-${day}${month}${year.slice(-2)}-${suffix}`;
       const travelFee = payload.locationType === "artist" ? 0 : integer(settings.travelFee,50000);
       const total = selectedService.price + travelFee;
-      const reservation = await db.run(sql`
-        INSERT INTO appointments (
-          code, customer, phone, email, service_id, date, time, location_type,
-          address, district, ward, style, note, total, deposit, payment_status, status
-        )
-        SELECT ${code}, ${customer}, ${phone}, ${text(payload.email)}, ${serviceId}, ${date}, ${time},
-          ${text(payload.locationType, "client")}, ${text(payload.address)}, ${text(payload.district)},
-          ${text(payload.ward)}, ${text(payload.style)}, ${text(payload.note)}, ${total}, 0, 'unverified', 'pending'
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM appointments existing
-          LEFT JOIN services existing_service ON existing_service.id = existing.service_id
-          WHERE existing.date = ${date}
-            AND existing.status IN ('pending', 'confirmed')
-            AND ${start} < (
-              CAST(substr(existing.time, 1, 2) AS INTEGER) * 60
-              + CAST(substr(existing.time, 4, 2) AS INTEGER)
-              + COALESCE(existing_service.duration, 90)
-            )
-            AND ${end} > (
-              CAST(substr(existing.time, 1, 2) AS INTEGER) * 60
-              + CAST(substr(existing.time, 4, 2) AS INTEGER)
-            )
-        )
-      `);
-      if (reservation.meta.changes !== 1) {
-        return Response.json({ error: "Thời gian này vừa được đặt bởi khách khác. Vui lòng chọn giờ khác." }, { status: 409 });
-      }
-      const [created] = await db.select().from(appointments).where(eq(appointments.code, code)).limit(1);
-      if (!created) return Response.json({ error: "Không thể tạo lịch hẹn. Vui lòng thử lại." }, { status: 500 });
-
-      await createNotification(db, {
+      const notification = notificationValues({
         type: "appointment.created",
         title: "Có lịch đặt mới",
         message: `${customer} đã đặt ${selectedService.name} vào ${date} lúc ${time}.`,
@@ -278,24 +336,45 @@ export async function POST(request: Request) {
 
       const location = cleanBookingLocation(payload);
       const details = {skin:text(payload.skin),allergy:text(payload.allergy),allergyNote:text(payload.allergyNote),city:text(payload.city),locationNote:text(payload.locationNote),...location,travelFee,depositRequired:Math.min(total,integer(settings.deposit,200000)),references:Array.isArray(payload.references)?payload.references.filter(x=>typeof x==='string'&&/^\/api\/uploads\?key=/.test(x)).slice(0,3):[]};
-      await db.insert(siteContent).values({key:'booking:'+code,value:JSON.stringify(details)});
-      const [existingCustomer] = await db.select().from(customers).where(eq(customers.phone, phone)).limit(1);
-      if (existingCustomer) {
-        await db.update(customers).set({
-          name: customer,
-          email: text(payload.email),
-          visits: existingCustomer.visits + 1,
-          updatedAt: new Date().toISOString(),
-        }).where(eq(customers.id, existingCustomer.id));
-      } else {
-        await db.insert(customers).values({ name: customer, phone, email: text(payload.email), visits: 1 });
+      const verifiedPhoneWrites = approval ? [
+        db.insert(bookingVerifiedPhones).values({
+          appointmentCode: code,
+          phone: sql`(SELECT phone FROM booking_sms_challenges WHERE ticket_hash = ${approval.hash}
+            AND purpose = 'booking' AND state = 'approved' AND phone = ${approval.phone} AND expires_at > ${Date.now()})`,
+          verifiedAt: Date.now(),
+        }),
+        db.delete(bookingSmsChallenges).where(eq(bookingSmsChallenges.ticketHash, approval.hash)),
+      ] : [];
+      try {
+        const [[created]] = await db.batch([
+          db.insert(appointments).values({
+            code, customer, phone, email, serviceId, date, time,
+            locationType: text(payload.locationType, "client"), address: text(payload.address),
+            district: text(payload.district), ward: text(payload.ward), style: text(payload.style),
+            note: text(payload.note), total, deposit: 0, paymentStatus: "unverified", status: "pending",
+          }).returning(),
+          db.insert(siteContent).values({ key: "booking:" + code, value: JSON.stringify(details) }),
+          db.insert(customers).values({ name: customer, phone, email, visits: 1 })
+            .onConflictDoUpdate({ target: customers.phone, set: { visits: sql`${customers.visits} + 1`, updatedAt: new Date().toISOString() } }),
+          db.insert(siteContent).values(notification),
+          ...verifiedPhoneWrites,
+        ]);
+        return Response.json({ appointment: created }, { status: 201, headers: privateHeaders });
+      } catch (error) {
+        const message = messageFor(error);
+        if (message.startsWith("Khung giờ đã có lịch")) return Response.json({ error: message }, { status: 409, headers: privateHeaders });
+        if (approval && !await approvedBookingPhone(payload.phoneProof, phone)) return bookingPhoneRequired();
+        throw error;
       }
-      return Response.json({ appointment: created }, { status: 201 });
     }
 
     if (action === "recordPayment") {
       let values;
-      try { values=validatePayment(payload); } catch(error) { return Response.json({error:messageFor(error)},{status:400}); }
+      try { values = validatePayment(payload); }
+      catch (error) {
+        const field = fieldFrom(error);
+        return field ? formError({ [field]: messageFor(error) }) : Response.json({ error: messageFor(error) }, { status: 400, headers: privateHeaders });
+      }
       const code=text(payload.code);
       const [current]=await db.select().from(appointments).where(eq(appointments.code,code)).limit(1);
       if(!current)return Response.json({error:"Không tìm thấy lịch hẹn."},{status:404});
@@ -305,14 +384,25 @@ export async function POST(request: Request) {
       if(transaction&&!matches(transaction))return Response.json({error:"Mã yêu cầu đã dùng cho giao dịch khác. Hãy mở lại biểu mẫu."},{status:409});
       let createdTransaction=false;
       if(!transaction){
-        try{
-          [transaction]=await db.insert(paymentTransactions).values({id:'TX-'+crypto.randomUUID(),appointmentCode:code,...values,createdAt:new Date().toISOString()}).returning();
-          createdTransaction=true;
-        }catch(error){
-          // Concurrent retries share the same idempotency key. The trigger and
-          // unique constraints keep both overdrafts and duplicate writes atomic.
-          transaction=await existing();
-          if(!transaction||!matches(transaction))return Response.json({error:messageFor(error)},{status:409});
+        if(values.method==='bank'){
+          const [duplicate]=await db.select({id:paymentTransactions.id}).from(paymentTransactions).where(and(eq(paymentTransactions.method,'bank'),sql`lower(trim(${paymentTransactions.reference}))=lower(trim(${values.reference}))`)).limit(1);
+          if(duplicate){
+            // A concurrent retry may have committed after the first lookup.
+            const replay=await existing();
+            if(replay&&matches(replay))transaction=replay;
+            else return Response.json({error:'Mã giao dịch ngân hàng đã được ghi nhận. Nhập mã riêng của lần chuyển tiền này, không phải tên ngân hàng.'},{status:409});
+          }
+        }
+        if(!transaction){
+          try{
+            [transaction]=await db.insert(paymentTransactions).values({id:'TX-'+crypto.randomUUID(),appointmentCode:code,...values,createdAt:new Date().toISOString()}).returning();
+            createdTransaction=true;
+          }catch(error){
+            // Concurrent retries share the same idempotency key. The trigger and
+            // unique constraints keep both overdrafts and duplicate writes atomic.
+            transaction=await existing();
+            if(!transaction||!matches(transaction))return Response.json({error:messageFor(error)},{status:409});
+          }
         }
       }
       const [appointment]=await db.select().from(appointments).where(eq(appointments.code,code)).limit(1);
@@ -337,10 +427,21 @@ export async function POST(request: Request) {
       if (payload.note !== undefined) changes.note = text(payload.note);
       if (payload.style !== undefined) changes.style = text(payload.style);
       if (payload.total !== undefined) {
-        try{changes.total=validateVndAmount(payload.total,'Tổng chi phí');}catch(error){return Response.json({error:messageFor(error)},{status:400});}
+        try{changes.total=validateVndAmount(payload.total,'Tổng chi phí');}catch(error){return formError({ total: messageFor(error) });}
       }
 
-      const [current] = await db.select().from(appointments).where(eq(appointments.code,code)).limit(1);
+      const [current] = await db.select().from(appointments).where(and(eq(appointments.code,code), isNull(appointments.archivedAt))).limit(1);
+      if (current) {
+        const fields = appointmentTimeErrors(payload.date ?? current.date, payload.time ?? current.time);
+        if (payload.customer !== undefined && !text(payload.customer)) fields.customer = "Vui lòng nhập họ và tên.";
+        if (payload.phone !== undefined && !validPhone(payload.phone)) fields.phone = "Nhập số điện thoại hợp lệ.";
+        if (Object.keys(fields).length) return formError(fields);
+      }
+      if (current && (payload.date !== undefined || payload.time !== undefined)) {
+        const [row] = await db.select().from(siteContent).where(eq(siteContent.key,'settings')).limit(1);
+        const error = bookingTimeError(text(payload.date,current.date),text(payload.time,current.time),parseJson<Record<string,unknown>>(row?.value,initialSettings).bookingWindow ?? 60);
+        if (error) return formError({ time: error });
+      }
       if (!current) return Response.json({error:"Không tìm thấy lịch hẹn."},{status:404});
       const nextStatus = text(payload.status);
       if (nextStatus === "completed" && current.status !== "confirmed") return Response.json({ error: "Chỉ lịch đã xác nhận mới được đánh dấu hoàn thành." }, { status: 409 });
@@ -348,7 +449,7 @@ export async function POST(request: Request) {
       if (current.status === "cancelled" && nextStatus && nextStatus !== "cancelled") return Response.json({ error: "Lịch đã hủy không thể mở lại từ thao tác này." }, { status: 409 });
       if (changes.date || changes.time) {
         const nextDate=String(changes.date||current.date), nextTime=String(changes.time||current.time);
-        const rows=await db.select().from(appointments).where(and(eq(appointments.date,nextDate),ne(appointments.status,'cancelled'),ne(appointments.status,'completed'),ne(appointments.code,code)));
+        const rows=await db.select().from(appointments).where(and(eq(appointments.date,nextDate),isNull(appointments.archivedAt),ne(appointments.status,'cancelled'),ne(appointments.status,'completed'),ne(appointments.code,code)));
         const serviceRows=await db.select().from(services);
         const sid = String(changes.serviceId || current.serviceId);
         const minutes=(t:string)=>Number(t.slice(0,2))*60+Number(t.slice(3));
@@ -370,7 +471,7 @@ export async function POST(request: Request) {
       }
       if (payload.refundNote !== undefined) changes.refundNote = text(payload.refundNote).slice(0, 1000);
       if (nextStatus === "cancelled" && current.deposit > 0 && !payload.refundStatus) changes.refundStatus = "pending";
-      const [updated] = await db.update(appointments).set(changes).where(eq(appointments.code, code)).returning();
+      const [updated] = await db.update(appointments).set(changes).where(and(eq(appointments.code, code), isNull(appointments.archivedAt))).returning();
       if (!updated) return Response.json({ error: "Không tìm thấy lịch hẹn." }, { status: 404 });
       if (nextStatus && nextStatus !== current.status) {
         const statusLabels: Record<string, string> = { pending: "chờ xác nhận", confirmed: "đã xác nhận", completed: "đã hoàn thành", cancelled: "đã hủy" };
@@ -395,25 +496,51 @@ export async function POST(request: Request) {
       return Response.json({ appointment: updated });
     }
 
-    if (action === "deleteAppointment") {
+    if (action === "archiveAppointment" || action === "deleteAppointment") {
       const code = text(payload.code);
       if (!code) return Response.json({ error: "Thiếu mã lịch hẹn." }, { status: 400 });
-      await db.delete(appointments).where(eq(appointments.code, code));
-      await db.delete(siteContent).where(eq(siteContent.key, 'booking:' + code));
-      return Response.json({ ok: true });
+      const [row] = await db.update(appointments).set({ archivedAt: new Date().toISOString() }).where(and(
+        eq(appointments.code, code), isNull(appointments.archivedAt), eq(appointments.deposit, 0), ne(appointments.paymentStatus, "pending_verification"),
+        sql`NOT EXISTS (SELECT 1 FROM payment_transactions WHERE appointment_code = ${code})`,
+      )).returning({ code: appointments.code });
+      if (!row) return Response.json({ error: "Lịch đã lưu trữ, không còn khả dụng hoặc có giao dịch cần giữ để đối soát." }, { status: 409, headers: privateHeaders });
+      return Response.json({ ok: true }, { headers: privateHeaders });
+    }
+
+    if (action === "restoreAppointment") {
+      const code = text(payload.code);
+      try {
+        const [row] = await db.update(appointments).set({ archivedAt: null, updatedAt: new Date().toISOString() })
+          .where(and(eq(appointments.code, code), isNotNull(appointments.archivedAt))).returning({ code: appointments.code });
+        if (!row) return Response.json({ error: "Không tìm thấy lịch đã lưu trữ." }, { status: 404, headers: privateHeaders });
+        return Response.json({ ok: true }, { headers: privateHeaders });
+      } catch (error) {
+        return Response.json({ error: messageFor(error) }, { status: 409, headers: privateHeaders });
+      }
     }
 
     if (action === "reportPayment") {
       const code=text(payload.code);
-      const [a]=await db.select().from(appointments).where(eq(appointments.code,code)).limit(1);
-      if(!a||a.status==='cancelled')return Response.json({error:'Lịch không khả dụng.'},{status:404});
-      if(!await siteAdmin(request)&&a.phone.replace(/\s+/g,'')!==text(payload.phone).replace(/\s+/g,''))return Response.json({error:'Mã lịch hoặc số điện thoại không khớp.'},{status:404});
+      const phone = normalizePhone(payload.phone);
+      const [a]=await db.select().from(appointments).where(and(eq(appointments.code,code), isNull(appointments.archivedAt))).limit(1);
+      if (!a || a.status === "cancelled" || (!await siteAdmin(request) && !samePhone(a.phone, phone))) {
+        return Response.json({ error: "Mã lịch hoặc số điện thoại không khớp." }, { status: 404, headers: privateHeaders });
+      }
       const paymentContent=await db.select().from(siteContent).where(sql`${siteContent.key} IN (${'booking:'+code},'settings')`);
       const detail=parseJson<Record<string,unknown>>(paymentContent.find(row=>row.key==='booking:'+code)?.value,{});
       const setting=parseJson<Record<string,unknown>>(paymentContent.find(row=>row.key==='settings')?.value,initialSettings);
       const needed=Math.max(0,Math.min(a.total,integer(detail.depositRequired,integer(setting.deposit,200000))));
-      if(a.paymentStatus==='pending_verification'||needed===0||a.deposit>=needed)return Response.json({appointment:a});
-      const [appointment]=await db.update(appointments).set({paymentStatus:'pending_verification',updatedAt:new Date().toISOString()}).where(eq(appointments.code,code)).returning();
+      if (a.paymentStatus === "pending_verification" || needed === 0 || a.deposit > 0) {
+        return Response.json({ appointment: a }, { headers: privateHeaders });
+      }
+      const stillEligible = and(eq(appointments.code, code), isNull(appointments.archivedAt), ne(appointments.status, "cancelled"));
+      const [appointment] = await db.update(appointments).set({ paymentStatus: "pending_verification", updatedAt: new Date().toISOString() })
+        .where(and(stillEligible, eq(appointments.deposit, 0), eq(appointments.paymentStatus, "unverified"))).returning();
+      if (!appointment) {
+        const [current] = await db.select().from(appointments).where(stillEligible).limit(1);
+        if (current) return Response.json({ appointment: current }, { headers: privateHeaders });
+        return Response.json({ error: "Mã lịch hoặc số điện thoại không khớp." }, { status: 404, headers: privateHeaders });
+      }
       await createNotification(db, {
         type: "payment.reported",
         title: "Khách báo đã chuyển cọc",
@@ -421,7 +548,7 @@ export async function POST(request: Request) {
         entityType: "appointment",
         entityId: code,
       });
-      return Response.json({appointment});
+      return Response.json({ appointment }, { headers: privateHeaders });
     }
     if (action === "markNotificationsRead") {
       const notificationId = text(payload.id);
@@ -436,21 +563,45 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, count: targets.length });
     }
     if (action === "createRequest") {
-      const message=text(payload.message); const subject=text(payload.subject); const code=text(payload.code);
-      const [a]=code?await db.select().from(appointments).where(eq(appointments.code,code)).limit(1):[];
-      const name=text(payload.name)||a?.customer||'';const phone=text(payload.phone)||a?.phone||'';
-      if(!name||!phone||!message||!subject||message.length>4000)return Response.json({error:'Vui lòng nhập đầy đủ thông tin và lời nhắn (tối đa 4.000 ký tự).'},{status:400});
-      const id='YC-'+crypto.randomUUID().slice(0,8).toUpperCase();
-      const record={id,kind:code?'appointment':'consultation',code,name,phone,email:text(payload.email),subject,message,date:text(payload.date),time:text(payload.time),status:'pending',createdAt:new Date().toISOString(),reply:''};
-      await db.insert(siteContent).values({key:'request:'+id,value:JSON.stringify(record)});
-      await createNotification(db, {
+      const code = text(payload.code);
+      const subject = text(payload.subject);
+      const message = text(payload.message);
+      const verifiedPhone = normalizePhone(payload.phone);
+      const [a]=code?await db.select().from(appointments).where(and(eq(appointments.code,code), isNull(appointments.archivedAt))).limit(1):[];
+      if (code && (!a || (!await siteAdmin(request) && !samePhone(a.phone, verifiedPhone)))) {
+        return Response.json({ error: 'Mã lịch hoặc số điện thoại không khớp.' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
+      }
+      const name = text(payload.name) || a?.customer || '';
+      const phone = text(payload.phone) || a?.phone || '';
+      const fields = contactErrors({ ...payload, name, phone }, "name");
+      if (!subject) fields.subject = "Vui lòng chọn hoặc nhập chủ đề.";
+      if (!message) fields.message = "Vui lòng nhập lời nhắn.";
+      else if (message.length > 4000) fields.message = "Lời nhắn tối đa 4.000 ký tự.";
+      if (payload.date !== undefined || payload.time !== undefined) {
+        Object.assign(fields, appointmentTimeErrors(payload.date, payload.time));
+        if (Object.keys(fields).length) return formError(fields);
+        const [row] = await db.select().from(siteContent).where(eq(siteContent.key,'settings')).limit(1);
+        const error = bookingTimeError(text(payload.date),text(payload.time),parseJson<Record<string,unknown>>(row?.value,initialSettings).bookingWindow ?? 60);
+        if (error) return formError({ time: error });
+      }
+      if (Object.keys(fields).length) return formError(fields);
+      const id = 'YC-' + crypto.randomUUID().slice(0, 8).toUpperCase();
+      const record = {
+        id, kind: code ? 'appointment' : 'consultation', code, name, phone, email: text(payload.email), subject, message,
+        date: text(payload.date), time: text(payload.time), status: 'pending', createdAt: new Date().toISOString(), reply: '',
+      };
+      const notification = notificationValues({
         type: code ? "appointment.request" : "consultation.created",
         title: code ? "Có yêu cầu từ lịch hẹn" : "Có yêu cầu tư vấn mới",
         message: code ? `${name} gửi yêu cầu cho lịch ${code}.` : `${name} gửi yêu cầu tư vấn: ${subject}.`,
         entityType: "request",
         entityId: id,
       });
-      return Response.json({request:record},{status:201});
+      await db.insert(siteContent).values([
+        { key: 'request:' + id, value: JSON.stringify(record) },
+        notification,
+      ]);
+      return Response.json({request:{id:record.id,status:record.status}},{status:201,headers:{'Cache-Control':'no-store'}});
     }
     if (action === "resolveRequest" || action === "updateRequest") {
       const id = text(payload.id);
@@ -458,6 +609,14 @@ export async function POST(request: Request) {
       const [row] = await db.select().from(siteContent).where(eq(siteContent.key, key)).limit(1);
       if (!row) return Response.json({ error: 'Không tìm thấy yêu cầu.' }, { status: 404 });
       const current = parseJson<Record<string, unknown>>(row.value, {});
+      if (current.archivedAt) return Response.json({ error: "Yêu cầu đã được lưu trữ." }, { status: 409, headers: privateHeaders });
+      if (["name", "phone", "email", "subject", "message"].some(key => payload[key] !== undefined)) {
+        const updatedContact = { ...current, ...payload };
+        const fields = contactErrors(updatedContact, "name");
+        if (!text(updatedContact.subject)) fields.subject = "Vui lòng nhập chủ đề.";
+        if (!text(updatedContact.message)) fields.message = "Vui lòng nhập lời nhắn.";
+        if (Object.keys(fields).length) return formError(fields);
+      }
       const status = text(payload.status) || (text(current.status) || 'pending');
       const reply = payload.reply !== undefined ? text(payload.reply) : (text(current.reply) || '');
       const record = {
@@ -476,8 +635,11 @@ export async function POST(request: Request) {
       const requestedTime = text(current.time);
       const isReschedule = Boolean(current.code) && /đổi lịch|đổi ngày|reschedule/i.test(text(current.subject));
       if (action === "resolveRequest" && status === "resolved" && isReschedule && requestedDate && requestedTime) {
+        const [settingsRow] = await db.select().from(siteContent).where(eq(siteContent.key,'settings')).limit(1);
+        const timeError = bookingTimeError(requestedDate,requestedTime,parseJson<Record<string,unknown>>(settingsRow?.value,initialSettings).bookingWindow ?? 60);
+        if (timeError) return Response.json({error:timeError},{status:400});
         const code = text(current.code);
-        const [appointment] = await db.select().from(appointments).where(eq(appointments.code, code)).limit(1);
+        const [appointment] = await db.select().from(appointments).where(and(eq(appointments.code, code), isNull(appointments.archivedAt))).limit(1);
         if (!appointment || appointment.status === "cancelled" || appointment.status === "completed") {
           return Response.json({ error: "Lịch hẹn không còn đủ điều kiện để đổi lịch." }, { status: 409 });
         }
@@ -485,6 +647,7 @@ export async function POST(request: Request) {
           db.select().from(services),
           db.select().from(appointments).where(and(
             eq(appointments.date, requestedDate),
+            isNull(appointments.archivedAt),
             ne(appointments.code, code),
             ne(appointments.status, "cancelled"),
             ne(appointments.status, "completed"),
@@ -505,7 +668,7 @@ export async function POST(request: Request) {
           return slotStart >= start && slotStart < end;
         });
         if (busy || blocked) return Response.json({ error: "Ngày giờ mới không còn trống." }, { status: 409 });
-        await db.update(appointments).set({ date: requestedDate, time: requestedTime, updatedAt: new Date().toISOString() }).where(eq(appointments.code, code));
+        await db.update(appointments).set({ date: requestedDate, time: requestedTime, updatedAt: new Date().toISOString() }).where(and(eq(appointments.code, code), isNull(appointments.archivedAt)));
       }
       await db.update(siteContent).set({ value: JSON.stringify(record), updatedAt: new Date().toISOString() }).where(eq(siteContent.key, key));
       return Response.json({ request: record });
@@ -513,22 +676,27 @@ export async function POST(request: Request) {
     if (action === "deleteRequest") {
       const id = text(payload.id);
       const key = 'request:' + id;
-      await db.delete(siteContent).where(eq(siteContent.key, key));
+      await db.update(siteContent).set({
+        value: sql`json_set(${siteContent.value}, '$.archivedAt', ${new Date().toISOString()})`,
+        updatedAt: new Date().toISOString(),
+      }).where(eq(siteContent.key, key));
       return Response.json({ ok: true });
     }
     if (action === "setScheduleSlot") {
       const slotDate = text(payload.date);
       const slotTime = text(payload.time);
-      const status = text(payload.status) === "blocked" ? "blocked" : "available";
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(slotDate) || !/^\d{2}:\d{2}$/.test(slotTime)) {
-        return Response.json({ error: "Ngày hoặc giờ không hợp lệ." }, { status: 400 });
-      }
-      await db.insert(scheduleSlots).values({ slotDate, slotTime, status, note: text(payload.note) })
+      const status = text(payload.status, "available");
+      const fields = appointmentTimeErrors(slotDate, slotTime);
+      if (!["available", "blocked", "break", "travel"].includes(status)) fields.status = "Vui lòng chọn loại khung giờ.";
+      const endTime = payload.endTime === undefined ? undefined : text(payload.endTime);
+      if (endTime !== undefined && (!validBookingDateTime(slotDate, endTime) || endTime <= slotTime)) fields.endTime = "Giờ kết thúc phải sau giờ bắt đầu.";
+      if (Object.keys(fields).length) return formError(fields);
+      const [slot] = await db.insert(scheduleSlots).values({ slotDate, slotTime, status, endTime, note: text(payload.note) })
         .onConflictDoUpdate({
           target: [scheduleSlots.slotDate, scheduleSlots.slotTime],
-          set: { status, note: text(payload.note), updatedAt: new Date().toISOString() },
-        });
-      return Response.json({ ok: true });
+          set: { status, note: text(payload.note), updatedAt: new Date().toISOString(), ...(endTime === undefined ? {} : { endTime }) },
+        }).returning();
+      return Response.json({ ok: true, slot }, { headers: privateHeaders });
     }
 
     if (action === "saveContent") {
@@ -537,7 +705,13 @@ export async function POST(request: Request) {
         return Response.json({ error: "Nội dung không hợp lệ." }, { status: 400 });
       }
       if(key==='settings'){
-        try{validateMoneySettings(payload.value);}catch(error){return Response.json({error:messageFor(error)},{status:400});}
+        try { validateMoneySettings(payload.value); }
+        catch (error) { return formError({ [fieldFrom(error) || "deposit"]: messageFor(error) }); }
+        const windowDays = Number((payload.value as Record<string,unknown>).bookingWindow ?? 60);
+        if (!Number.isInteger(windowDays) || windowDays < 1 || windowDays > 3650) return formError({ bookingWindow: "Số ngày mở lịch phải là số nguyên từ 1 đến 3650." });
+      } else {
+        const brand = payload.value as Record<string,unknown>;
+        if (text(brand.email) && !validEmail(brand.email)) return formError({ email: "Nhập email liên hệ hợp lệ." });
       }
       await db.insert(siteContent).values({ key, value: JSON.stringify(payload.value) })
         .onConflictDoUpdate({ target: siteContent.key, set: { value: JSON.stringify(payload.value), updatedAt: new Date().toISOString() } });
@@ -546,11 +720,13 @@ export async function POST(request: Request) {
 
     if (action === "saveService") {
       const id = text(payload.id) || `service-${Date.now()}`;
-      if(payload.price!==undefined){try{validateVndAmount(payload.price,'Giá dịch vụ');}catch(error){return Response.json({error:messageFor(error)},{status:400});}}
+      if(payload.price!==undefined){try{validateVndAmount(payload.price,'Giá dịch vụ');}catch(error){return formError({ price: messageFor(error) });}}
+      const duration = payload.duration === undefined ? 60 : Number(payload.duration);
+      if (!Number.isInteger(duration) || duration < 1 || duration > 1440) return formError({ duration: "Thời lượng dịch vụ phải từ 1 đến 1.440 phút." });
       const values = {
         id,
         name: text(payload.name),
-        duration: integer(payload.duration, 60),
+        duration,
         price: integer(payload.price),
         description: text(payload.description),
         enabled: payload.enabled !== false,
@@ -558,7 +734,7 @@ export async function POST(request: Request) {
         sortOrder: integer(payload.sortOrder, 99),
         updatedAt: new Date().toISOString(),
       };
-      if (!values.name) return Response.json({ error: "Vui lòng nhập tên dịch vụ." }, { status: 400 });
+      if (!values.name) return formError({ name: "Vui lòng nhập tên dịch vụ." });
       const [saved] = await db.insert(services).values(values)
         .onConflictDoUpdate({ target: services.id, set: values }).returning();
       return Response.json({ service: saved });
@@ -574,6 +750,7 @@ export async function POST(request: Request) {
 
     return Response.json({ error: "Thao tác không được hỗ trợ." }, { status: 400 });
   } catch (error) {
-    return Response.json({ error: messageFor(error) }, { status: 500 });
+    const message = messageFor(error);
+    return Response.json({ error: message }, { status: message.startsWith("Khung giờ đã có lịch") ? 409 : 500, headers: privateHeaders });
   }
 }

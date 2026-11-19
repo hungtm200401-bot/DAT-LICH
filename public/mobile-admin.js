@@ -96,40 +96,11 @@
   }
 
   function dashboard() {
-    const s = state();
-    const today = iso();
-    const todayRows = (s.appointments || []).filter(a => a.date === today && a.status !== 'cancelled');
-    const pending = (s.appointments || []).filter(a => a.status === 'pending').length;
-    const paymentPending = (s.appointments || []).filter(a => a.paymentStatus === 'pending_verification').length;
-    const deposits = (s.appointments || []).reduce((sum,a) => sum + Number(a.finance?.netReceived ?? a.deposit ?? 0), 0);
-    const month= new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit'}).format(new Date());
-    const revenue = (s.paymentTransactions || []).filter(row=>!row.kind.startsWith('opening')&&new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit'}).format(new Date(row.occurredAt))===month).reduce((sum,row)=>sum+(['refund','opening_refund'].includes(row.kind)?-Number(row.amount):Number(row.amount)),0);
-    const openRequests = (s.requests || []).filter(r => ['pending','in_progress'].includes(r.status || 'pending')).length;
-    return shell(`
-      <div class="ma-date">${esc(longDate()).toUpperCase()}</div>
-      <div class="ma-title-row"><h1>Tổng quan hôm nay</h1><a class="ma-circle-add" href="#/admin/appointments/new" aria-label="Thêm lịch hẹn">+</a></div>
-      ${s.backendError ? `<div class="ma-alert">${icon('wifi')}<span>Mất kết nối dữ liệu. Một số thông tin có thể chưa được cập nhật.</span></div>` : ''}
-      <section class="ma-kpis">
-        <div class="ma-kpi"><span>Lịch hôm nay</span><strong>${String(todayRows.length).padStart(2,'0')}</strong><small>Dữ liệu cập nhật trực tiếp</small></div>
-        <div class="ma-kpi"><span>Chờ xác nhận</span><strong>${String(pending).padStart(2,'0')}</strong><small>${pending ? 'Cần kiểm tra lịch mới' : 'Không có lịch chờ'}</small></div>
-        <div class="ma-kpi"><span>Thực còn giữ</span><strong>${money(deposits)}</strong><small>${paymentPending} giao dịch chờ đối soát</small></div>
-        <div class="ma-kpi"><span>Thu ròng tháng</span><strong>${money(revenue)}</strong><small>Tiền thu trừ tiền hoàn trong tháng</small></div>
-      </section>
-      <div class="ma-actions one">${button('Tạo lịch hẹn','/admin/appointments/new','primary','plus')}</div>
-      <div class="ma-actions">${button('Chặn giờ','/admin/schedule/block','','clock')}${button('Xem tiền cọc','/admin/payments','','card')}</div>
-      <div class="ma-section-title"><b>Cần xử lý</b></div>
-      <div class="ma-list">
-        ${taskRow('calendar',pending,'Lịch chờ xác nhận','Cập nhật theo dữ liệu thật','/admin/appointments?status=pending')}
-        ${taskRow('card',paymentPending,'Cọc chờ đối soát','Chưa ghi nhận tiền cọc','/admin/payments?status=pending')}
-        ${taskRow('mail',openRequests,'Hỗ trợ mới','Yêu cầu của khách hàng','/admin/requests')}
-        ${taskRow('bell',(s.notifications || []).filter(n => n.status === 'unread').length,'Thông báo chưa đọc','Sự kiện cần xử lý','/admin/notifications?tab=unread')}
-      </div>
-      <div class="ma-section-title"><b>Hoạt động gần đây</b><a class="ma-link" href="#/admin/audit">Xem tất cả →</a></div>
-      <div class="ma-recent-empty">${icon('file')}<span>Hoạt động mới sẽ xuất hiện tại đây.</span></div>
-    `,{ home:true, active:'overview' });
+    const overview = window.HoanOverview;
+    return shell(overview ? overview.content({mobile:true}) : window.HoanOverviewError ? '<p role="alert">Chưa tải được Tổng quan.</p><button class="ma-btn" data-action="reload-overview">Tải lại trang</button>' : '<p role="status">Đang tải Tổng quan…</p>', {home:true,active:'overview'});
   }
 
-  function taskRow(ico,count,title,sub,href) {
+  function _taskRow(ico,count,title,sub,href) {
     return `<a class="ma-row" href="#${href}">${icon(ico)}<span class="ma-row-count">${String(count).padStart(2,'0')}</span><span class="ma-row-text"><b>${title}</b><small>${sub}</small></span>${icon('chevron')}</a>`;
   }
 
@@ -137,9 +108,13 @@
     const q = queryOf(raw);
     const filter = q.get('status') || 'all';
     const keyword = (q.get('q') || '').toLocaleLowerCase('vi');
+    const date = q.get('date') || '', serviceId = q.get('service') || '';
     let rows = [...(state().appointments || [])].sort((a,b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
     if (filter !== 'all') rows = rows.filter(a => a.status === filter || (filter === 'today' && a.date === iso()));
+    if (date) rows = rows.filter(a => a.date === date && (filter === 'cancelled' || a.status !== 'cancelled'));
+    if (serviceId) rows = rows.filter(a => a.serviceId === serviceId);
     if (keyword) rows = rows.filter(a => `${a.customer} ${a.phone} ${a.code}`.toLocaleLowerCase('vi').includes(keyword));
+    const statusHref = key => { const next = new URLSearchParams(q); next.set('status',key); return '#/admin/appointments?' + next; };
     const labels = [['pending','Chờ xác nhận'],['confirmed','Đã xác nhận'],['today','Hôm nay'],['all','Sắp tới'],['completed','Hoàn thành'],['cancelled','Đã hủy']];
     const stateView = q.get('view');
     let list = '';
@@ -147,9 +122,10 @@
     else if (!rows.length) list = emptyAppointments(filter);
     else list = groupAppointments(rows);
     return shell(`
-      <div class="ma-title-row"><h1>Lịch hẹn</h1><a class="ma-circle-add" href="#/admin/appointments/new" aria-label="Thêm lịch hẹn">+</a></div>
+      <div class="ma-title-row"><h1>Lịch hẹn</h1><button type="button" class="ma-btn" data-action="appointment-archive">Đã lưu trữ</button><a class="ma-circle-add" href="#/admin/appointments/new" aria-label="Thêm lịch hẹn">+</a></div>
       <form data-ma-form="appointment-search">${search('Tên khách hoặc số điện thoại', q.get('q') || '')}</form>
-      <div class="ma-tabs six">${labels.map(([key,label]) => `<a class="ma-tab ${filter === key ? 'active':''}" href="#/admin/appointments?status=${key}">${label}</a>`).join('')}</div>
+      ${date || serviceId ? `<p class="overview-note">${date ? 'Ngày: ' + esc(dateVi(date)) : ''} ${serviceId ? ' · ' + esc(service(serviceId).name) : ''} <a href="#/admin/appointments">Đặt lại bộ lọc</a></p>` : ''}
+      <div class="ma-tabs six">${labels.map(([key,label]) => `<a class="ma-tab ${filter === key ? 'active':''}" href="${statusHref(key)}">${label}</a>`).join('')}</div>
       ${list}
       <div class="ma-form-footer">${button('Thêm lịch hẹn','/admin/appointments/new','primary','plus')}</div>
     `,{ home:true, active:'appointments' });
@@ -190,10 +166,11 @@
       <div class="ma-details">
         ${detail('Dịch vụ',service(a.serviceId).name)}${detail('Ngày',dateVi(a.date))}${detail('Giờ',a.time)}${detail('Địa điểm',a.address || a.district || 'Chưa có thông tin','muted')}${detail('Tổng tiền',a.total ? money(a.total) : '—')}${detail('Thực nhận',money(a.finance?.netReceived ?? a.deposit))}${detail('Ghi chú',a.note || 'Chưa có thông tin','muted')}
       </div>
+      <div class="ma-actions one">${button('Xem thanh toán',`/admin/payments?q=${encodeURIComponent(a.code)}`,'','card')}</div>
       ${window.HoanAdminLocations?.html(a, state().bookingDetails?.[a.code]) || ''}
       <div class="ma-actions">${button('Gọi khách',`tel:${a.phone}`,'','phone').replace('href="#tel:','href="tel:')}${button('Sao chép số','','','copy').replace('<button','<button data-ma-action="copy" data-value="'+esc(a.phone)+'"')}</div>
       ${!completed && a.status !== 'cancelled' ? `<div class="ma-actions">${button('Chỉnh sửa',`/admin/appointments/${encodeURIComponent(a.code)}/edit`,'','edit')}${button('Đổi lịch',`/admin/appointments/${encodeURIComponent(a.code)}/reschedule`,'','calendar')}</div><div class="ma-actions one"><button class="ma-btn primary" data-ma-action="complete" data-code="${esc(a.code)}">Đánh dấu hoàn thành</button><button class="ma-btn ghost" data-ma-action="cancel-sheet" data-code="${esc(a.code)}">Hủy lịch</button></div>` : ''}
-      ${completed ? `<div class="ma-actions">${button('Gọi khách',`tel:${a.phone}`,'','phone').replace('href="#tel:','href="tel:')}${button('Xem tiền cọc',`/admin/payments/${encodeURIComponent(a.code)}`,'','card')}</div><div class="ma-actions one">${button('Về danh sách lịch hẹn','/admin/appointments','primary')}</div>` : ''}
+      ${completed ? `<div class="ma-actions one">${button('Về danh sách lịch hẹn','/admin/appointments','primary')}</div>` : ''}
     `,{ title:'Lịch hẹn', back:'#/admin/appointments', active:'appointments' });
   }
 
@@ -212,7 +189,7 @@
     return shell(`
       <h1>${title}</h1>
       ${state().backendError && editing ? `<div class="ma-alert">${icon('wifi')}<span>Mất kết nối · Thay đổi chưa được lưu</span></div>` : ''}
-      <form class="ma-form" data-ma-form="${editing ? 'edit-appointment' : 'new-appointment'}" data-code="${esc(code)}">
+      <form novalidate class="ma-form" data-ma-form="${editing ? 'edit-appointment' : 'new-appointment'}" data-code="${esc(code)}">
         <div class="ma-form-grid">
           ${field('customer','Tên khách','text',a?.customer || '',true,'Nhập tên khách')}
           ${field('phone','Số điện thoại','tel',a?.phone || '',true,'Nhập số điện thoại')}
@@ -240,7 +217,7 @@
   function rescheduleForm(a) {
     return shell(`<h1>Đổi lịch hẹn</h1>
       <div class="ma-summary"><b>${esc(a.customer)} · ${esc(service(a.serviceId).name)}</b><span>Lịch hiện tại: ${dateVi(a.date)} · ${esc(a.time)}</span></div>
-      <form class="ma-form" data-ma-form="reschedule" data-code="${esc(a.code)}">
+      <form novalidate class="ma-form" data-ma-form="reschedule" data-code="${esc(a.code)}">
         <div class="ma-form-grid">${field('date','Ngày mới','date','',true)}${field('time','Giờ mới','time','',true)}${field('note','Lý do đổi lịch (tùy chọn)','textarea','',false,'Nhập ghi chú...','full')}</div>
         <div class="ma-note">${icon('info')}<span>Chọn ngày để xem khung giờ còn trống.</span></div>
         <div class="ma-summary"><b>Thay đổi dự kiến</b>${detail('Ngày mới','—')}${detail('Giờ mới','—')}</div>
@@ -289,11 +266,11 @@
 
   function toggleRow(ico,label,on) { return `<div class="ma-toggle-row">${icon(ico)}<span>${label}</span><button class="ma-switch ${on ? 'on':''}" data-ma-action="toggle" aria-label="Bật tắt ${label}"></button></div>`; }
 
-  function payments(raw) {
-    return shell(`<div class="ma-title-row"><h1>Thu chi & tiền cọc</h1></div>${window.HoanFinanceAdmin?.html()||'<p>Đang tải sổ giao dịch…</p>'}`,{home:true,active:'payments'});
+  function payments(_raw) {
+    return shell(`<div class="ma-title-row"><h1>Thanh toán</h1></div>${window.HoanFinanceAdmin?.html()||'<p>Đang tải sổ giao dịch…</p>'}`,{home:true,active:'payments'});
   }
 
-  function paymentCard(a) {
+  function _paymentCard(a) {
     const status = a.paymentStatus === 'received' ? 'Đã nhận' : a.paymentStatus === 'pending_verification' ? 'Chờ đối soát' : 'Chưa thanh toán';
     return `<a class="ma-booking-card" href="#/admin/payments/${encodeURIComponent(a.code)}"><div class="ma-booking-info" style="grid-column:1/3"><b>${esc(a.customer)}</b><small>${esc(service(a.serviceId).name)}</small><small>${dateVi(a.date)} · ${esc(a.time)}</small></div><div class="ma-booking-meta"><strong>${a.paymentStatus === 'received' ? money(a.deposit) : money(a.total)}</strong><span class="ma-badge ${a.paymentStatus === 'received' ? 'green':''}">${status}</span></div>${icon('chevron')}</a>`;
   }
@@ -305,8 +282,8 @@
     return shell(`<div class="ma-title-row"><h1>Thu / hoàn tiền</h1></div>
       <div class="ma-info-head"><div class="ma-person"><span class="ma-avatar">${icon('user')}</span><div><b>${esc(a.customer)}</b><small>${esc(a.phone)}</small></div></div></div>
       <div class="ma-details">${detail('Mã lịch',a.code)}${detail('Tổng chi phí',money(a.total))}${detail('Đã thu',money(finance.received))}${detail('Đã hoàn',money(finance.refunded))}${detail('Thực còn giữ',money(finance.netReceived))}${detail('Còn phải thu',a.status==='cancelled'?'—':money(finance.remaining))}${detail('Lịch hẹn',`${dateVi(a.date)} · ${a.time}`)}${detail('Dịch vụ',service(a.serviceId).name)}</div>
-      <div class="ma-note">${icon('info')}<span>Đối chiếu giao dịch trước khi xác nhận.</span></div>
-      <div class="ma-actions one">${a.status!=='cancelled'&&finance.remaining>0?`<button class="ma-btn primary" data-ma-action="finance-record" data-code="${esc(a.code)}" data-kind="${finance.netReceived<Number(state().settings?.deposit??200000)?'deposit':'balance'}">Ghi nhận tiền thực thu</button>`:''}${finance.netReceived>0?`<button class="ma-btn" data-ma-action="finance-record" data-code="${esc(a.code)}" data-kind="refund">Ghi nhận hoàn tiền</button>`:''}${button('Mở lịch hẹn',`/admin/appointments/${encodeURIComponent(a.code)}`,'','calendar')}${button('Mở sổ giao dịch','/admin/payments')}</div>
+      <div class="ma-note">${icon('info')}<span>Thu cọc, thu còn lại và hoàn tiền được xử lý tại mục Thanh toán.</span></div>
+      <div class="ma-actions one">${button('Mở thanh toán',`/admin/payments?q=${encodeURIComponent(a.code)}`,'primary','card')}${button('Mở lịch hẹn',`/admin/appointments/${encodeURIComponent(a.code)}`,'','calendar')}</div>
     `,{ title:'', back:'#/admin/payments', active:'payments' });
   }
 
@@ -343,7 +320,7 @@
   function weekSettings() {
     const dates = Array.from({length:7},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()+i); return d; });
     return shell(`<h1>Thiết lập tuần</h1><b>${dateVi(iso(dates[0]))}–${dateVi(iso(dates[6]))}</b>
-      <form class="ma-form" data-ma-form="week-settings"><div class="ma-form-grid">${field('start','Bắt đầu','time','09:00')}${field('end','Kết thúc','time','20:00')}<label class="ma-field full"><label>Nghỉ giữa lịch</label><select><option>30 phút</option><option>45 phút</option></select></label><label class="ma-field full"><label>Thời gian di chuyển</label><select><option>45 phút</option><option>60 phút</option></select></label></div>
+      <form novalidate class="ma-form" data-ma-form="week-settings"><div class="ma-form-grid">${field('start','Bắt đầu','time','09:00')}${field('end','Kết thúc','time','20:00')}<label class="ma-field full"><label>Nghỉ giữa lịch</label><select><option>30 phút</option><option>45 phút</option></select></label><label class="ma-field full"><label>Thời gian di chuyển</label><select><option>45 phút</option><option>60 phút</option></select></label></div>
       <div class="ma-section-title"><b>Lịch làm việc trong tuần</b></div>${dates.map(d => toggleRow('',longDate(d),true)).join('')}
       <a class="ma-settings-link" href="#/admin/schedule/block"><span></span><span>Ngày nghỉ</span>${icon('chevron')}</a>
       <button class="ma-btn primary" type="submit">Lưu thiết lập</button>${button('Sao chép sang tuần sau','/admin/schedule/copy','','copy')}</form>
@@ -352,12 +329,12 @@
 
   function blockTime(raw) {
     const q=queryOf(raw), edit=q.get('edit')==='1';
-    return shell(`<h1>${edit?'Chỉnh khung giờ bận':'Chặn thời gian'}</h1><p><b>${esc(longDate())}</b></p><form class="ma-form" data-ma-form="block-time">${field('date','Ngày','date',iso(),true)}${field('time','Bắt đầu','time','14:00',true)}${field('end','Kết thúc','time','',false,'Chọn giờ')}<div class="ma-toggle-row"><span>Cả ngày</span><button type="button" class="ma-switch" data-ma-action="toggle"></button></div>${field('note','Lý do chặn','textarea','',false,'Ví dụ: lịch cá nhân, di chuyển...')}<div class="ma-note">${icon('info')}<span>Khung giờ bị chặn sẽ không nhận lịch hẹn mới.</span></div><div class="ma-summary"><b>${dateVi(iso())} · Từ 14:00</b><small>Chọn giờ kết thúc để tiếp tục.</small></div><button class="ma-btn primary" type="submit">Lưu khung giờ bận</button>${button('Quay lại','/admin/schedule')}</form>`,{ title:'', back:'#/admin/schedule', nav:false });
+    return shell(`<h1>${edit?'Chỉnh khung giờ bận':'Chặn thời gian'}</h1><p><b>${esc(longDate())}</b></p><form novalidate class="ma-form" data-ma-form="block-time">${field('date','Ngày','date',iso(),true)}${field('time','Bắt đầu','time','14:00',true)}${field('end','Kết thúc','time','',false,'Chọn giờ')}<div class="ma-toggle-row"><span>Cả ngày</span><button type="button" class="ma-switch" data-ma-action="toggle"></button></div>${field('note','Lý do chặn','textarea','',false,'Ví dụ: lịch cá nhân, di chuyển...')}<div class="ma-note">${icon('info')}<span>Khung giờ bị chặn sẽ không nhận lịch hẹn mới.</span></div><div class="ma-summary"><b>${dateVi(iso())} · Từ 14:00</b><small>Chọn giờ kết thúc để tiếp tục.</small></div><button class="ma-btn primary" type="submit">Lưu khung giờ bận</button>${button('Quay lại','/admin/schedule')}</form>`,{ title:'', back:'#/admin/schedule', nav:false });
   }
 
   function copyWeek() {
     const now=new Date(), next=new Date(now); next.setDate(now.getDate()+7);
-    return shell(`<h1>Sao chép thiết lập</h1><form class="ma-form" data-ma-form="copy-week"><label class="ma-field"><label>Từ tuần</label><input value="${dateVi(iso(now))}" readonly></label><div style="text-align:center;font-size:30px">↓</div><label class="ma-field"><label>Sang tuần</label><input value="${dateVi(iso(next))}" readonly></label><div class="ma-section-title"><b>Thiết lập sẽ sao chép</b></div><div class="ma-details">${detail('Giờ làm việc','09:00 – 20:00')}${detail('Nghỉ giữa lịch','30 phút')}${detail('Thời gian di chuyển','45 phút')}${detail('Ngày làm việc','Thứ 2 – Chủ nhật')}</div><div class="ma-note">${icon('info')}<span>Kiểm tra tuần đích trước khi xác nhận.</span></div><button class="ma-btn primary">Xác nhận sao chép</button>${button('Quay lại','/admin/schedule')}</form>`,{ title:'Lịch làm việc', back:'#/admin/schedule', active:'schedule' });
+    return shell(`<h1>Sao chép thiết lập</h1><form novalidate class="ma-form" data-ma-form="copy-week"><label class="ma-field"><label>Từ tuần</label><input value="${dateVi(iso(now))}" readonly></label><div style="text-align:center;font-size:30px">↓</div><label class="ma-field"><label>Sang tuần</label><input value="${dateVi(iso(next))}" readonly></label><div class="ma-section-title"><b>Thiết lập sẽ sao chép</b></div><div class="ma-details">${detail('Giờ làm việc','09:00 – 20:00')}${detail('Nghỉ giữa lịch','30 phút')}${detail('Thời gian di chuyển','45 phút')}${detail('Ngày làm việc','Thứ 2 – Chủ nhật')}</div><div class="ma-note">${icon('info')}<span>Kiểm tra tuần đích trước khi xác nhận.</span></div><button class="ma-btn primary">Xác nhận sao chép</button>${button('Quay lại','/admin/schedule')}</form>`,{ title:'Lịch làm việc', back:'#/admin/schedule', active:'schedule' });
   }
 
   function customers(raw) {
@@ -367,8 +344,20 @@
 
   function supportRequests(raw) {
     const q=queryOf(raw), status=q.get('status') || 'pending';
-    const rows=(state().requests || []).filter(r => status==='all' || (status==='pending' ? r.status!=='resolved' : r.status==='resolved'));
-    return `${search('Tên khách hoặc số điện thoại')}<div class="ma-segments"><a class="ma-segment ${status==='pending'?'active':''}" href="#/admin/customers?tab=support&status=pending">● &nbsp; Mới</a><a class="ma-segment ${status==='resolved'?'active':''}" href="#/admin/customers?tab=support&status=resolved">Đã xử lý</a></div>${rows.map(r => `<article class="ma-card"><div class="ma-lead-head"><b>${esc(r.name || 'Khách hàng')}</b>${icon('chevron')}</div><span class="ma-badge">Yêu cầu hỗ trợ</span><p>${esc(r.subject || r.message || 'Yêu cầu của khách hàng')}</p><small style="color:#738094">◷ ${r.createdAt ? new Date(r.createdAt).toLocaleString('vi-VN'):'Thời gian gửi'}</small><div class="ma-actions">${button(r.phone || 'Gọi khách',`tel:${r.phone}`,'','phone').replace('href="#tel:','href="tel:')}${button('Xem yêu cầu',`/admin/requests/${encodeURIComponent(r.id)}`,'primary')}</div></article>`).join('') || '<div class="ma-recent-empty" style="min-height:115px">Các yêu cầu mới sẽ xuất hiện tại đây.</div>'}`;
+    const type=q.get('type') || '';
+    const statusLink=value=>{const next=new URLSearchParams(q);next.set('tab','support');next.set('status',value);return '#/admin/customers?' + next;};
+    const keyword=(q.get('q') || '').toLocaleLowerCase('vi');
+    const rows=(state().requests || []).filter(r => (!keyword || [r.name,r.phone,r.code,r.subject].join(' ').toLocaleLowerCase('vi').includes(keyword)) && (status==='all' || (['open','pending'].includes(status) ? ['pending','in_progress'].includes(r.status || 'pending') : r.status===status)) && (type!=='reschedule' || r.code && /đổi lịch|đổi ngày|reschedule/i.test(String(r.subject || ''))));
+    const cards = rows.map(r => `<article class="ma-card">
+      <div class="ma-lead-head"><b>${esc(r.name || 'Khách hàng')}</b>${icon('chevron')}</div>
+      <span class="ma-badge">Yêu cầu hỗ trợ</span><p>${esc(r.subject || r.message || 'Yêu cầu của khách hàng')}</p>
+      <small style="color:#738094">◷ ${r.createdAt ? new Date(r.createdAt).toLocaleString('vi-VN'):'Thời gian gửi'}</small>
+      <div class="ma-actions">
+        ${r.purpose === 'booking-code-recovery' ? '' : button(r.phone || 'Gọi khách', `tel:${r.phone}`, '', 'phone').replace('href="#tel:', 'href="tel:')}
+        ${button('Xem yêu cầu', `/admin/requests/${encodeURIComponent(r.id)}`, 'primary')}
+      </div>
+    </article>`).join('');
+    return `${type==='reschedule' ? '<p class="overview-note">Đang lọc yêu cầu đổi lịch · <a href="#/admin/requests?status=open">Bỏ lọc chủ đề</a></p>' : ''}<form data-ma-form="support-search">${search('Tên khách hoặc số điện thoại',q.get('q') || '')}</form><div class="ma-segments"><a class="ma-segment ${['pending','open'].includes(status)?'active':''}" href="${statusLink('pending')}">● &nbsp; Mới</a><a class="ma-segment ${status==='resolved'?'active':''}" href="${statusLink('resolved')}">Đã xử lý</a></div>${cards || '<div class="ma-recent-empty" style="min-height:115px">Các yêu cầu mới sẽ xuất hiện tại đây.</div>'}`;
   }
 
   function leads() {
@@ -379,7 +368,21 @@
   function requestDetail(id) {
     const r=request(id);
     if(!r) return notFound('Không tìm thấy yêu cầu','/admin/requests');
-    return shell(`<div class="ma-title-row"><h1>Chi tiết yêu cầu</h1><span class="ma-badge">${r.status==='resolved'?'Đã xử lý':'Chưa xử lý'}</span></div><div class="ma-info-head"><div class="ma-person"><span class="ma-avatar">${icon('user')}</span><div><b>${esc(r.name)}</b><small>${esc(r.phone)}</small></div></div></div><div class="ma-section-title"><b>Nội dung khách gửi</b></div><div class="ma-field"><textarea readonly>${esc(r.message || r.subject)}</textarea></div>${r.code?`<div class="ma-section-title"><b>Lịch hẹn liên quan</b></div><a class="ma-settings-link" href="#/admin/appointments/${encodeURIComponent(r.code)}">${icon('calendar')}<span>${esc(r.code)}</span><span class="ma-link">Mở lịch hẹn →</span></a>`:''}<form class="ma-form" data-ma-form="resolve-request" data-id="${esc(r.id)}">${field('reply','Ghi chú xử lý','textarea',r.reply || '',false,'Nhập kết quả trao đổi...')}<div class="ma-actions">${button('Gọi khách',`tel:${r.phone}`,'','phone').replace('href="#tel:','href="tel:')}<button type="button" class="ma-btn" data-ma-action="copy" data-value="${esc(r.phone)}">${icon('copy')}Sao chép số</button></div><button class="ma-btn primary" type="submit">Đánh dấu đã xử lý</button></form>`,{ title:'Yêu cầu hỗ trợ', back:'#/admin/customers?tab=support', nav:false });
+    const isRecovery = r.purpose === 'booking-code-recovery';
+    return shell(`
+      <div class="ma-title-row"><h1>${isRecovery ? 'Xin lại mã lịch hẹn' : 'Chi tiết yêu cầu'}</h1><span class="ma-badge">${r.status==='resolved'?'Đã xử lý':'Chưa xử lý'}</span></div>
+      <div class="ma-info-head"><div class="ma-person"><span class="ma-avatar">${icon('user')}</span><div><b>${esc(r.name)}</b><small>${esc(r.phone)}</small></div></div></div>
+      <div class="ma-section-title"><b>Nội dung khách gửi</b></div><div class="ma-field"><textarea readonly>${esc(r.message || r.subject)}</textarea></div>
+      ${r.code ? `<div class="ma-section-title"><b>Lịch hẹn liên quan</b></div><a class="ma-settings-link" href="#/admin/appointments/${encodeURIComponent(r.code)}">${icon('calendar')}<span>${esc(r.code)}</span><span class="ma-link">Mở lịch hẹn →</span></a>` : ''}
+      ${isRecovery ? '<p class="overview-note">Đối chiếu trong mục Lịch hẹn. Xác minh qua số điện thoại đã lưu trên lịch trước khi gửi lại mã.</p>' : ''}
+      <form novalidate class="ma-form" data-ma-form="resolve-request" data-id="${esc(r.id)}">
+        ${field('reply', 'Ghi chú xử lý', 'textarea', r.reply || '', false, 'Nhập kết quả trao đổi...')}
+        <div class="ma-actions">
+          ${isRecovery ? button('Tìm lịch hẹn', '/admin/appointments') : button('Gọi khách', `tel:${r.phone}`, '', 'phone').replace('href="#tel:', 'href="tel:')}
+          <button type="button" class="ma-btn" data-ma-action="copy" data-value="${esc(r.phone)}">${icon('copy')}Sao chép số</button>
+        </div>
+        <button class="ma-btn primary" type="submit">Đánh dấu đã xử lý</button>
+      </form>`, { title:'Yêu cầu hỗ trợ', back:'#/admin/customers?tab=support', nav:false });
   }
 
   function customerDetail(id) {
@@ -435,7 +438,7 @@
   }
 
   function loginPage() {
-    return `<div class="ma-login"><div class="ma-login-top"><span class="ma-brand">HOÀN</span></div><div class="ma-login-body"><div class="ma-alert">${icon('alert')}<span><b>Phiên đăng nhập đã hết hạn.</b><br>Vui lòng đăng nhập lại.</span></div><div class="ma-login-title"><h1>Đăng nhập quản trị</h1><p>HOÀN Admin Mobile</p></div><form class="ma-form" data-ma-form="login">${field('username','Tài khoản','text','',true,'Nhập tài khoản quản trị')}${field('password','Mật khẩu','password','',true,'Nhập mật khẩu')}<button class="ma-btn primary" type="submit">Đăng nhập</button></form><p style="text-align:center;color:#657083;margin-top:30px">${icon('lock')} &nbsp; Dành cho quản trị viên HOÀN</p></div></div>`;
+    return `<div class="ma-login"><div class="ma-login-top"><span class="ma-brand">HOÀN</span></div><div class="ma-login-body"><div class="ma-alert">${icon('alert')}<span><b>Phiên đăng nhập đã hết hạn.</b><br>Vui lòng đăng nhập lại.</span></div><div class="ma-login-title"><h1>Đăng nhập quản trị</h1><p>HOÀN Admin Mobile</p></div><form novalidate class="ma-form" data-ma-form="login">${field('username','Tài khoản','text','',true,'Nhập tài khoản quản trị')}${field('password','Mật khẩu','password','',true,'Nhập mật khẩu')}<button class="ma-btn primary" type="submit">Đăng nhập</button></form><p style="text-align:center;color:#657083;margin-top:30px">${icon('lock')} &nbsp; Dành cho quản trị viên HOÀN</p></div></div>`;
   }
 
   function utilityPage(path) {
@@ -472,17 +475,16 @@
     if(path==='/admin/schedule/week-settings') return weekSettings();
     if(path==='/admin/schedule/block') return blockTime(raw);
     if(path==='/admin/schedule/copy') return copyWeek();
-    if(path==='/admin/customers' || path==='/admin/requests') return customers(path==='/admin/requests' ? '/admin/customers?tab=support' : raw);
+    if(path==='/admin/customers' || path==='/admin/requests') return customers(path==='/admin/requests' ? raw + (raw.includes('?') ? '&' : '?') + 'tab=support' : raw);
     if(parts[1]==='requests' && parts[2]) return requestDetail(decodeURIComponent(parts[2]));
     if(parts[1]==='customers' && parts[2]) return customerDetail(decodeURIComponent(parts[2]));
     return utilityPage(path);
   }
 
   async function api(payload) {
-    const token = localStorage.getItem('hoanAdminToken') || sessionStorage.getItem('hoanAdminToken') || '';
-    const response = await fetch('/api/data',{ method:'POST', headers:{ 'Content-Type':'application/json', ...(token ? {Authorization:`Bearer ${token}`}:{}) }, body:JSON.stringify(payload) });
+    const response = await fetch('/api/data',{ method:'POST', credentials:'same-origin', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(payload) });
     const data=await response.json();
-    if(!response.ok) throw new Error(data.error || 'Không thể kết nối dữ liệu');
+    if(!response.ok) throw window.HoanFormFeedback.serverError(response, data);
     return data;
   }
 
@@ -502,7 +504,7 @@
     const el=event.target.closest('[data-ma-action]'); if(!el) return;
     const action=el.dataset.maAction; event.preventDefault();
     try {
-      if(action==='finance-record'){window.HoanFinanceAdmin?.open(el.dataset.code,el.dataset.kind||'deposit');return;}
+      if(action==='finance-record'){go('/admin/payments?q='+encodeURIComponent(el.dataset.code||''));return;}
       if(action==='toggle'){ el.classList.toggle('on'); return; }
       if(action==='toggle-service'){
         const s=(state().services || []).find(item => item.id === el.dataset.id);
@@ -535,7 +537,7 @@
         else toast('Trên iPhone: Chia sẻ → Thêm vào Màn hình chính');
         return;
       }
-      if(action==='logout'){ localStorage.removeItem('hoanAdminToken'); sessionStorage.removeItem('hoanAdminToken'); go('/admin/login'); }
+      if(action==='logout'){ document.dispatchEvent(new CustomEvent('hoan:admin-logout')); go('/admin/login'); }
     } catch(error) { toast(error.message || 'Không thể hoàn tất thao tác'); }
   });
 
@@ -545,7 +547,8 @@
     const kind=form.dataset.maForm, data=Object.fromEntries(new FormData(form));
     const submit=form.querySelector('[type="submit"]'); if(submit) submit.disabled=true;
     try {
-      if(kind==='appointment-search'){ go(`/admin/appointments?status=all&q=${encodeURIComponent(data.q || '')}`); return; }
+      if(kind==='support-search'){const query=queryOf(location.hash);query.set('q',data.q || '');query.set('tab','support');go('/admin/customers?' + query);return;}
+      if(kind==='appointment-search'){ const query=queryOf(location.hash); query.set('q',data.q || ''); go('/admin/appointments?' + query); return; }
       if(kind==='new-appointment'){
         const result=await api({action:'createAppointment',...data}); state().appointments.unshift(result.appointment); toast('Đã tạo lịch hẹn'); go(`/admin/appointments/${result.appointment.code}`); return;
       }
@@ -557,13 +560,15 @@
         const result=await api({action:'updateAppointment',code:form.dataset.code,date:data.date,time:data.time,note:data.note}); Object.assign(appointment(form.dataset.code),result.appointment); toast('Đã đổi lịch hẹn'); go(`/admin/appointments/${form.dataset.code}`); return;
       }
       if(kind==='reconcile'){
-        window.HoanFinanceAdmin?.open(form.dataset.code,'deposit');return;
+        go('/admin/payments?q='+encodeURIComponent(form.dataset.code||''));return;
       }
       if(kind==='resolve-request'){
         const result=await api({action:'resolveRequest',id:form.dataset.id,status:'resolved',reply:data.reply}); Object.assign(request(form.dataset.id),result.request); toast('Đã đánh dấu xử lý'); refresh(); return;
       }
       if(kind==='block-time'){
-        await api({action:'setScheduleSlot',date:data.date,time:data.time,status:'blocked',note:data.note}); state().scheduleSlots.push({slotDate:data.date,slotTime:data.time,status:'blocked',note:data.note}); toast('Đã chặn khung giờ'); go('/admin/schedule'); return;
+        const result = await api({ action: 'setScheduleSlot', date: data.date, time: data.time, endTime: data.end, status: 'blocked', note: data.note });
+        state().scheduleSlots = [...state().scheduleSlots.filter(slot => slot.slotDate !== data.date || slot.slotTime !== data.time), result.slot];
+        toast('Đã chặn khung giờ'); go('/admin/schedule'); return;
       }
       if(kind==='week-settings' || kind==='copy-week'){ toast(kind==='copy-week'?'Đã sao chép thiết lập tuần':'Đã lưu thiết lập tuần'); go('/admin/schedule'); return; }
       if(kind==='save-mobile-settings'){
@@ -585,8 +590,13 @@
         go('/admin/account');
         return;
       }
-      if(kind==='login'){ sessionStorage.setItem('hoanAdminToken',data.password || 'mobile-session'); toast('Đăng nhập thành công'); go('/admin'); return; }
-    } catch(error) { toast(error.message || 'Không thể lưu thay đổi'); }
+      if(kind==='login'){
+        const token = String(data.password || '').trim();
+        await window.HoanAdminAuth.signIn(token);
+        if (location.hash === '#/admin/login') go('/admin');
+        refresh(); return;
+      }
+    } catch(error) { window.HoanFormFeedback.show(form, error, { customer: 'name', endTime: 'end' }); }
     finally { if(submit) submit.disabled=false; }
   },true);
 

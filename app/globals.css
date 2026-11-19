@@ -6,6 +6,10 @@ body {
   background: #fff;
 }
 
+dialog[open] {
+  margin: auto;
+}
+
 /* ============================================================
    THANH CUỘN CHUYÊN NGHIỆP - HOÀN Makeup Admin
    ============================================================ */

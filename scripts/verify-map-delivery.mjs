@@ -73,9 +73,9 @@ try {
   const mount = async () => page.evaluate(async point => {
     window.__mapDelivery.cleanup?.();
     document.body.innerHTML = '<section class="location-map-panel" style="width:640px"><div class="location-map-heading"><h3>Map delivery fixture</h3><button data-map-expand>Mở rộng</button></div><div class="location-map-viewport"><div data-location-map-canvas style="height:320px"></div><div class="location-map-tools"><button data-map-recenter>Về điểm đã chọn</button></div><p class="location-map-loading" data-map-loading role="status"></p></div><p data-location-pin-status aria-live="polite"></p><button data-location-use-pin disabled>Dùng vị trí này</button></section>';
-    const module = await import('/location-raster-map.js?delivery-test=1');
+    const mapMod = await import('/location-raster-map.js?delivery-test=1');
     const abort = new AbortController(); window.__mapDelivery.abort = abort;
-    window.__mapDelivery.cleanup = await module.mountLocationMap(document.querySelector('section'), point, selected => window.__mapDelivery.confirmations.push(selected), { signal: abort.signal });
+    window.__mapDelivery.cleanup = await mapMod.mountLocationMap(document.querySelector('section'), point, selected => window.__mapDelivery.confirmations.push(selected), { signal: abort.signal });
   }, fixturePoint);
   const confirm = page.locator('[data-location-use-pin]');
   const retry = page.locator('[data-map-retry]');

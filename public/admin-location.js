@@ -1,4 +1,4 @@
-import { cleanLocationCoordinates } from './location-utils.js?v=5.0';
+import { cleanLocationCoordinates } from './location-utils.js?v=6.0';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
 const coordinateText = point => `${point.lat.toFixed(6)}, ${point.lon.toFixed(6)}`;
@@ -88,7 +88,7 @@ export function createAdminLocations({ getState, modal, toast = () => {} }) {
     if(!info.point)return;
     const controller=new AbortController();record.controller=controller;
     const status=record.panel.querySelector('[data-location-pin-status]');if(status)status.textContent='Đang tải bản đồ…';
-    import('./location-map.js?v=8.2').then(async({mountReadonlyLocationMap})=>{
+    import('./location-map.js?v=11.1').then(async({mountReadonlyLocationMap})=>{
       if(controller.signal.aborted||!record.panel.isConnected)return;
       const cleanup=await mountReadonlyLocationMap(record.panel,info.point,{signal:controller.signal,devicePoint:info.devicePoint});
       if(controller.signal.aborted||!record.panel.isConnected||record.controller!==controller)cleanup();

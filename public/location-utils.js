@@ -168,6 +168,13 @@ export function canConfirmLocationPoint(value) {
   return Boolean(point && (point.mode === 'pin' || (point.accuracy && point.accuracy <= 150)));
 }
 
+export function locationAddressSignature(value) {
+  const point = cleanLocationCoordinates(value.locationCoordinates);
+  const fields = ['city', 'ward', 'address'].map(field => typeof value[field] === 'string' ? value[field].trim().normalize('NFC') : '');
+  if (!point || !fields.every(Boolean) || !Number.isSafeInteger(value.provinceCode) || !Number.isSafeInteger(value.wardCode)) return '';
+  return JSON.stringify([point.lat, point.lon, point.mode, point.accuracy, value.provinceCode, value.wardCode, ...fields]);
+}
+
 export function cleanBookingLocation(value, now = Date.now()) {
   const timestamp = raw => { const date = typeof raw === 'string' ? Date.parse(raw) : NaN; return Number.isFinite(date) && date <= now + 300000 ? new Date(date).toISOString() : ''; };
   const point = cleanLocationCoordinates(value.locationCoordinates);
@@ -175,6 +182,8 @@ export function cleanBookingLocation(value, now = Date.now()) {
   const confirmedAt = timestamp(value.locationConfirmedAt);
   const region = value.locationRegion;
   const matches = region && Number.isSafeInteger(value.provinceCode) && value.provinceCode > 0 && Number.isSafeInteger(value.wardCode) && value.wardCode > 0 && region.provinceCode === value.provinceCode && region.wardCode === value.wardCode;
-  const confirmed = Boolean(canConfirmLocationPoint(point) && confirmedAt && matches);
-  return { locationCoordinates: confirmed ? point : null, locationDeviceCoordinates: devicePoint?.mode === 'gps' ? devicePoint : null, locationCapturedAt: devicePoint?.mode === 'gps' ? timestamp(value.locationCapturedAt) : '', locationConfirmedAt: confirmed ? confirmedAt : '' };
+  const signature = locationAddressSignature(value);
+  const confirmed = Boolean(canConfirmLocationPoint(point) && confirmedAt && matches && signature && value.locationAddressSignature === signature);
+  const measured = confirmed && devicePoint?.mode === 'gps';
+  return { locationCoordinates: confirmed ? point : null, locationDeviceCoordinates: measured ? devicePoint : null, locationCapturedAt: measured ? timestamp(value.locationCapturedAt) : '', locationConfirmedAt: confirmed ? confirmedAt : '', locationAddressSignature: confirmed ? signature : '' };
 }

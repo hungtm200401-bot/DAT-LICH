@@ -1,6 +1,8 @@
 import { locateAdministrativeArea } from './location-boundaries.js?v=3.0';
-import { normalizeReverseAddress, parseBigDataCloudAddress, formatAddressDetails } from './location-utils.js?v=5.0';
+import { normalizeReverseAddress, formatAddressDetails } from './location-utils.js?v=6.0';
 
+const preciseAccuracy = 30;
+const usableAccuracy = 60;
 const positionAbort = () => new DOMException('Cancelled', 'AbortError');
 const positionError = (code, message) => Object.assign(new Error(message), { code });
 const isCurrentPosition = position => {
@@ -42,13 +44,13 @@ export async function acquireDevicePosition(geolocation, signal, onProgress, onS
       };
       const abort = () => finish(reject, positionAbort());
       signal.addEventListener('abort', abort, { once: true });
-      const startDeadline = () => {
+      const startDeadline = (delay = 12000) => {
         if (finished) return;
         clearTimeout(timer);
         timer = setTimeout(() => {
           timedOut = true;
           finish(reject, positionError(3, 'Device position timed out.'));
-        }, 12000);
+        }, delay);
       };
       startDeadline();
       // Browser acquisition timeouts exclude the permission prompt. Match that
@@ -66,7 +68,7 @@ export async function acquireDevicePosition(geolocation, signal, onProgress, onS
                 reportStage('permission');
               } else {
                 reportStage('locating');
-                startDeadline();
+                startDeadline(permissionStatus.state === 'granted' ? 4000 : 12000);
               }
             };
             permissionStatus.addEventListener?.('change', permissionChanged);
@@ -99,12 +101,12 @@ export async function acquireDevicePosition(geolocation, signal, onProgress, onS
     if (signal.aborted) throw positionAbort();
     if (best && typeof onProgress === 'function') onProgress(best);
     if (signal.aborted) throw positionAbort();
-    if (best?.coords.accuracy <= 30) return best;
+    if (best?.coords.accuracy <= preciseAccuracy) return best;
     const retry = !best;
     const canWatch = typeof geolocation.watchPosition === 'function';
     if (!retry && !canWatch) return best;
     return await new Promise((resolve, reject) => {
-      let watchId, assigned = false, cleared = false, timer, retryTimer, finished = false, pending;
+      let watchId, assigned = false, cleared = false, timer, retryTimer, settleTimer, finished = false, pending;
       let retryFinished = !retry, watching = canWatch;
       let latestTimestamp = best?.timestamp;
       const clearWatch = () => {
@@ -117,6 +119,7 @@ export async function acquireDevicePosition(geolocation, signal, onProgress, onS
         finished = true;
         clearTimeout(timer);
         clearTimeout(retryTimer);
+        clearTimeout(settleTimer);
         signal.removeEventListener('abort', abort);
         clearWatch();
         if (signal.aborted) reject(positionAbort());
@@ -126,6 +129,11 @@ export async function acquireDevicePosition(geolocation, signal, onProgress, onS
       };
       const abort = () => finish(positionAbort());
       signal.addEventListener('abort', abort, { once: true });
+      const settleUsablePosition = () => {
+        if (settleTimer == null && best?.coords.accuracy <= usableAccuracy) {
+          settleTimer = setTimeout(finish, 2500);
+        }
+      };
       const select = position => {
         if (finished) return;
         if (signal.aborted) { abort(); return; }
@@ -148,8 +156,11 @@ export async function acquireDevicePosition(geolocation, signal, onProgress, onS
         pending = undefined;
         if (typeof onProgress === 'function') onProgress(best);
         if (signal.aborted) { abort(); return; }
-        if (best.coords.accuracy <= 30) finish();
-        else if (watching) reportStage('refining');
+        if (best.coords.accuracy <= preciseAccuracy) finish();
+        else {
+          settleUsablePosition();
+          if (watching) reportStage('refining');
+        }
         return true;
       };
       acceptLateInitial = select;
@@ -158,6 +169,7 @@ export async function acquireDevicePosition(geolocation, signal, onProgress, onS
       // stays within 30 seconds, even when both device providers stop responding.
       // Keep original samples and accuracy estimates; never average a location.
       timer = setTimeout(() => finish(), 18000);
+      settleUsablePosition();
       if (queuedLateInitial) {
         select(queuedLateInitial);
         queuedLateInitial = null;
@@ -208,43 +220,42 @@ export async function acquireDevicePosition(geolocation, signal, onProgress, onS
   }
 }
 
-export async function resolveAddressAtPosition(directory, point, signal) {
-  if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+export function checkLocationArea(directory, point, signal) {
+  const deadline = AbortSignal.any([signal, AbortSignal.timeout(6500)]);
+  return locateAdministrativeArea(directory, point, { signal: deadline }).catch(() => null);
+}
+
+export async function resolveAddressAtPosition(directory, point, signal, { areaLookup, onReverseLookup } = {}) {
+  if (signal.aborted) throw positionAbort();
   const coarse = point.mode !== 'pin' && (!Number.isFinite(point.accuracy) || point.accuracy <= 0 || point.accuracy > 150);
-  // An imprecise fix needs a pin confirmation, not a multi-megabyte boundary
-  // download that cannot make the device's coordinates more accurate.
+  // Defer boundary downloads until the device reports a usable measurement.
   if (coarse) return { area: null, reliable: false, address: '', coarse: true };
-  const area = await locateAdministrativeArea(directory, point, { signal }).catch(error => { if (signal.aborted) throw error; return null; });
-  if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
-  if (area && !area.reliable) return { area, reliable: false, address: '', coarse: false };
+  const area = await (areaLookup || checkLocationArea(directory, point, signal));
+  if (signal.aborted) throw positionAbort();
+  if (!area?.reliable) return { area, reliable: false, address: '', coarse: false };
   let result;
   try {
-    const response = await fetch('/api/data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'reverseGeocode', lat: point.lat, lon: point.lon }), signal: AbortSignal.any([signal, AbortSignal.timeout(11000)]) });
-    if (!response.ok) throw new Error('No street address');
-    const data = await response.json();
-    result = { ...normalizeReverseAddress(directory, data), addressDistance: data.featureDistanceMeters ?? data.addressDistance };
-  } catch {
-    if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
-    // A locality-only provider cannot improve a verified local boundary result.
-    if (!area) {
-      try {
-        const response = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${point.lat}&longitude=${point.lon}&localityLanguage=vi`, { signal: AbortSignal.any([signal, AbortSignal.timeout(7000)]) });
-        if (response.ok) result = normalizeReverseAddress(directory, parseBigDataCloudAddress(await response.json()));
-      } catch { /* The map and manual address entry remain available. */ }
-    }
-  }
-  const sameWard = area && (!result?.countryCode || result.countryCode === 'vn') && (!result?.wardCode || result.wardCode === area.wardCode) && (!result?.provinceCode || result.provinceCode === area.provinceCode);
-  const streetNearby = Number.isFinite(result?.addressDistance) && result.addressDistance <= 150;
-  let address = sameWard && streetNearby ? result.address : '';
-  const parts = { ...(sameWard ? result?.addressParts : {}), ward: area?.ward || '', province: area?.city || '' };
-  const houseReliable = streetNearby && result.addressDistance <= 25 && (point.mode === 'pin' || (point.accuracy > 0 && point.accuracy <= 30));
+    onReverseLookup?.();
+    const response = await fetch('/api/data', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'reverseGeocode', lat: point.lat, lon: point.lon }),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]),
+    });
+    if (response.ok) result = normalizeReverseAddress(directory, await response.json());
+  } catch { /* A verified ward remains available when street data is missing. */ }
+  if (signal.aborted) throw positionAbort();
+  const sameWard = !result || (result.countryCode === 'vn' &&
+    (!result.wardCode || result.wardCode === area.wardCode) && (!result.provinceCode || result.provinceCode === area.provinceCode));
+  const distance = result?.featureDistanceMeters ?? null;
+  const streetLimit = point.mode === 'pin' ? 90 : Math.min(90, point.accuracy + 30);
+  const streetNearby = distance !== null && distance <= streetLimit;
+  const parts = { ...(sameWard && streetNearby ? result?.addressParts : {}), ward: area.ward, province: area.city };
+  const houseReliable = streetNearby && distance <= 20 && (point.mode === 'pin' || point.accuracy <= preciseAccuracy);
   if (!houseReliable) { parts.houseNumber = ''; parts.building = ''; }
-  if (!sameWard || !streetNearby) { parts.houseNumber = ''; parts.road = ''; parts.building = ''; }
-  // Coordinates identify a point, not necessarily the nearest indexed house.
-  // A medium-accuracy device fix may suggest a street but never a house number.
-  if (sameWard && streetNearby && result?.addressParts && !houseReliable) address = formatAddressDetails(parts);
-  const precision = parts.houseNumber && address ? 'house' : parts.road && address ? 'street' : address || area ? 'locality' : 'missing';
-  const missingParts = [!parts.houseNumber && 'houseNumber', !(parts.road || parts.hamlet || parts.neighbourhood || parts.residential) && 'road', !area?.ward && 'ward', !area?.city && 'province'].filter(Boolean);
-  const addressDetails = { parts, precision, missingParts, featureDistanceMeters: Number.isFinite(result?.addressDistance) ? result.addressDistance : null, source: result?.source || '' };
-  return { area, reliable: Boolean(area?.reliable), address, addressDetails, countryCode: result?.countryCode, source: result?.source || '', coarse: false };
+  const address = formatAddressDetails(parts);
+  const precision = parts.houseNumber && address ? 'house' : parts.road && address ? 'street' : 'locality';
+  const missingParts = [!parts.houseNumber && 'houseNumber', !address && 'road'].filter(Boolean);
+  const source = result?.source || '';
+  const addressDetails = { parts, precision, missingParts, featureDistanceMeters: distance, source };
+  return { area, reliable: true, mismatch: !sameWard, address, addressDetails, countryCode: result?.countryCode, source, coarse: false };
 }

@@ -1,31 +1,67 @@
-import { env } from "cloudflare:workers";
+import { matchesAdminKey, sameOrigin } from './admin-authorization.mjs';
+import { keyedHash, protectionSettings } from './data-guards';
+export { sameOrigin } from './admin-authorization.mjs';
 
-export function sameOrigin(request: Request) {
-  const origin = request.headers.get("Origin");
-  return !origin || origin === new URL(request.url).origin;
+const sessionSeconds = 8 * 60 * 60;
+export const privateHeaders = { "Cache-Control": "no-store", "Vary": "Cookie" };
+
+export function adminTransport(request: Request) {
+  const url = new URL(request.url);
+  return url.protocol === "https:" || (
+    protectionSettings.HOAN_LOCAL_DEV === "1" &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+  );
 }
 
-// Local development is loopback-only. Public deployments fail closed until
-// ADMIN_TOKEN is configured as a Worker secret, never in public site content.
+function cookieName(request: Request) {
+  return new URL(request.url).protocol === "https:" ? "__Host-hoan_admin" : "hoan_admin_local";
+}
+
+function sessionValue(request: Request) {
+  const prefix = cookieName(request) + "=";
+  const value = request.headers.get("Cookie")?.split(";").map(item => item.trim()).find(item => item.startsWith(prefix))?.slice(prefix.length);
+  return value && /^[a-f0-9]{64}$/.test(value) ? value : "";
+}
+
+function sessionCookie(request: Request, value: string, maxAge: number) {
+  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  return `${cookieName(request)}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`;
+}
+
 export async function siteAdmin(request: Request) {
-  if (!sameOrigin(request)) return false;
-  const isLocalDev = (env as unknown as { HOAN_LOCAL_DEV?: string }).HOAN_LOCAL_DEV === "1";
-  const hostname = new URL(request.url).hostname;
-  const isLocalHost =
-    ["localhost", "127.0.0.1", "[::1]", "0.0.0.0", "terminal.local"].includes(hostname)
-    || /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
-    || /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)
-    || /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(hostname);
-  if (isLocalDev && isLocalHost) return true;
-
-  const token = (env as unknown as { ADMIN_TOKEN?: string }).ADMIN_TOKEN;
-  if (token) {
-    const supplied = request.headers.get("Authorization")?.replace(/^Bearer /, "") || "";
-    const digest = async (value: string) => new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
-    const [a, b] = await Promise.all([digest(token), digest(supplied)]);
-    return a.reduce((diff, value, index) => diff | (value ^ b[index]), 0) === 0;
-  }
-  return ["localhost", "127.0.0.1", "[::1]"].includes(hostname);
+  const secret = protectionSettings.ADMIN_TOKEN;
+  if (!secret || !sameOrigin(request)) return false;
+  const value = sessionValue(request);
+  if (!value || !adminTransport(request)) return false;
+  const hash = await keyedHash(secret, "admin:" + value);
+  return Boolean(await protectionSettings.DB.prepare(
+    "SELECT token_hash FROM admin_sessions WHERE token_hash = ? AND expires_at > ?",
+  ).bind(hash, Date.now()).first());
 }
 
-export const privateHeaders = { "Cache-Control": "no-store", "Vary": "Authorization" };
+export async function startAdminSession(request: Request, candidate: string) {
+  const secret = protectionSettings.ADMIN_TOKEN;
+  if (!secret || !adminTransport(request) || !sameOrigin(request) || !candidate || candidate.length > 1024) return null;
+  if (!await matchesAdminKey(candidate, secret)) return null;
+
+  const value = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, "0")).join("");
+  const hash = await keyedHash(secret, "admin:" + value);
+  const previous = sessionValue(request);
+  const previousHash = previous ? await keyedHash(secret, "admin:" + previous) : "";
+  const now = Date.now();
+  await protectionSettings.DB.batch([
+    protectionSettings.DB.prepare("DELETE FROM admin_sessions WHERE token_hash = ? OR expires_at <= ?").bind(previousHash, now),
+    protectionSettings.DB.prepare("INSERT INTO admin_sessions (token_hash, expires_at) VALUES (?, ?)").bind(hash, now + sessionSeconds * 1000),
+  ]);
+  return sessionCookie(request, value, sessionSeconds);
+}
+
+export async function endAdminSession(request: Request) {
+  const value = sessionValue(request);
+  const secret = protectionSettings.ADMIN_TOKEN;
+  if (value && secret && adminTransport(request)) {
+    const hash = await keyedHash(secret, "admin:" + value);
+    await protectionSettings.DB.prepare("DELETE FROM admin_sessions WHERE token_hash = ?").bind(hash).run();
+  }
+  return sessionCookie(request, "", 0);
+}

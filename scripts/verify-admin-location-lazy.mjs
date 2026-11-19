@@ -9,6 +9,7 @@ try{
     await context.addInitScript(() => { window.maplibregl = { supported: () => false }; });
     await context.route('**/*',route=>{
       const url=new URL(route.request().url());
+      if(url.pathname==='/api/map-tiles')return route.fulfill({contentType:'image/svg+xml',body:tile});
       if(url.hostname==='tile.openstreetmap.org')return route.fulfill({contentType:'image/svg+xml',body:tile});
       if(url.origin!==new URL(base).origin)return route.abort();
       if(url.pathname==='/__admin_location_lazy')return route.fulfill({contentType:'text/html',body:'<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/admin-location.css"><style>body{margin:0;font:14px Arial}#test-app{max-width:960px;margin:auto}.admin-location-booking{min-height:680px}#test-modal:not([hidden]){position:fixed;inset:0;display:grid;place-items:center;background:#0004;z-index:20}#test-modal>div{max-height:calc(100vh - 40px);overflow:auto;width:700px;background:#fff;padding:20px;box-sizing:border-box}</style></head><body><main id="test-app"></main><div id="test-modal" hidden></div></body></html>'});
@@ -28,6 +29,7 @@ try{
       document.getElementById('test-app').innerHTML=testLocations.customerHtml(testState.customers[0]);testLocations.mount(document);
     });
     await page.waitForFunction(()=>testMaps.some(record=>record.active));
+    assert.equal(await page.locator('.location-address-search').count(),0,'Readonly admin maps must not offer address editing');
     let counts=await page.evaluate(()=>({active:testMaps.filter(record=>record.active).length,total:testMaps.length,panels:document.querySelectorAll('[data-admin-location-panel]').length}));
     assert.equal(counts.panels,24);assert.ok(counts.active<=4&&counts.total<=4,`${fallback?'fallback':'observer'} must not initialize all history maps: ${JSON.stringify(counts)}`);
     for(const index of [11,23,0]){

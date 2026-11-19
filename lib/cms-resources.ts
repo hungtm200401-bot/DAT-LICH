@@ -22,11 +22,12 @@ export async function writeResource(name: ResourceName, value: unknown, revision
   return changed.length ? result : null;
 }
 
-const record = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
-const text = (value: unknown, max = 3000) => typeof value === 'string' && value.length <= max;
-const list = (value: unknown, max: number): value is Record<string, any>[] => Array.isArray(value) && value.length <= max && value.every(record);
-const id = (value: unknown) => typeof value === 'string' && /^[a-z0-9-]{1,100}$/.test(value);
-const unique = (values: Record<string, any>[]) => values.every(v => id(v.id)) && new Set(values.map(v => v.id)).size === values.length;
+type JsonRecord = Record<string, unknown>;
+const record = (value: unknown): value is JsonRecord => !!value && typeof value === 'object' && !Array.isArray(value);
+const text = (value: unknown, max = 3000): value is string => typeof value === 'string' && value.length <= max;
+const list = (value: unknown, max: number): value is JsonRecord[] => Array.isArray(value) && value.length <= max && value.every(record);
+const id = (value: unknown): value is string => typeof value === 'string' && /^[a-z0-9-]{1,100}$/.test(value);
+const unique = (values: JsonRecord[]) => values.every(v => id(v.id)) && new Set(values.map(v => v.id)).size === values.length;
 export function validateResource(name: ResourceName, value: unknown): string {
   if (name === 'shared') {
     if (!record(value) || !list(value.albums, 100) || !list(value.testimonials, 100) || !unique(value.albums) || !unique(value.testimonials)) return 'Danh sách dữ liệu dùng chung không hợp lệ.';
@@ -40,10 +41,10 @@ export function validateResource(name: ResourceName, value: unknown): string {
   } else {
     if (!list(value, 100) || !unique(value)) return 'Danh sách mẫu không hợp lệ.';
     for (const template of value) {
-      if (!text(template.name, 100) || !template.name.trim() || !['page', 'block'].includes(template.kind)) return 'Tên hoặc loại mẫu không hợp lệ.';
+      if (!text(template.name, 100) || !template.name.trim() || typeof template.kind !== 'string' || !['page', 'block'].includes(template.kind)) return 'Tên hoặc loại mẫu không hợp lệ.';
       const fields = template.kind === 'page' ? template.fields : { blocks: JSON.stringify(template.blocks) };
       if (!record(fields) || Object.keys(fields).length > 200 || Object.entries(fields).some(([key, val]) => !/^[a-z0-9_-]{1,100}$/.test(key) || !text(val, key === 'blocks' ? 120000 : 6000) || (key.startsWith('img-') && !validImage(val)))) return 'Nội dung mẫu không hợp lệ.';
-      try { const error = validateBlockData(JSON.parse(fields.blocks || '[]')); if (error) return error; } catch { return 'Cấu trúc mẫu không hợp lệ.'; }
+      try { const error = validateBlockData(JSON.parse(typeof fields.blocks === 'string' ? fields.blocks : '[]')); if (error) return error; } catch { return 'Cấu trúc mẫu không hợp lệ.'; }
     }
   }
   return '';

@@ -1,0 +1,2 @@
+# Data model
+No migrations. Existing D1 appointment/customer/ledger preserved. Admin key is an environment secret; frontend session holds only the user-entered key. Public snapshot excludes private row identifiers. Requests verify appointment code+phone before storing and return minimal id/status. Uploaded images retain generated UUID keys and verified content type. Reject invalid requests before inserts.

@@ -59,7 +59,7 @@ try {
   await page.locator('#modal-quick-text').fill('Nội dung chỉnh sửa được giữ lại');
   await page.locator('[data-action="close-text-modal"]').first().click();
   assert.equal(await page.locator('.studio-outline-item.is-selected').count(),1);
-  const selectedKey=await page.locator('.studio-outline-item.is-selected').getAttribute('data-key');
+  await page.locator('.studio-outline-item.is-selected').getAttribute('data-key');
   await page.locator('[data-cms-device="mobile"]').click();
   assert.equal(Math.round(await page.locator('#cms-real-preview').evaluate(node=>node.getBoundingClientRect().width)),390);
   await page.locator('[data-cms-device="desktop"]').click();

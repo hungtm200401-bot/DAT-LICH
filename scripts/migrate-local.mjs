@@ -42,3 +42,20 @@ for (const [name, sql] of additions) {
 }
 
 execute(['--file', 'drizzle/0003_payment_ledger.sql']);
+execute(['--file', 'drizzle/0004_visit_session_codes.sql']);
+
+const visitSchema = JSON.parse(execute(['--command', 'PRAGMA table_info(visit_sessions);', '--json'], true));
+if (!visitSchema[0]?.results?.some(column => column.name === 'left_at')) {
+  execute(['--file', 'drizzle/0005_visit_departure.sql']);
+}
+
+if (!columns.has('archived_at')) {
+  execute(['--file', 'drizzle/0006_protect_business_data.sql']);
+}
+const scheduleSchema = JSON.parse(execute(['--command', 'PRAGMA table_info(schedule_slots);', '--json'], true));
+if (!scheduleSchema[0]?.results?.some(column => column.name === 'end_time')) {
+  execute(['--file', 'drizzle/0007_booking_commit_guard.sql']);
+  execute(['--file', 'drizzle/0008_schedule_ranges.sql']);
+}
+execute(['--file', 'drizzle/0009_booking_sms_verification.sql']);
+execute(['--file', 'drizzle/0010_booking_google_recovery.sql']);

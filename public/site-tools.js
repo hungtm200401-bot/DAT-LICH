@@ -1,8 +1,8 @@
-import { createVisitorWorkspace } from './visitor-workspace.js?v=1.0';
-import { packEditorHtml, bindPackEditor } from './cms/pack-editor.js';
+import { createVisitorWorkspace } from './visitor-workspace.js?v=1.1';
+import { packEditorHtml, bindPackEditor } from './cms/pack-editor.js?v=1.1';
 import { workspaceHtml, packManagerHtml } from './cms/workspace.js';
 import { outlineHtml } from './cms/outline.js';
-import { createCmsApi } from './cms/api.js';
+import { createCmsApi } from './cms/api.js?v=1.1';
 import { createPreviewBridge } from './cms/preview.js';
 import { createBlockEditor } from './cms/block-editor.js';
 import { studioMediaCatalog } from './cms/media.js';
@@ -40,7 +40,7 @@ export function createSiteTools(ctx) {
     set(key, value) { try { localStorage.setItem(key, value); } catch { /* storage may be blocked */ } },
   };
   let pages = {}, serverDrafts = {}, selected = '/', draft = {}, revision = '', dirty = false, descriptors = [], framePath = '', isApplyingPreview = false;
-  let pageSectionSlots = [], activeBlockId = '', blockInsertSlot = 40, previewDevice = 'desktop', draftTimer = 0, savingDraft = false, cmsHistory = [], draggedBlockId = '';
+  let pageSectionSlots = [], _activeBlockId = '', blockInsertSlot = 40, previewDevice = 'desktop', draftTimer = 0, savingDraft = false, cmsHistory = [], draggedBlockId = '';
   let undoStack = [], redoStack = [];
   let studioView = 'pages', studioSidebarView = 'content';
   let studioOutlineHidden = false;
@@ -52,16 +52,15 @@ export function createSiteTools(ctx) {
   let consent = storage.get('hoanAnalyticsConsent') === 'no' ? 'no' : 'yes';
   let refreshTimer, polling = false, previewDraft = null;
 
-  const adminHeaders = () => {
-    let token = '';
-    try { token = localStorage.getItem('hoanAdminToken') || sessionStorage.getItem('hoanAdminToken') || ''; } catch { /* local */ }
-    return token ? { Authorization: 'Bearer ' + token } : {};
-  };
-  function drawStudioOutline() {
-    try { drawStudioNavigation(); } catch (e) {}
+  const adminHeaders = () => ({});
+  function _drawStudioOutline() {
+    try { drawStudioNavigation(); } catch {}
   }
   const request = createCmsApi(adminHeaders);
-  const visitorWorkspace = createVisitorWorkspace({ request, esc, toast, adminShell:ctx.adminShell });
+  const getVisitServiceName = id => ctx.getState().services?.find(service => service.id === id)?.name;
+  const visitorWorkspace = createVisitorWorkspace({
+    request, esc, toast, adminShell: ctx.adminShell, getServiceName: getVisitServiceName,
+  });
   window.HoanVisitorAdmin = visitorWorkspace;
   const library = createContentLibrary({
     request, esc, toast, isAdmin, getState: ctx.getState, builtinMedia: studioMediaCatalog, adminHeaders,
@@ -126,6 +125,12 @@ export function createSiteTools(ctx) {
       '/contact': 'Liên hệ',
       '/support': 'Trung tâm hỗ trợ',
       '/lookup': 'Tra cứu lịch hẹn',
+      '/lookup/recover': 'Lấy lại mã lịch hẹn',
+      '/lookup/recover/google': 'Lấy lại mã lịch hẹn',
+      '/lookup/recover/sms': 'Xác minh bằng SMS',
+      '/lookup/google/link': 'Lưu lịch bằng Google',
+      '/lookup/recover/request': 'Lấy lại mã lịch hẹn',
+      '/lookup/recover/saved': 'Mở lịch đã lưu',
       '/search': 'Tìm kiếm',
       '/policies': 'Chính sách',
       '/booking': 'Đặt lịch hẹn',
@@ -133,6 +138,7 @@ export function createSiteTools(ctx) {
       '/booking/time': 'Đặt lịch · Chọn thời gian',
       '/booking/location': 'Đặt lịch · Chọn địa điểm',
       '/booking/info': 'Đặt lịch · Nhập thông tin',
+      '/booking/verify-phone': 'Đặt lịch · Xác minh số điện thoại',
       '/booking/deposit': 'Đặt lịch · Đặt cọc',
       '/booking/confirm': 'Đặt lịch · Xác nhận',
       '/booking/success': 'Đặt lịch · Hoàn tất'
@@ -284,7 +290,7 @@ export function createSiteTools(ctx) {
       if (match) serviceId = match[1];
     }
     container.innerHTML = packEditorHtml({ pack: packToEdit, serviceId, services: ctx.getState().services || [], esc });
-    bindPackEditor(container);
+    bindPackEditor(container, title => request('/api/data', { action: 'validateServicePack', title }, true));
   }
 
   function openBlockPicker(slot = pageSectionSlots.length) {
@@ -296,9 +302,9 @@ export function createSiteTools(ctx) {
     }
   }
 
-  const { openBlockEditor } = createBlockEditor({ esc, getBlocks, blockModalContainer, blockSlotOptions, option, sourceFields: block => library.sourceFields(block), onActive: id => { activeBlockId = id; } });
+  const { openBlockEditor } = createBlockEditor({ esc, getBlocks, blockModalContainer, blockSlotOptions, option, sourceFields: block => library.sourceFields(block), onActive: id => { _activeBlockId = id; } });
 
-  function detectSection(node, path) {
+  function detectSection(node, _path) {
     if (node.closest('.ct-campaign')) return { id: 'sec-cover', title: 'Ảnh bìa & giới thiệu', icon: '' };
     if (node.closest('.ct-bridal-story')) return { id: 'sec-bridal', title: 'Câu chuyện cô dâu', icon: '' };
     if (node.closest('.ct-evening')) return { id: 'sec-evening', title: 'Phong cách dự tiệc', icon: '' };
@@ -947,7 +953,7 @@ export function createSiteTools(ctx) {
     const sLower = searchQuery.trim().toLowerCase();
     let renderedSectionsHtml = '';
 
-    for (const [secId, sec] of sectionMap.entries()) {
+    for (const [_secId, sec] of sectionMap.entries()) {
       const matchedItems = sec.items.filter(item => {
         if (activeFilter === 'image' && !item.key.startsWith('img-') && !item.key.startsWith('alt-') && !item.key.startsWith('pos-')) return false;
         if (activeFilter === 'heading' && !item.key.includes('-h1-') && !item.key.includes('-h2-') && !item.key.includes('-h3-')) return false;
@@ -1217,7 +1223,7 @@ export function createSiteTools(ctx) {
           const y = ((col + 1) & 2) === 0 ? moduleCount - 1 - r : r;
           if (matrix[y][x] === null) {
             let dark = false;
-            if (bitIdx < totalBits) dark = ((finalData[Math.floor(bitIdx / 8)] >>> (7 - (bitIdx % 8))) & 1) === 1, bitIdx++;
+            if (bitIdx < totalBits) { dark = ((finalData[Math.floor(bitIdx / 8)] >>> (7 - (bitIdx % 8))) & 1) === 1; bitIdx++; }
             if ((y + x) % 2 === 0) dark = !dark;
             matrix[y][x] = dark;
           }
@@ -1277,7 +1283,7 @@ export function createSiteTools(ctx) {
     const target = q('.visitor-section-table-area') || q('#visit-report');
     target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
-  function buildTrafficChart(sessions, daysParam, totalVisits) {
+  function buildTrafficChart(sessions, daysParam, _totalVisits) {
     const numDays = Math.min(Number(daysParam) || 7, 7);
     const dayLabels = [];
     const dayCounts = [];
@@ -1931,8 +1937,9 @@ export function createSiteTools(ctx) {
     return starting;
   }
   async function track(type, extra = {}) {
+    const page = currentPath();
     if (!await ensureTracking()) return;
-    try { await request('/api/visits', { type, page: currentPath(), ...extra }); }
+    try { await request('/api/visits', { type, page, ...extra }); }
     catch (error) { if (error.status === 401) { tracking = false; lastPage = ''; } }
   }
   function trackPage() {
@@ -2537,14 +2544,14 @@ export function createSiteTools(ctx) {
           const saved = JSON.parse(localStorage.getItem('hoanMakeupDraft') || '{}');
           saved.portfolio = state.portfolio;
           localStorage.setItem('hoanMakeupDraft', JSON.stringify(saved));
-        } catch(e) {}
+        } catch {}
 
         try {
           window.dispatchEvent(new StorageEvent('storage', {
             key: 'hoanMakeupDraft',
             newValue: JSON.stringify({ portfolio: state.portfolio })
           }));
-        } catch(e) {}
+        } catch {}
 
         if (frame()) {
           try {
@@ -2553,14 +2560,14 @@ export function createSiteTools(ctx) {
             } else {
               frame().src = previewUrl(selected);
             }
-          } catch(e) {
+          } catch {
             frame().src = previewUrl(selected);
           }
         }
 
         try {
           drawStudioNavigation();
-        } catch(e) {}
+        } catch {}
         const container = q('#cms-block-modal-container');
         if (container) container.replaceChildren();
 
@@ -2734,17 +2741,17 @@ export function createSiteTools(ctx) {
               const saved = JSON.parse(localStorage.getItem('hoanMakeupDraft') || '{}');
               saved.portfolio = state.portfolio;
               localStorage.setItem('hoanMakeupDraft', JSON.stringify(saved));
-            } catch(e) {}
+            } catch {}
             try {
               window.dispatchEvent(new StorageEvent('storage', {
                 key: 'hoanMakeupDraft',
                 newValue: JSON.stringify({ portfolio: state.portfolio })
               }));
-            } catch(e) {}
+            } catch {}
             if (frame()) {
-              try { frame().contentWindow.location.reload(); } catch(e) { frame().src = previewUrl(selected); }
+              try { frame().contentWindow.location.reload(); } catch { frame().src = previewUrl(selected); }
             }
-            try { drawStudioNavigation(); } catch(e) {}
+            try { drawStudioNavigation(); } catch {}
             q('#cms-block-modal-container')?.replaceChildren();
             toast(`Đã xóa thành công pack "${name}" khỏi website.`);
           }
@@ -3253,7 +3260,15 @@ export function createSiteTools(ctx) {
       const button = event.target.closest('[data-cms-action], [data-visit-action], [data-visit-admin], [data-visit-session]');
       if (!button) return;
       event.preventDefault();
-      if (button.dataset.cmsAction === 'token') { try { sessionStorage.setItem('hoanAdminToken', q('#cms-admin-token').value); toast('Đã dùng khóa trong phiên quản trị.'); await loadReport(); } catch { toast('Trình duyệt không cho lưu khóa phiên.'); } }
+      if (button.dataset.cmsAction === 'token') {
+        try {
+          const input = q('#cms-admin-token');
+          await window.HoanAdminAuth.signIn(input.value.trim());
+          input.value = '';
+          toast('Đã xác minh phiên quản trị.');
+          await loadReport();
+        } catch (error) { toast(error.message); }
+      }
       if (button.dataset.cmsAction === 'reload') { if (dirty && !confirm('Bỏ thay đổi chưa lưu và tải lại bản đã lưu?')) return; await loadPages(); await selectPage(selected); }
       if (button.dataset.cmsAction === 'add-media') {
         const firstImgKey = descriptors.find(d => d.key?.startsWith('img-'))?.key || activeFocusKey || 'img-1';
@@ -3310,18 +3325,34 @@ export function createSiteTools(ctx) {
         if (applyBtn) applyBtn.click();
       }
     });
+    const visitActionLabels = new Map([
+      ['start-booking', 'Bấm Đặt lịch'],
+      ['look-book', 'Bấm Đặt lịch theo mẫu'],
+      ['ct-date', 'Chọn ngày hẹn'],
+      ['time-select', 'Chọn giờ hẹn'],
+      ['ct-next', 'Bấm Tiếp tục đặt lịch'],
+      ['ct-book-next', 'Bấm Tiếp tục đặt lịch'],
+      ['ct-prev', 'Quay lại bước trước'],
+      ['booking-back', 'Quay lại bước trước'],
+    ]);
     document.addEventListener('click', event => {
       if (isAdmin() || isPreview || consent !== 'yes') return;
       const target = event.target.closest('a[href], button[data-action]');
-      if (!target) return;
+      if (!target || target.matches(':disabled, [aria-disabled="true"]')) return;
       const href = target.getAttribute('href') || '';
       if (href.startsWith('#/admin')) return;
-      let label = '';
-      if (href.startsWith('#/')) label = 'Đi tới ' + href.slice(1).split('?')[0].replace(/HMA-[^/]+/g, 'detail');
-      else if (href.startsWith('tel:')) label = 'Bấm gọi điện';
-      else if (href.startsWith('mailto:')) label = 'Bấm email';
-      else if (/https:\/\/(?:www\.)?(facebook\.com|zalo\.me|instagram\.com|tiktok\.com)/.test(href)) label = 'Mở kênh liên hệ';
-      else if (['choose-service', 'booking-service', 'look-book', 'ct-next', 'ct-prev', 'ct-book-next'].includes(target.dataset.action)) label = 'Chọn dịch vụ / bước đặt lịch';
+      const action = target.dataset.action;
+      let label = visitActionLabels.get(action) || '';
+      if (action === 'choose-service' || action === 'booking-service') {
+        const serviceName = getVisitServiceName(target.dataset.id);
+        label = serviceName ? `Chọn dịch vụ · ${serviceName}` : 'Chọn dịch vụ';
+      }
+      if (!label) {
+        if (href.startsWith('#/')) label = 'Đi tới ' + href.slice(1).split('?')[0].replace(/HMA-[^/]+/g, 'detail');
+        else if (href.startsWith('tel:')) label = 'Bấm gọi điện';
+        else if (href.startsWith('mailto:')) label = 'Bấm email';
+        else if (/https:\/\/(?:www\.)?(facebook\.com|zalo\.me|instagram\.com|tiktok\.com)/.test(href)) label = 'Mở kênh liên hệ';
+      }
       if (label) void track('click', { label });
     }, true);
     for (const event of ['pointerdown', 'keydown', 'scroll']) window.addEventListener(event, () => { lastActivity = Date.now(); }, { passive: true });

@@ -1,0 +1,25 @@
+.vn-date-control{position:relative;display:block;min-width:0;width:100%}
+.admin-page .toolbar>.vn-date-control{width:180px;flex:0 1 180px}
+.vn-date-control>.vn-date-display{display:block;width:100%;min-width:0;padding-right:42px!important;font-variant-numeric:tabular-nums}
+.vn-date-control>.vn-date-trigger{position:absolute;inset:1px 2px 1px auto;display:grid;place-items:center;width:36px;border:0;background:transparent;color:#796873;cursor:pointer;border-radius:5px;padding:7px}
+.vn-date-control.is-time>.vn-date-trigger{pointer-events:none}
+.vn-date-trigger svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.vn-date-trigger:hover{color:#7a1832;background:#f8f0f3}
+.vn-date-calendar{position:fixed;inset:auto;margin:0;padding:14px;width:320px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;border:1px solid #e4d6dc;border-radius:10px;background:#fff;color:#34272e;box-shadow:0 12px 40px #28111c26;font:13px/1.5 Inter,system-ui,sans-serif;z-index:20000;box-sizing:border-box}
+.vn-date-calendar *{box-sizing:border-box}
+.vn-date-header{display:grid;grid-template-columns:30px minmax(0,1fr) 74px 30px;align-items:center;gap:6px;margin-bottom:12px}
+.vn-date-calendar button{font:inherit;cursor:pointer}
+.vn-date-header>button{height:32px;border:1px solid #eee4e9;border-radius:6px;background:#fff;color:#7a1832;font-size:22px;line-height:1}
+.vn-date-header select,.vn-date-header input{width:100%;height:32px;min-width:0;padding:5px 6px;border:1px solid #e5dbe0;border-radius:5px;color:#523b46;background:#fff;font:500 13px/1.4 Inter,system-ui,sans-serif}
+.vn-date-weekdays,.vn-date-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;text-align:center}
+.vn-date-weekdays{font-size:12px;color:#8b7782;margin-bottom:6px}
+.vn-date-weekdays>span{padding:4px 0}
+.vn-date-grid button{min-height:34px;padding:5px 2px;border:1px solid transparent;border-radius:6px;background:#fff;color:#523f49;font-size:13px;font-variant-numeric:tabular-nums}
+.vn-date-grid button:hover{background:#f7edf1;color:#7a1832}
+.vn-date-grid button.today{border-color:#d9b9c6}
+.vn-date-grid button.selected{background:#7a1832;border-color:#7a1832;color:#fff;font-weight:600}
+.vn-date-calendar button:disabled{opacity:.35;cursor:default}
+.vn-date-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:12px;margin-top:10px;border-top:1px solid #eee6ea}
+.vn-date-footer button{border:0;padding:4px 2px;background:none;color:#7a1832;font-size:12px}
+.vn-date-calendar :focus-visible,.vn-date-trigger:focus-visible{outline:2px solid #7a1832;outline-offset:2px}
+@media(max-width:600px){.vn-date-control>.vn-date-display{font-size:14px}.vn-date-calendar{padding:12px}.vn-date-grid button{min-height:36px}}

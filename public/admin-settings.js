@@ -35,7 +35,7 @@ export function createAdminSettings({ getState, esc, icon, paymentQR }) {
     return `<div class="settings-workspace">
       <aside class="settings-aside"><nav aria-label="Nhóm cài đặt"><span class="settings-eyebrow">THIẾT LẬP CHUNG</span>${groups.map(([id, ico, title, desc]) => `<button type="button" data-settings-jump="${id}" aria-controls="settings-${id}"><span aria-hidden="true">${icon(ico)}</span><span><b>${title}</b><small>${desc}</small></span></button>`).join('')}</nav><p class="settings-timezone">${icon('clock')}<span>Giờ Việt Nam<b>GMT+7 · Ngày / Tháng / Năm</b></span></p></aside>
       <div class="settings-sections">
-        <form data-form="settings" class="settings-main-form">
+        <form novalidate data-form="settings" class="settings-main-form">
           <section id="settings-booking" class="settings-card">
             ${heading('01', 'calendar', 'Đặt lịch & chi phí', 'Thiết lập áp dụng cho các lịch hẹn mới.')}
             <div class="settings-fields settings-fields-three">
@@ -59,7 +59,7 @@ export function createAdminSettings({ getState, esc, icon, paymentQR }) {
           </section>
           <footer class="settings-save"><p>${icon('shield')}<span>Lưu để áp dụng thiết lập đặt lịch và tài khoản nhận tiền.</span></p><button type="submit" class="btn btn-dark">${icon('check')} Lưu thiết lập</button></footer>
         </form>
-        <form id="settings-contact" class="settings-card" data-form="contact-settings">
+        <form novalidate id="settings-contact" class="settings-card" data-form="contact-settings">
           ${heading('03', 'mail', 'Thông tin liên hệ', 'Kênh khách hàng sử dụng để liên hệ và nhận tư vấn.')}
           <div class="settings-fields settings-fields-two">
             ${input('phone', 'Số điện thoại / Zalo', { type: 'tel', value: b.phone === '0901 234 567' ? '' : b.phone ?? '', placeholder: 'Số điện thoại liên hệ' })}

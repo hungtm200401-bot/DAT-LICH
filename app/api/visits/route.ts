@@ -50,9 +50,13 @@ export async function POST(request: Request) {
 
       const existing = id ? await db.prepare("SELECT id FROM visit_sessions WHERE id = ? AND last_seen_at >= ?").bind(id, new Date(Date.now() - 1800000).toISOString()).first() : null;
       if (existing) {
-        if (displayName || facebookUrl) {
-          await db.prepare("UPDATE visit_sessions SET display_name = CASE WHEN display_name = '' THEN ? ELSE display_name END, facebook_url = CASE WHEN facebook_url = '' THEN ? ELSE facebook_url END WHERE id = ?").bind(displayName, facebookUrl, id).run();
-        }
+        await db.prepare(`
+          UPDATE visit_sessions
+          SET last_seen_at = ?, left_at = NULL, current_page = ?,
+              display_name = CASE WHEN display_name = '' THEN ? ELSE display_name END,
+              facebook_url = CASE WHEN facebook_url = '' THEN ? ELSE facebook_url END
+          WHERE id = ? AND last_seen_at <= ?
+        `).bind(now, page, displayName, facebookUrl, id, now).run();
         return Response.json({ ok: true }, { headers: { ...privateHeaders, "Set-Cookie": cookie(request, id) } });
       }
       // Exclude known link-preview crawlers. Counters describe measured browser sessions, not all Facebook clicks.
@@ -88,8 +92,13 @@ export async function POST(request: Request) {
       return Response.json({ error: "Sự kiện không hợp lệ." }, { status: 400 });
     }
     const seconds = payload.type === "heartbeat" || payload.type === "leave" ? Math.min(25, Math.max(0, Math.floor((Date.now() - Date.parse(session.last_seen_at)) / 1000)), Math.max(0, Number(payload.activeSeconds) || 0)) : 0;
+    const leftAt = payload.type === "leave" ? now : null;
     await db.batch([
-      db.prepare("UPDATE visit_sessions SET last_seen_at=?,current_page=?,active_seconds=active_seconds+? WHERE id=?").bind(payload.type === "leave" ? new Date(Date.now() - 91000).toISOString() : now, page, seconds, id),
+      db.prepare(`
+        UPDATE visit_sessions
+        SET last_seen_at = ?, left_at = ?, current_page = ?, active_seconds = active_seconds + ?
+        WHERE id = ? AND last_seen_at <= ?
+      `).bind(now, leftAt, page, seconds, id, now),
       ...(payload.type === "heartbeat" || payload.type === "leave" ? [] : [db.prepare("INSERT INTO visit_events (session_id,occurred_at,type,page,label) SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM visit_events WHERE session_id=?) < 1000").bind(id, now, payload.type, page, clean(payload.label), id)]),
     ]);
     return Response.json({ ok: true }, { headers: { ...privateHeaders, "Set-Cookie": cookie(request, id) } });
@@ -113,11 +122,28 @@ export async function GET(request: Request) {
   const activeSince = new Date(Date.now() - 90000).toISOString();
   const source = clean(params.get("source"), 60);
   const activeOnly = params.get("active") === "1";
-  const where = "started_at >= ? AND (? = '' OR source = ?) AND (? = 0 OR last_seen_at >= ?)";
+  const active = "left_at IS NULL AND last_seen_at >= ?";
+  const where = `started_at >= ? AND (? = '' OR source = ?) AND (? = 0 OR (${active}))`;
   const args = [since, source, source, activeOnly ? 1 : 0, activeSince];
   const [rows, summary] = await db.batch([
-    db.prepare(`SELECT *, (SELECT COUNT(*) FROM visit_events e WHERE e.session_id=visit_sessions.id AND e.type='pageview') AS pageviews FROM visit_sessions WHERE ${where} ORDER BY last_seen_at DESC LIMIT ? OFFSET ?`).bind(...args, pageSize, offset),
-    db.prepare(`SELECT COUNT(*) AS total, COALESCE(SUM(last_seen_at >= ?),0) AS active, COALESCE(SUM(source='facebook'),0) AS facebook, COALESCE(SUM(display_name <> '' OR facebook_url <> ''),0) AS identified FROM visit_sessions WHERE ${where}`).bind(activeSince, ...args),
+    db.prepare(`
+      SELECT visit_sessions.*,
+        (SELECT printf('HMA-%06d', serial) FROM visit_session_codes WHERE session_id = visit_sessions.id) AS session_code,
+        (SELECT COUNT(*) FROM visit_events e WHERE e.session_id = visit_sessions.id AND e.type = 'pageview') AS pageviews,
+        (SELECT MAX(e.occurred_at) FROM visit_events e WHERE e.session_id = visit_sessions.id) AS last_event_at
+      FROM visit_sessions
+      WHERE ${where}
+      ORDER BY last_seen_at DESC
+      LIMIT ? OFFSET ?
+    `).bind(...args, pageSize, offset),
+    db.prepare(`
+      SELECT COUNT(*) AS total,
+        COALESCE(SUM(${active}), 0) AS active,
+        COALESCE(SUM(source = 'facebook'), 0) AS facebook,
+        COALESCE(SUM(display_name <> '' OR facebook_url <> ''), 0) AS identified
+      FROM visit_sessions
+      WHERE ${where}
+    `).bind(activeSince, ...args),
   ]);
   return Response.json({ sessions: rows.results, summary: summary.results[0], serverTime: new Date().toISOString(), activeSince, retentionDays: 90, pageSize }, { headers: privateHeaders });
 }

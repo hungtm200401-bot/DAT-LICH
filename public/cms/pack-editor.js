@@ -15,7 +15,7 @@ export function packEditorHtml({ pack, serviceId, services, esc }) {
       <header class="pack-editor-header"><div><h2 id="pack-editor-title">${pack ? 'Chỉnh sửa gói dịch vụ' : 'Thêm gói dịch vụ'}</h2></div><div><button type="button" data-pack-preview aria-expanded="false">Xem trước</button><button type="button" class="cms-modal-close" data-action="close-block-modal" aria-label="Đóng">×</button></div></header>
       <nav class="pack-step-tabs" aria-label="Các bước chỉnh sửa gói">${[['info','Thông tin'],['pricing','Giá & thời lượng'],['image','Hình ảnh']].map(([id,label], index) => `<button type="button" data-pack-step="${id}" aria-controls="pack-step-${id}" aria-current="${index === 0 ? 'step' : 'false'}"><span>${index + 1}</span>${label}</button>`).join('')}</nav>
       <div class="pack-editor-body">
-        <form id="cms-new-pack-form" ${pack ? `data-edit-id="${esc(pack.id)}"` : ''}>
+        <form id="cms-new-pack-form" novalidate ${pack ? `data-edit-id="${esc(pack.id)}"` : ''}>
           <section class="pack-step-panel" id="pack-step-info" data-pack-panel="info">
             <div class="pack-section-heading"><h3>Thông tin gói</h3></div>
             <label class="pack-field" for="modal-new-pack-service"><span>Nhóm dịch vụ</span><select id="modal-new-pack-service">${PACK_CATEGORIES.map(([id,label]) => `<option value="${id}" ${id === serviceId ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
@@ -46,12 +46,9 @@ export function packEditorHtml({ pack, serviceId, services, esc }) {
   </div>`;
 }
 
-export function bindPackEditor(root) {
+export function bindPackEditor(root, validateTitle) {
   const steps = ['info', 'pricing', 'image']; let active = 0;
   const showStep = index => {
-    const title = root.querySelector('#modal-new-pack-title');
-    title.setCustomValidity(title.value.trim() ? '' : 'Vui lòng nhập tên gói dịch vụ.');
-    if (index > active && !title.value.trim()) { showStep(0); title.reportValidity(); return; }
     active = index;
     root.querySelector('#cms-new-pack-form').dataset.step = steps[index];
     root.querySelector('.cms-pack-dialog').classList.remove('is-preview-open');
@@ -64,17 +61,37 @@ export function bindPackEditor(root) {
     root.querySelector('[data-pack-save]').hidden = index !== 2;
     root.querySelector('.pack-editor-body').scrollTop = 0;
   };
-  root.querySelectorAll('[data-pack-step]').forEach(button => button.addEventListener('click', () => showStep(steps.indexOf(button.dataset.packStep))));
-  root.querySelector('[data-pack-next]').addEventListener('click', () => showStep(Math.min(2, active + 1)));
+  const form = root.querySelector('#cms-new-pack-form');
+  let checkingTitle = false;
+  async function goToStep(index) {
+    if (index <= active) { showStep(index); return; }
+    if (checkingTitle) return;
+    checkingTitle = true;
+    window.HoanFormFeedback.clear(form);
+    try {
+      await validateTitle(form.querySelector('#modal-new-pack-title').value);
+      if (form.isConnected) showStep(index);
+    } catch (error) {
+      if (form.isConnected) {
+        showStep(0);
+        window.HoanFormFeedback.show(form, error, { title: 'modal-new-pack-title' });
+      }
+    } finally { checkingTitle = false; }
+  }
+  root.querySelectorAll('[data-pack-step]').forEach(button => button.addEventListener('click', () => void goToStep(steps.indexOf(button.dataset.packStep))));
+  root.querySelector('[data-pack-next]').addEventListener('click', () => void goToStep(Math.min(2, active + 1)));
   root.querySelector('[data-pack-back]').addEventListener('click', () => showStep(Math.max(0, active - 1)));
   for (const [key, target, fallback] of [['title','title','Tên gói dịch vụ'],['note','note',''],['price','price','Liên hệ tư vấn'],['duration','duration',''],['tag','tag','']]) {
-    root.querySelector('#modal-new-pack-' + key).addEventListener('input', event => { event.target.setCustomValidity(''); root.querySelector('#card-preview-live-' + target).textContent = event.target.value.trim() || fallback; });
+    root.querySelector('#modal-new-pack-' + key).addEventListener('input', event => { root.querySelector('#card-preview-live-' + target).textContent = event.target.value.trim() || fallback; });
   }
   root.querySelector('[data-pack-preview]').addEventListener('click', event => {
     const open = root.querySelector('.cms-pack-dialog').classList.toggle('is-preview-open');
     event.target.setAttribute('aria-expanded', String(open)); event.target.textContent = open ? 'Tiếp tục sửa' : 'Xem trước';
   });
-  root.querySelector('#modal-pack-photo-container').addEventListener('click', () => { showStep(2); root.querySelector('#modal-pack-file-upload').click(); });
+  root.querySelector('#modal-pack-photo-container').addEventListener('click', () => {
+    if (active === 2) root.querySelector('#modal-pack-file-upload').click();
+    else void goToStep(2);
+  });
   const dialog = root.querySelector('[role="dialog"]');
   const keydown = event => {
     if (!dialog.isConnected) { document.removeEventListener('keydown', keydown, true); return; }

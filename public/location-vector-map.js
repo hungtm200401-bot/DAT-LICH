@@ -1,4 +1,4 @@
-import { canConfirmLocationPoint } from './location-utils.js?v=5.0';
+import { canConfirmLocationPoint } from './location-utils.js?v=6.0';
 import { locationPinMarkup } from './location-marker.js?v=1.0';
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';

@@ -88,15 +88,15 @@ try {
   assert.equal(workerResults[2].reliable, true);
   assert.equal(workerResults[3], null);
   const cancelResult = await enabled.page.evaluate(async code => {
-    const module = window.__boundaries;
+    const boundaryMod = window.__boundaries;
     const alreadyAborted = new AbortController();
     alreadyAborted.abort();
-    const first = await module.administrativeMapBounds(1, 0, { signal: alreadyAborted.signal }).catch(error => error.name);
+    const first = await boundaryMod.administrativeMapBounds(1, 0, { signal: alreadyAborted.signal }).catch(error => error.name);
     const active = new AbortController();
-    const cancelled = module.administrativeMapBounds(52, 0, { signal: active.signal }).catch(error => error.name);
+    const cancelled = boundaryMod.administrativeMapBounds(52, 0, { signal: active.signal }).catch(error => error.name);
     active.abort();
     const second = await cancelled;
-    const retained = await module.administrativeMapBounds(68, code);
+    const retained = await boundaryMod.administrativeMapBounds(68, code);
     return { first, second, retained, workers: window.__workerCount };
   }, feature.properties.code);
   assert.equal(cancelResult.first, 'AbortError');

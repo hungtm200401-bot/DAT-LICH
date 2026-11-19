@@ -33,12 +33,14 @@ export const appointments = sqliteTable("appointments", {
   refundStatus: text("refund_status").notNull().default("none"),
   refundNote: text("refund_note").notNull().default(""),
   status: text("status").notNull().default("pending"),
+  archivedAt: text("archived_at"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [
   index("appointments_date_idx").on(table.date),
   index("appointments_phone_idx").on(table.phone),
   index("appointments_status_idx").on(table.status),
+  index("appointments_archive_date").on(table.archivedAt, table.date),
 ]);
 
 export const paymentTransactions = sqliteTable("payment_transactions", {
@@ -55,6 +57,40 @@ export const paymentTransactions = sqliteTable("payment_transactions", {
   confirmAppointment: integer("confirm_appointment", { mode: "boolean" }).notNull().default(false),
 }, table => [index("payment_appointment_idx").on(table.appointmentCode, table.occurredAt), index("payment_occurred_idx").on(table.occurredAt)]);
 
+export const bookingSmsChallenges = sqliteTable("booking_sms_challenges", {
+  ticketHash: text("ticket_hash").primaryKey(),
+  phone: text("phone").notNull(),
+  purpose: text("purpose").notNull(),
+  verificationSid: text("verification_sid").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  state: text("state").notNull().default("pending"),
+}, table => [index("booking_sms_challenges_expiry").on(table.expiresAt)]);
+
+export const bookingVerifiedPhones = sqliteTable("booking_verified_phones", {
+  appointmentCode: text("appointment_code").primaryKey().references(() => appointments.code),
+  phone: text("phone").notNull(),
+  verifiedAt: integer("verified_at").notNull(),
+}, table => [index("booking_verified_phones_phone").on(table.phone)]);
+
+export const bookingGoogleChallenges = sqliteTable("booking_google_challenges", {
+  ticketHash: text("ticket_hash").primaryKey(),
+  origin: text("origin").notNull(),
+  purpose: text("purpose").notNull(),
+  appointmentCode: text("appointment_code").references(() => appointments.code),
+  phoneSnapshot: text("phone_snapshot"),
+  expiresAt: integer("expires_at").notNull(),
+}, table => [
+  index("booking_google_challenges_expiry").on(table.expiresAt),
+  index("booking_google_challenges_appointment").on(table.appointmentCode),
+]);
+
+export const bookingGoogleLinks = sqliteTable("booking_google_links", {
+  appointmentCode: text("appointment_code").primaryKey().references(() => appointments.code),
+  subjectKey: text("subject_key").notNull(),
+  linkedAt: integer("linked_at").notNull(),
+}, table => [index("booking_google_links_subject").on(table.subjectKey)]);
+
 export const customers = sqliteTable("customers", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
@@ -70,6 +106,7 @@ export const scheduleSlots = sqliteTable("schedule_slots", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   slotDate: text("slot_date").notNull(),
   slotTime: text("slot_time").notNull(),
+  endTime: text("end_time"),
   status: text("status").notNull().default("available"),
   note: text("note").notNull().default(""),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -88,6 +125,7 @@ export const visitSessions = sqliteTable("visit_sessions", {
   id: text("id").primaryKey(),
   startedAt: text("started_at").notNull(),
   lastSeenAt: text("last_seen_at").notNull(),
+  leftAt: text("left_at"),
   source: text("source").notNull(),
   medium: text("medium").notNull().default(""),
   campaign: text("campaign").notNull().default(""),
@@ -104,6 +142,11 @@ export const visitSessions = sqliteTable("visit_sessions", {
   index("visit_sessions_seen").on(table.lastSeenAt),
   index("visit_sessions_source").on(table.source, table.startedAt),
 ]);
+
+export const visitSessionCodes = sqliteTable("visit_session_codes", {
+  serial: integer("serial").primaryKey({ autoIncrement: true }),
+  sessionId: text("session_id").notNull().unique().references(() => visitSessions.id, { onDelete: "cascade" }),
+});
 
 export const visitEvents = sqliteTable("visit_events", {
   id: integer("id").primaryKey({ autoIncrement: true }),

@@ -319,6 +319,7 @@ export default function MobileSimulatorPage() {
               border: "1px solid rgba(255, 255, 255, 0.08)",
               borderRadius: "10px"
             }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src="https://api.qrserver.com/v1/create-qr-code/?size=140x140&margin=4&data=https://hoan-makeup-artist.hoan-makeup.workers.dev/"
                 alt="QR Code"
@@ -350,10 +351,10 @@ export default function MobileSimulatorPage() {
             </h3>
             <ul style={{ margin: 0, paddingLeft: "18px", fontSize: "13px", color: "#94a3b8", lineHeight: "1.7" }}>
               <li>
-                <b style={{ color: "#e2e8f0" }}>Trên iPhone:</b> Mở bằng Safari → Nhấn nút <b style={{ color: "#38bdf8" }}>Chia sẻ (Share)</b> → Chọn <b style={{ color: "#fff" }}>"Thêm vào MH chính" (Add to Home Screen)</b>.
+                <b style={{ color: "#e2e8f0" }}>Trên iPhone:</b> Mở bằng Safari → Nhấn nút <b style={{ color: "#38bdf8" }}>Chia sẻ (Share)</b> → Chọn <b style={{ color: "#fff" }}>&ldquo;Thêm vào MH chính&rdquo; (Add to Home Screen)</b>.
               </li>
               <li>
-                <b style={{ color: "#e2e8f0" }}>Trên Android:</b> Mở bằng Chrome → Nhấn dấu 3 chấm góc trên → Chọn <b style={{ color: "#fff" }}>"Cài đặt ứng dụng"</b>.
+                <b style={{ color: "#e2e8f0" }}>Trên Android:</b> Mở bằng Chrome → Nhấn dấu 3 chấm góc trên → Chọn <b style={{ color: "#fff" }}>&ldquo;Cài đặt ứng dụng&rdquo;</b>.
               </li>
               <li>Ứng dụng sẽ có biểu tượng riêng trên màn hình chính, mở không có thanh địa chỉ trình duyệt, mượt và nhanh như app gốc.</li>
             </ul>

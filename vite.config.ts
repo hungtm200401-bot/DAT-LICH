@@ -55,9 +55,9 @@ export default defineConfig(async ({ command }): Promise<UserConfig> => {
     // Keep the node_modules/.vite prefix required by the CommonJS dev plugin.
     cacheDir: fileURLToPath(new URL(`./node_modules/.vite-hoan-${checkoutCacheKey}-${command}/`, import.meta.url)),
     server: {
-      host: "0.0.0.0",
-      allowedHosts: true,
-      cors: true,
+      host: "127.0.0.1",
+      allowedHosts: ["localhost"],
+      cors: false,
       ...(isCodexSeatbeltSandbox
         ? { watch: { useFsEvents: false, usePolling: true } }
         : {}),

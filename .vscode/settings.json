@@ -1,0 +1,28 @@
+{
+  "javascript.implicitProjectConfig.checkJs": false,
+  "js/ts.implicitProjectConfig.checkJs": false,
+  "css.lint.unknownAtRules": "ignore",
+  "css.lint.validProperties": [
+    "line-clamp",
+    "scale",
+    "translate",
+    "rotate",
+    "text-wrap",
+    "print-color-adjust"
+  ],
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/.wrangler/**": true,
+    "**/.sites-runtime/**": true,
+    "**/scratch/**": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/.wrangler": true,
+    "**/.sites-runtime": true,
+    "**/scratch": true
+  }
+}

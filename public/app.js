@@ -8,7 +8,7 @@
     // handlers to an already running legacy app. The version loader refreshes it.
     const existing = typeof document.getElementById === 'function' && document.getElementById('app');
     if (window.state && existing?.childElementCount) { window.__hoanAppBuild = 'legacy'; return; }
-    window.__hoanAppBuild = 'admin-settings-1';
+    window.__hoanAppBuild = 'booking-location-2';
   }
 
   // Guaranteed critical schedule styles injection (bulletproof against browser CSS caching)
@@ -200,14 +200,8 @@
       }
       if (freshDocument) {
         const booking = loaded.booking;
-        if (booking.locationSource === 'administrative-boundaries' || booking.locationAutofill) {
-          const automatic = booking.locationAutofill || { city: booking.city, ward: booking.ward, address: booking.detectedAddress === [booking.address, booking.ward, booking.city].filter(Boolean).join(', ') ? booking.address : undefined };
-          for (const field of ['city', 'ward', 'address']) if (automatic[field] !== undefined && booking[field] === automatic[field]) booking[field] = '';
-          if (!booking.city) booking.provinceCode = null;
-          if (!booking.city || !booking.ward) { booking.ward = ''; booking.wardCode = null; }
-        }
-        Object.assign(booking, { locationCoordinates: null, locationDeviceCoordinates: null, locationCapturedAt: '', locationConfirmedAt: '', locationRegion: null, locationSource: '', locationAutofill: null, locationAddressDetails: null, locationVerificationVersion: 0, detectedAddress: '', isDetectingLocation: false, locationStage: 'idle', locationError: '', locationMessage: '' });
-        // Persist the reset before any async controller/map code can read it.
+        Object.assign(booking, { locationCoordinates: null, locationDeviceCoordinates: null, locationCapturedAt: '', locationConfirmedAt: '', locationAddressSignature: '', locationRegion: null, locationSource: '', locationAutofill: null, locationAddressDetails: null, locationVerificationVersion: 0, detectedAddress: '', isDetectingLocation: false, locationStage: 'idle', locationError: '', locationMessage: '' });
+        // Retain the entered address while resetting trust in an old GPS fix.
         localStorage.setItem('hoanMakeupDraft', JSON.stringify({ ...saved, booking }));
       }
       return loaded;
@@ -220,6 +214,7 @@
   };
 
   function startNewBooking() {
+    bookingPhoneProof = '';
     state.booking = structuredClone(defaultState.booking);
     state.booking.date = localIso();
     state.booking.time = defaultBookingTime(state.booking.date);
@@ -231,11 +226,24 @@
   let siteTools;
   let bookingLocation;
   let financeAdmin;
+  let overviewAdmin;
+  let mapsSettings;
+  let overviewLoadError = false;
   let adminLocations;
   let policyNavigation;
   const verifiedBookings = new Map();
+  let bookingAvailability = null;
+  let adminSessionGeneration = 0;
+  let adminLogoutPending = false;
+  const adminLogoutSignal = 'hoan-admin-session-ended';
   let depositPreparation = null;
   let depositPreparationError = '';
+  let bookingSmsFlow = null;
+  let bookingPhoneProof = '';
+  let bookingGoogleTarget = null;
+  let bookingGoogleRecovery = null;
+  let bookingGoogleResult = null;
+  let googleIdentityLoad = null;
 
   if (typeof window !== 'undefined') window.state = state;
   const saveState = (message, options = {}) => {
@@ -270,37 +278,111 @@
     }
   }
   const service = (id = state.booking.serviceId) => state.services.find(s => s.id === id) || state.services[0];
-  const currentTotal = () => service().price + Number(state.booking.travelFee || 0);
+  const _currentTotal = () => service().price + Number(state.booking.travelFee || 0);
   const dateLabel = (iso = state.booking.date) => {
     const [y,m,d] = (iso || localIso()).split('-');
     return `${d}/${m}/${y}`;
   };
   let bookingCode = 'CHƯA TẠO';
   try { bookingCode = localStorage.getItem('hoanLastBookingCode') || 'CHƯA TẠO'; } catch {}
+  function rememberedBookingCode() {
+    let code = '';
+    try { code = localStorage.getItem('hoanLastBookingCode') || ''; } catch { return ''; }
+    return /^HMA-\d{6}-[A-Z0-9]+$/i.test(code) ? code : '';
+  }
 
-  const isUserAdmin = () => {
-    try {
-      return Boolean(localStorage.getItem('hoanAdminToken') || sessionStorage.getItem('hoanAdminToken') || (typeof window !== 'undefined' && window.parent !== window) || (typeof location !== 'undefined' && location.hash.startsWith('#/admin')));
-    } catch {
-      return false;
-    }
-  };
+  const adminPath = () => !isPreview && /^#\/admin(?:[/?]|$)/.test(location.hash);
+  const isUserAdmin = () => adminPath() || state.adminAuthorized || window.parent !== window;
+  function clearLegacyAdminKey() {
+    try { localStorage.removeItem('hoanAdminToken'); sessionStorage.removeItem('hoanAdminToken'); } catch { /* Browser storage can be disabled. */ }
+  }
+  clearLegacyAdminKey();
   if (typeof window !== 'undefined') window.isAdmin = isUserAdmin;
+
+  let formFeedbackId = 0;
+  function serverError(response, result) {
+    const error = new Error(result.error || 'Không thể kết nối dữ liệu. Vui lòng thử lại.');
+    error.status = response.status;
+    error.code = result.code;
+    error.fieldErrors = result.fieldErrors;
+    return error;
+  }
+
+  function clearFieldFeedback(field) {
+    const id = field.dataset.serverError;
+    if (!id) return;
+    const descriptions = (field.getAttribute('aria-describedby') || '').split(/\s+/).filter(value => value && value !== id);
+    if (descriptions.length) field.setAttribute('aria-describedby', descriptions.join(' '));
+    else field.removeAttribute('aria-describedby');
+    field.removeAttribute('aria-invalid');
+    delete field.dataset.serverError;
+    document.getElementById(id)?.remove();
+  }
+
+  function clearFormFeedback(form) {
+    form?.querySelectorAll('[data-server-error]').forEach(clearFieldFeedback);
+    const status = form?.querySelector('[data-form-feedback]');
+    if (status) { status.textContent = ''; status.hidden = true; }
+  }
+
+  function showFormFeedback(form, error, aliases = {}) {
+    if (!form?.isConnected) return;
+    clearFormFeedback(form);
+    const controls = [...form.querySelectorAll('input, textarea, select')];
+    let firstField = null;
+    const unassigned = [];
+    for (const [name, message] of Object.entries(error.fieldErrors || {})) {
+      if (typeof message !== 'string') continue;
+      const key = aliases[name] || name;
+      let field = controls.find(control => control.name === key || control.id === key || control.name === name);
+      if (field?.type === 'hidden') {
+        field = controls.find(control => control.dataset.vnDateFor === (field.id || field.name));
+      }
+      if (!field) { unassigned.push(message); continue; }
+      const row = field.closest('label, .field, .location-field, .vn-date-wrap, .security-login-key') || field;
+      const feedback = document.createElement('span');
+      feedback.id = 'server-field-error-' + ++formFeedbackId;
+      feedback.className = 'server-field-feedback';
+      feedback.textContent = message;
+      if (row === field || row.matches('.vn-date-wrap, .security-login-key')) row.after(feedback);
+      else (row.matches('.mockup-check-box') ? row.querySelector('div') || row : row).append(feedback);
+      field.setAttribute('aria-invalid', 'true');
+      field.setAttribute('aria-describedby', [field.getAttribute('aria-describedby'), feedback.id].filter(Boolean).join(' '));
+      field.dataset.serverError = feedback.id;
+      const details = field.closest('details');
+      if (details) details.open = true;
+      if (!firstField && !field.disabled) firstField = field;
+    }
+    let status = form.querySelector('[data-form-feedback]');
+    if (!status && (!firstField || unassigned.length)) {
+      status = document.createElement('p');
+      status.className = 'server-form-feedback';
+      status.dataset.formFeedback = '';
+      status.setAttribute('role', 'alert');
+      status.tabIndex = -1;
+      form.prepend(status);
+    }
+    if (status && (!firstField || unassigned.length)) {
+      status.textContent = unassigned.join(' ') || error.message || 'Không thể lưu thông tin. Vui lòng thử lại.';
+      status.hidden = false;
+    }
+    (firstField || status)?.focus();
+  }
+
+  window.HoanFormFeedback = { clear: clearFormFeedback, show: showFormFeedback, serverError };
+  document.addEventListener('input', event => { if (event.target?.dataset?.serverError) clearFieldFeedback(event.target); });
+  document.addEventListener('change', event => { if (event.target?.dataset?.serverError) clearFieldFeedback(event.target); });
 
   async function api(payload) {
     if (payload && window.parent !== window && new URLSearchParams(location.search).get('cmsPreview') === '1') throw new Error('Bản xem trước không gửi dữ liệu nghiệp vụ.');
-    const token = (() => { try { return localStorage.getItem('hoanAdminToken') || sessionStorage.getItem('hoanAdminToken') || ''; } catch { return ''; } })();
-    const options = payload ? {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': 'Bearer ' + token } : {})
-      },
-      body: JSON.stringify(payload)
-    } : (token ? { headers: { 'Authorization': 'Bearer ' + token } } : {});
-    const response = await fetch('/api/data', options);
+    const admin = adminPath();
+    const generation = adminSessionGeneration;
+    const options = { cache: 'no-store', credentials: admin ? 'same-origin' : 'omit' };
+    if (payload) Object.assign(options, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const response = await fetch(!payload && admin ? '/api/data?admin=1' : '/api/data', options);
+    if (response.status === 401 && admin && adminPath() && generation === adminSessionGeneration && state.adminAuthorized) expireAdminView();
     const data = await response.json();
-    if (!response.ok) { const error = new Error(data.error || 'Không thể kết nối dữ liệu'); error.status = response.status; throw error; }
+    if (!response.ok) throw serverError(response, data);
     if (payload?.action === 'createAppointment') siteTools?.conversion('Đã gửi yêu cầu đặt lịch');
     if (payload?.action === 'createRequest') siteTools?.conversion('Đã gửi yêu cầu liên hệ');
     if (payload?.action === 'saveContent') siteTools?.contentSaved();
@@ -318,9 +400,8 @@
   }
 
   async function lookupOwnBooking(code, phone) {
-    const response = await fetch('/api/data?code=' + encodeURIComponent(code) + '&phone=' + encodeURIComponent(phone), { cache: 'no-store' });
-    const result = await response.json();
-    if (!response.ok || !result.appointment) throw new Error(result.error || 'Chưa tìm thấy lịch hẹn.');
+    const result = await api({ action: 'lookupBooking', code, phone });
+    if (!result.appointment) throw new Error('Chưa tìm thấy lịch hẹn.');
     return retainVerifiedBooking(result);
   }
 
@@ -329,14 +410,11 @@
   }
 
   function requireBookingLocation(booking) {
+    bookingLocation?.sanitize();
     const point = booking.locationCoordinates, region = booking.locationRegion;
     if (point && (!booking.locationConfirmedAt || !region || region.provinceCode !== booking.provinceCode || region.wardCode !== booking.wardCode)) {
       route('/booking/location');
-      throw new Error('Kiểm tra và xác nhận điểm đến, hoặc chọn dùng địa chỉ nhập tay trước khi tiếp tục.');
-    }
-    if (booking.locationType === 'client' && (!booking.address?.trim() || !booking.city || !booking.ward || !booking.provinceCode || !booking.wardCode)) {
-      route('/booking/location');
-      throw new Error('Vui lòng hoàn tất địa chỉ phục vụ trước khi tạo mã lịch.');
+      throw new Error('Kiểm tra và xác nhận địa chỉ trước khi tiếp tục.');
     }
   }
 
@@ -345,7 +423,6 @@
     const booking = state.booking;
     depositPreparationError = '';
     depositPreparation = (async () => {
-      if (!booking.name?.trim() || !booking.phone?.trim()) throw new Error('Hoàn tất thông tin khách hàng trước khi tạo mã chuyển khoản.');
       if (booking.code) {
         if (booking.serverBookingFingerprint && booking.serverBookingFingerprint !== bookingFingerprint(booking)) {
           route('/booking/' + booking.code);
@@ -358,9 +435,9 @@
         } catch (error) { if (!create || /^HMA-/.test(booking.code)) throw error; }
       }
       if (!create) return null;
-      if (!booking.consent) throw new Error('Vui lòng đồng ý chính sách đặt lịch ở phần thông tin khách hàng.');
       requireBookingLocation(booking);
-      const result = await api({ action: 'createAppointment', ...booking, customer: booking.name, paymentStatus: 'unverified' });
+      const result = await api({ action: 'createAppointment', ...booking, form: 'booking-info', customer: booking.name, paymentStatus: 'unverified', phoneProof: bookingPhoneProof });
+      bookingPhoneProof = '';
       booking.code = result.appointment.code;
       booking.serverBookingFingerprint = bookingFingerprint(booking);
       bookingCode = booking.code;
@@ -372,24 +449,39 @@
     return depositPreparation;
   }
 
+  function clearAdminData() {
+    state.adminAuthorized = false;
+    state.appointments = [...verifiedBookings.values()].map(result => result.appointment);
+    state.bookingDetails = Object.fromEntries([...verifiedBookings].map(([code, value]) => [code, value.bookingDetails || {}]));
+    Object.assign(state, { customers: [], paymentTransactions: [], requests: [], notifications: [], scheduleSlots: [], settings: { ...defaultState.settings } });
+  }
+
   async function hydrateBackend(silent = false) {
+    const requestedAdmin = adminPath();
+    if (requestedAdmin && adminLogoutPending) return;
+    const generation = adminSessionGeneration;
     try {
       const data = await api();
+      if (requestedAdmin !== adminPath() || generation !== adminSessionGeneration) return;
       state.services = data.services || [];
+      state.adminAuthorized = requestedAdmin && Object.hasOwn(data, 'customers') && Object.hasOwn(data, 'paymentTransactions');
       state.bookingDetails = data.bookingDetails || Object.fromEntries([...verifiedBookings].map(([code, value]) => [code, value.bookingDetails || {}]));
       state.paymentTransactions = data.paymentTransactions || [];
       state.requests = data.requests || [];
       state.notifications = data.notifications || [];
-      state.appointments = (data.appointments || []).map(appointment => data.bookingDetails ? appointment : ({ ...verifiedBookings.get(appointment.code)?.appointment, ...appointment }));
+      state.appointments = state.adminAuthorized ? (data.appointments || []) : [...verifiedBookings.values()].map(result => result.appointment);
       state.customers = data.customers || [];
       state.scheduleSlots = data.scheduleSlots || [];
       state.brand = { ...state.brand, ...(data.brand || {}) };
-      state.settings = { ...state.settings, ...(data.settings || {}) };
+      state.settings = { ...defaultState.settings, ...(data.settings || {}) };
       ensureScheduleSeedData();
       state.backendReady = true;
+      state.backendUpdatedAt = new Date().toISOString();
       state.backendError = '';
       if (!silent && !isPreview) render();
     } catch (error) {
+      if (requestedAdmin !== adminPath() || generation !== adminSessionGeneration) return;
+      if (requestedAdmin && (error.status === 401 || error.status === 403)) clearAdminData();
       state.backendError = error.message;
       ensureScheduleSeedData();
       if (!silent && !isPreview) render();
@@ -398,16 +490,35 @@
 
   const slotRecord = (date, time) => state.scheduleSlots.find(slot => slot.slotDate === date && slot.slotTime === time);
   const activeAppointment = appointment => appointment.status === 'pending' || appointment.status === 'confirmed';
+  const availabilityKey = date => `${date}|${service()?.id || ''}`;
+  function loadAvailability() {
+    const date = state.booking.date;
+    const selected = service();
+    const key = availabilityKey(date);
+    if (!selected || !state.backendReady || isPreview) return null;
+    if (bookingAvailability?.key === key) return bookingAvailability;
+    const result = { key, times: null, error: '' };
+    bookingAvailability = result;
+    const params = new URLSearchParams({ availability: date, service: selected.id });
+    fetch('/api/data?' + params, { cache: 'no-store', credentials: 'omit' })
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok || !Array.isArray(data.times)) throw new Error(data.error || 'Chưa tải được khung giờ.');
+        result.times = data.times.filter(time => typeof time === 'string' && /^\d{2}:\d{2}$/.test(time));
+      })
+      .catch(error => { result.error = error.message || 'Chưa tải được khung giờ.'; })
+      .finally(() => {
+        if (bookingAvailability === result && location.hash.split('?')[0] === '#/booking/time') render();
+      });
+    return result;
+  }
   const slotUnavailable = (date, time) => {
-    const blocked = slotRecord(date, time)?.status === 'blocked';
-    const minutes=t=>Number(t.slice(0,2))*60+Number(t.slice(3));
-    const start=minutes(time),duration=service().duration;
-    const booked = state.appointments.some(a => a.date === date && activeAppointment(a) && start<minutes(a.time)+service(a.serviceId).duration && start+duration>minutes(a.time));
-    const day=new Date(date+'T'+time+':00+07:00');
-    return blocked || booked || day.getTime() < Date.now();
+    return bookingAvailability?.key !== availabilityKey(date)
+      || !bookingAvailability.times?.includes(time)
+      || Date.parse(date + 'T' + time + ':00+07:00') <= Date.now();
   };
 
-  const formatLongDate = (date = new Date()) => new Intl.DateTimeFormat('vi-VN', {
+  const _formatLongDate = (date = new Date()) => new Intl.DateTimeFormat('vi-VN', {
     weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: 'Asia/Ho_Chi_Minh'
   }).format(date).replace(/^./, c => c.toUpperCase());
 
@@ -470,10 +581,10 @@
 
   function fashionPhoto(name, label) {
     const src = esc(assetUrl(name));
-    return `<span class="fashion-photo"><img class="fashion-full" src="${src}" alt="${esc(label)}" loading="lazy" width="1024" height="1536"><img class="fashion-detail" src="${src}" alt="" aria-hidden="true" loading="lazy" width="1024" height="1536"><span class="photo-discover">Xem chi tiết ${icon('arrow')}</span></span>`;
+    return `<span class="fashion-photo"><img class="fashion-full" src="${src}" alt="${esc(label)}" loading="lazy" width="1024" height="1536"><img class="fashion-detail" src="${src}" alt="" aria-hidden="true" loading="lazy" width="1024" height="1536"></span>`;
   }
 
-  const galleryItems = [
+  const _galleryItems = [
     { cat:'party', tag:'Dự tiệc', title:'Đỏ rượu trên nền lụa đen', image:'hero.png' },
     { cat:'natural', tag:'Tự nhiên', title:'Trong trẻo buổi sớm', image:'natural.png' },
     { cat:'photo', tag:'Chụp ảnh', title:'Ánh nâu trước ống kính', image:'hero.png' },
@@ -496,7 +607,7 @@
     return ({confirmed:'Đã xác nhận',pending:'Chờ xác nhận',completed:'Đã hoàn thành',cancelled:'Đã hủy'})[status] || status;
   }
 
-  function manageShell(body) {
+  function _manageShell(body) {
     return `<div class="booking-shell">${bookingArt()}<section class="booking-panel"><div class="booking-top"><a class="active" href="#/lookup">Tra cứu lịch</a><a href="#/support">Hỗ trợ</a><span class="booking-user">${icon('user')}</span></div><main id="main" class="booking-main manage-main">${body}</main></section></div>`;
   }
 
@@ -531,14 +642,14 @@
       ['reference', 'Gửi ảnh makeup và kiểu tóc yêu thích', 'Đính kèm ảnh để trao đổi trước với Hoàn.']
     ]]
   ];
-  const lookItems = [
+  const _lookItems = [
     ['bridal','Ngày của riêng bạn','bridal-new.png','bridal'],['natural','Nét trong trẻo','natural.png','personal'],
     ['evening','Sắc thái cuốn hút','evening.png','party'],['detail','Ánh nhìn cuốn hút','bridal-new.png','bridal'],['portrait','Sắc thái tự nhiên','natural.png','personal']
   ];
   const assetUrl = value => /^(\/assets\/|\/api\/uploads\?|https:\/\/)/.test(value || '') ? value : '/assets/' + (value || 'natural.png');
   const imageFor = s => s.id==='bridal'?(state.brand.bridalImage||'bridal-new.png'):s.id==='personal'||s.id==='photo'?(state.brand.personalImage||'natural.png'):(state.brand.partyImage||'evening.png');
   const field = (name,label,type='text',required=false,value=state.booking[name]||'') => `<label class="ct-field">${label}${required?' *':''}<input name="${name}" type="${type}" value="${esc(value)}" ${required?'required':''} ${type==='tel'?'inputmode="tel" pattern="[+0-9 ()-]{9,16}"':''}></label>`;
-  const selectField = (name,label,options,value=state.booking[name]) => `<label class="ct-field">${label}<select name="${name}">${options.map(x=>`<option ${value===x?'selected':''}>${esc(x)}</option>`).join('')}</select></label>`;
+  const _selectField = (name,label,options,value=state.booking[name]) => `<label class="ct-field">${label}<select name="${name}">${options.map(x=>`<option ${value===x?'selected':''}>${esc(x)}</option>`).join('')}</select></label>`;
   function brandMarkup(invert = false) {
     return `<a class="brand approved-brand ${invert ? 'brand-invert' : ''}" href="#/" aria-label="HOÀN Makeup Artist — Trang chủ"><span class="brand-text"><b class="brand-title">HOÀN</b><small class="brand-sub">MAKEUP ARTIST</small></span></a>`;
   }
@@ -593,7 +704,7 @@
     if (Array.isArray(breadcrumb)) {
       items = breadcrumb.map(item => (typeof item === 'string' ? { label: item, href: resolveBreadcrumbHref(item) } : item));
     } else if (typeof breadcrumb === 'string') {
-      const parts = breadcrumb.split(/\s*[\/›]\s*/).filter(Boolean);
+      const parts = breadcrumb.split(/\s*[/›]\s*/).filter(Boolean);
       items = parts.map((part, idx) => {
         const isLast = idx === parts.length - 1;
         if (isLast) return { label: part };
@@ -845,10 +956,10 @@
       summary: 'Ngày giờ, địa điểm và trạng thái thanh toán đều có trong trang Tra cứu lịch.',
       steps: [
         { title: 'Mở trang Tra cứu lịch', desc: 'Bạn có thể mở từ liên kết ở cuối website hoặc nút bên dưới.' },
-        { title: 'Nhập mã lịch và số điện thoại', desc: 'Dùng mã được cấp khi đặt lịch và số điện thoại đã đăng ký.', tip: 'Nếu quên mã, hãy xem lại tin nhắn xác nhận hoặc liên hệ Hoàn để tìm lại.' },
+        { title: 'Nhập mã lịch và số điện thoại', desc: 'Dùng mã được cấp khi đặt lịch và số điện thoại đã đăng ký.', tip: 'Nếu quên mã, chọn “Quên mã lịch hẹn?” trên trang tra cứu để xem cách lấy lại.' },
         { title: 'Xem thông tin buổi hẹn', desc: 'Trang chi tiết hiển thị trạng thái lịch, khoản cọc và biên nhận. Bạn cũng có thể gửi yêu cầu đổi hoặc hủy lịch tại đây.' }
       ],
-      cta: { primaryText: 'Tra cứu lịch', primaryHref: '#/lookup', secondaryText: 'Liên hệ Hoàn', secondaryHref: '#/contact' },
+      cta: { primaryText: 'Tra cứu lịch', primaryHref: '#/lookup', secondaryText: 'Xin lại mã lịch', secondaryHref: '#/lookup/recover' },
       related: ['booking', 'receipt', 'reschedule']
     },
     deposit: {
@@ -1227,7 +1338,7 @@
           </div>
         </aside>
 
-        <form data-form="contact" class="ct-contact-form-main">
+        <form novalidate data-form="contact" class="ct-contact-form-main">
           <h2>Gửi lời nhắn</h2>
           
           <div class="contact-grid-2">
@@ -1297,7 +1408,345 @@
     );
   }
   function pageLookup() {
-    return ctPage('lookup','Tra cứu lịch hẹn',`<p class="ct-subtitle">Xem trạng thái và quản lý lịch đã đặt cùng Hoàn.</p><form class="ct-lookup ct-form" data-form="lookup">${field('code','Mã lịch hẹn','text',true,'')}${field('phone','Số điện thoại đặt lịch','tel',true,'')}<button class="btn btn-dark btn-wide">TRA CỨU LỊCH HẸN</button><p class="ct-form-status" role="status"></p><p class="ct-secure">${icon('lock')} Thông tin được dùng để xác minh lịch của bạn.</p><p>Không nhớ mã lịch? <a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a></p></form>`,'Tra cứu lịch');
+    return ctPage('lookup', 'Tra cứu lịch hẹn', `
+      <p class="ct-subtitle">Xem trạng thái và quản lý lịch đã đặt cùng Hoàn.</p>
+      <form novalidate class="ct-lookup ct-form" data-form="lookup">
+        ${field('code', 'Mã lịch hẹn', 'text', true, '')}
+        ${field('phone', 'Số điện thoại đặt lịch', 'tel', true, '')}
+        <button type="submit" class="btn btn-dark btn-wide">TRA CỨU LỊCH HẸN</button>
+        <p class="ct-form-status" role="status"></p>
+        <p class="ct-secure">${icon('lock')} Thông tin được dùng để xác minh lịch của bạn.</p>
+        <a class="link" href="#/lookup/recover">Quên mã lịch hẹn?</a>
+      </form>`, 'Tra cứu lịch');
+  }
+  function bookingRecoveryCodes(result, { id, emptyTitle, emptyNote, actions }) {
+    const codes = result.bookings.map(item => `<li class="ct-sms-code-row">
+        <div><strong>${esc(item.code)}</strong><p>${esc(dateLabel(item.date))} · ${esc(item.time)}${item.service ? ` · ${esc(item.service)}` : ''}</p></div>
+        <button type="button" class="btn" data-action="ct-copy" data-value="${esc(item.code)}">Sao chép mã</button>
+      </li>`).join('');
+    return `<section class="ct-lookup ct-form ct-sms-panel" aria-labelledby="${id}">
+      <h2 id="${id}" tabindex="-1">${codes ? 'Mã lịch hẹn của bạn' : emptyTitle}</h2>
+      ${codes ? `<ul class="ct-sms-codes">${codes}</ul>` : `<p>${emptyNote}</p>`}
+      ${result.hasMore ? '<p>Đang hiển thị 25 lịch gần đây nhất.</p>' : ''}
+      <a class="link" href="#/lookup">Tra cứu bằng mã lịch</a>
+      ${actions}
+    </section>`;
+  }
+  function bookingSmsPanel(purpose) {
+    const recovering = purpose === 'recovery';
+    const flow = bookingSmsFlow?.purpose === purpose ? bookingSmsFlow : null;
+    const savedLink = recovering && rememberedBookingCode()
+      ? '<a class="link" href="#/lookup/recover/saved">Mở lịch đã lưu trên trình duyệt này</a>' : '';
+    const editLink = recovering ? savedLink : '<a class="link" href="#/booking/info">Đổi số điện thoại</a>';
+    if (flow?.bookings) {
+      return bookingRecoveryCodes(flow, {
+        id: 'booking-sms-result',
+        emptyTitle: 'Chưa có lịch hẹn đã xác minh số này',
+        emptyNote: 'Lịch chưa xác minh qua SMS vẫn tra cứu được bằng mã đã cấp.',
+        actions: savedLink + '<button type="button" class="ct-sms-secondary" data-action="ct-reset-sms">Tra cứu số khác</button>',
+      });
+    }
+    if (flow?.ticket) {
+      return `<form novalidate class="ct-lookup ct-form ct-sms-panel" data-form="booking-sms-verify" data-purpose="${purpose}">
+        <p>Mã đã được gửi qua SMS tới <strong>${esc(flow.phoneLabel)}</strong> và có hiệu lực ${Math.round(flow.expiresIn / 60)} phút.</p>
+        <label class="ct-field">Mã OTP
+          <input name="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="Nhập mã trong tin nhắn" required>
+        </label>
+        <button type="submit" class="btn btn-dark btn-wide">${recovering ? 'XÁC MINH VÀ XEM MÃ LỊCH' : 'XÁC MINH SỐ ĐIỆN THOẠI'}</button>
+        <button type="button" class="ct-sms-secondary" data-action="ct-reset-sms">Quay lại để gửi mã mới</button>
+        ${editLink}
+      </form>`;
+    }
+    return `<form novalidate class="ct-lookup ct-form ct-sms-panel" data-form="booking-sms-send" data-purpose="${purpose}">
+        <label class="ct-field">Số điện thoại đặt lịch *
+          <input name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="Ví dụ 0912 345 678" aria-describedby="booking-sms-phone-hint" value="${esc(recovering ? flow?.phone || '' : state.booking.phone || '')}" required ${recovering ? '' : 'readonly'}>
+        </label>
+        <small id="booking-sms-phone-hint">Dùng số di động Việt Nam hoặc nhập kèm mã quốc gia cho số nước ngoài.</small>
+        <button type="submit" class="btn btn-dark btn-wide" ${state.settings.bookingSmsEnabled === true ? '' : 'disabled'}>GỬI MÃ OTP</button>
+        ${editLink}
+      </form>`;
+  }
+  function bookingSmsStatus() {
+    if (state.settings.bookingSmsEnabled === true) return '';
+    if (state.settings.bookingSmsEnabled === false) {
+      return '<p class="ct-subtitle" role="status" data-sms-unavailable>Website chưa kết nối dịch vụ gửi OTP qua SMS.</p>';
+    }
+    if (state.backendError) {
+      return `<p class="ct-subtitle" role="status">Chưa tải được trạng thái SMS.
+        <button type="button" class="ct-sms-secondary" data-action="ct-retry-sms-status">Kiểm tra lại</button>
+      </p>`;
+    }
+    return '<p class="ct-subtitle" role="status">Đang kiểm tra dịch vụ SMS…</p>';
+  }
+  function pageLookupRecovery() {
+    const email = bookingGoogleRecovery?.email || '';
+    const result = bookingGoogleResult?.bookings;
+    const verifying = Boolean(bookingGoogleRecovery?.challenge);
+    let content;
+    if (result) {
+      content = bookingRecoveryCodes(bookingGoogleResult, {
+        id: 'booking-google-result',
+        emptyTitle: 'Tài khoản này chưa có lịch liên kết',
+        emptyNote: 'Mở lịch bằng mã và số điện thoại để lưu lịch với tài khoản Google.',
+        actions: '<button type="button" class="ct-sms-secondary" data-action="ct-edit-booking-email">Dùng email khác</button>',
+      });
+    } else if (verifying) {
+      content = `<section class="ct-email-recovery-card" aria-labelledby="booking-google-verify-title">
+        <h2 id="booking-google-verify-title" tabindex="-1">Xác minh tài khoản Google</h2>
+        <div class="ct-email-recovery-address">
+          <strong>${esc(email)}</strong>
+          <button type="button" class="ct-sms-secondary" data-action="ct-edit-booking-email">Đổi email</button>
+        </div>
+        ${bookingGoogleButton('recovery')}
+      </section>`;
+    } else {
+      content = `<form novalidate class="ct-lookup ct-email-recovery-card" data-form="booking-google-email">
+        <label class="ct-field" for="booking-recovery-email">Địa chỉ email
+          <input id="booking-recovery-email" name="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" maxlength="254" placeholder="ten@gmail.com" value="${esc(email)}" required>
+        </label>
+        <p class="server-form-feedback" data-form-feedback role="alert" hidden tabindex="-1"></p>
+        <button class="btn btn-dark btn-wide" type="submit">Tiếp tục</button>
+        <p class="ct-email-recovery-help">Bạn sẽ xác minh tài khoản Google ở bước tiếp theo.</p>
+      </form>`;
+    }
+    return ctPage('lookup', '', `<div class="ct-email-recovery">
+      <header class="ct-email-recovery-heading">
+        <h1 class="ct-title">Lấy lại mã lịch hẹn</h1>
+        ${result || verifying ? '' : '<p>Nhập email Google đã liên kết với lịch hẹn.</p>'}
+      </header>
+      ${content}
+      ${result ? '' : `<nav class="ct-email-recovery-links" aria-label="Cách tra cứu lịch">
+        <a href="#/lookup">Quay lại tra cứu</a>
+        ${rememberedBookingCode() ? '<a href="#/lookup/recover/saved">Mở lịch đã lưu</a>' : ''}
+        ${state.settings.bookingSmsEnabled === true ? '<a href="#/lookup/recover/sms">Xác minh bằng SMS</a>' : ''}
+      </nav>`}
+    </div>`, [{ label: 'Tra cứu lịch', href: '#/lookup' }, { label: 'Lấy lại mã lịch hẹn' }]);
+  }
+  function pageLookupSms() {
+    return ctPage('lookup', 'Xác minh bằng SMS', `
+      ${bookingSmsStatus()}
+      ${state.settings.bookingSmsEnabled === true ? bookingSmsPanel('recovery') : ''}
+      <nav class="ct-email-recovery-links" aria-label="Cách tra cứu lịch"><a href="#/lookup/recover">Lấy lại mã qua email</a></nav>
+      `, [{ label: 'Tra cứu lịch', href: '#/lookup' }, { label: 'Lấy lại mã', href: '#/lookup/recover' }, { label: 'Xác minh bằng SMS' }]);
+  }
+  function showBookingGoogle() {
+    return state.settings.bookingGoogleEnabled === true || ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+  }
+  function googleBookingAction(appointment) {
+    if (!appointment?.phone || !showBookingGoogle()) return '';
+    return `<div class="ct-google-method"><button type="button" class="btn" data-action="ct-link-booking-google" data-code="${esc(appointment.code)}">Lưu lịch bằng Google</button></div>`;
+  }
+  function bookingGoogleButton(purpose) {
+    return `<div class="ct-google-controls" data-booking-google="${purpose}">
+      <p role="status" data-booking-google-status tabindex="-1">Đang chuẩn bị xác minh…</p>
+      <div data-booking-google-button hidden></div>
+      <button type="button" class="ct-sms-secondary" data-action="ct-retry-booking-google" hidden>Thử lại</button>
+    </div>`;
+  }
+  function pageBookingGoogleLink() {
+    const title = 'Lưu lịch bằng Google';
+    let content;
+    if (!bookingGoogleTarget) {
+      content = `<div class="ct-lookup ct-form ct-sms-panel"><p>Mở lịch bằng mã và số điện thoại đã đặt, rồi chọn Lưu lịch bằng Google.</p>
+        <a class="link" href="#/lookup">Tra cứu lịch</a></div>`;
+    } else if (bookingGoogleResult?.linked) {
+      content = `<div class="ct-lookup ct-form ct-sms-panel"><h2 id="booking-google-result" tabindex="-1">Đã lưu lịch với Google</h2>
+        <p>Lần sau, dùng chính tài khoản này để xem mã, kể cả trên máy khác.</p>
+        <a class="btn btn-dark" href="#/booking/${esc(bookingGoogleTarget.code)}">Về lịch hẹn</a></div>`;
+    } else {
+      content = `<section class="ct-lookup ct-form ct-sms-panel">
+        ${state.settings.bookingGoogleEnabled === true
+          ? `<p>Chọn tài khoản Google để lưu lịch ${esc(bookingGoogleTarget.code)}.</p>${bookingGoogleButton('link')}`
+          : `<p role="status">${state.settings.bookingGoogleEnabled === false || state.backendError ? 'Đăng nhập Google tạm thời chưa khả dụng.' : 'Đang kiểm tra kết nối Google…'}</p>`}
+        <a class="link" href="#/booking/${esc(bookingGoogleTarget.code)}">Về lịch hẹn</a>
+      </section>`;
+    }
+    return ctPage('lookup', title, content, [{ label: 'Tra cứu lịch', href: '#/lookup' }, { label: title }]);
+  }
+  function loadGoogleIdentity() {
+    if (window.google?.accounts?.id) return Promise.resolve(window.google.accounts.id);
+    if (!googleIdentityLoad) {
+      googleIdentityLoad = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        const fail = () => {
+          clearTimeout(timer);
+          script.remove();
+          reject(new Error('Chưa tải được đăng nhập Google. Vui lòng thử lại.'));
+        };
+        const timer = setTimeout(fail, 10_000);
+        script.async = true;
+        script.referrerPolicy = 'strict-origin-when-cross-origin';
+        script.src = 'https://accounts.google.com/gsi/client';
+        script.onload = () => {
+          clearTimeout(timer);
+          if (window.google?.accounts?.id) resolve(window.google.accounts.id);
+          else fail();
+        };
+        script.onerror = fail;
+        document.head.append(script);
+      }).catch(error => {
+        googleIdentityLoad = null;
+        throw error;
+      });
+    }
+    return googleIdentityLoad;
+  }
+  async function submitBookingGoogleEmail(form) {
+    if (Object.hasOwn(form.dataset, 'serverPending')) return;
+    const input = form.elements.namedItem('email');
+    const button = form.querySelector('[type="submit"]');
+    const email = input.value.trim();
+    clearFormFeedback(form);
+    form.dataset.serverPending = '';
+    form.setAttribute('aria-busy', 'true');
+    input.readOnly = true;
+    button.disabled = true;
+    button.textContent = 'Đang kiểm tra…';
+    try {
+      const challenge = await api({ action: 'startBookingGoogle', purpose: 'recovery', email });
+      if (!form.isConnected) return;
+      bookingGoogleRecovery = { email, challenge };
+    } catch (error) {
+      showFormFeedback(form, error);
+      return;
+    } finally {
+      input.readOnly = false;
+      button.disabled = false;
+      button.textContent = 'Tiếp tục';
+      form.removeAttribute('aria-busy');
+      delete form.dataset.serverPending;
+    }
+    render();
+    $('#booking-google-verify-title')?.focus();
+  }
+  async function mountBookingGoogle(refresh = false) {
+    const panel = $('[data-booking-google]');
+    if (!panel || panel.hasAttribute('data-google-mounted')) return;
+    panel.setAttribute('data-google-mounted', '');
+    const purpose = panel.dataset.bookingGoogle;
+    const recovering = purpose === 'recovery';
+    const email = recovering ? bookingGoogleRecovery.email : '';
+    const status = panel.querySelector('[data-booking-google-status]');
+    const slot = panel.querySelector('[data-booking-google-button]');
+    const retry = panel.querySelector('[data-action="ct-retry-booking-google"]');
+    status.hidden = false;
+    status.classList.remove('server-form-feedback');
+    status.textContent = 'Đang chuẩn bị xác minh…';
+    retry.hidden = true;
+    slot.hidden = true;
+    slot.replaceChildren();
+    const fail = error => {
+      if (!panel.isConnected) return;
+      status.classList.add('server-form-feedback');
+      status.hidden = false;
+      status.textContent = error.message || 'Chưa xác minh được Google.';
+      slot.hidden = true;
+      retry.hidden = false;
+      status.focus();
+    };
+    try {
+      const challenge = recovering && !refresh
+        ? bookingGoogleRecovery.challenge
+        : await api({ action: 'startBookingGoogle', purpose, ...(recovering ? { email } : bookingGoogleTarget) });
+      if (!panel.isConnected) return;
+      const identity = await loadGoogleIdentity();
+      if (!panel.isConnected) return;
+      let submitting = false;
+      identity.initialize({
+        client_id: challenge.clientId, nonce: challenge.ticket, use_fedcm_for_button: true,
+        ...(recovering ? { login_hint: email } : {}),
+        callback: async ({ credential }) => {
+          if (!panel.isConnected || submitting) return;
+          submitting = true;
+          slot.hidden = true;
+          status.hidden = false;
+          status.textContent = 'Đang xác minh…';
+          try {
+            const result = await api({ action: 'finishBookingGoogle', ticket: challenge.ticket, credential, ...(recovering ? { email } : {}) });
+            if (!panel.isConnected) return;
+            bookingGoogleResult = result;
+            render();
+            $('#booking-google-result')?.focus();
+          } catch (error) { fail(error); }
+        },
+      });
+      slot.hidden = false;
+      status.hidden = true;
+      identity.renderButton(slot, { theme: 'outline', size: 'large', text: 'continue_with', locale: 'vi', width: Math.min(slot.clientWidth || 360, 400) });
+    } catch (error) { fail(error); }
+  }
+  function pageLookupRecent() {
+    if (!rememberedBookingCode()) return pageLookupRecovery();
+    return ctPage('lookup', 'Tìm lại lịch hẹn', `
+      <p class="ct-subtitle">Nhập số điện thoại đã dùng để mở lại lịch gần nhất bạn đặt trên trình duyệt này.</p>
+      <form novalidate class="ct-lookup ct-form" data-form="lookup-recent">
+        ${field('phone', 'Số điện thoại đặt lịch', 'tel', true, '')}
+        <button type="submit" class="btn btn-dark btn-wide">XEM LỊCH GẦN NHẤT</button>
+        <a class="link" href="#/lookup/recover">Lấy lại mã qua email</a>
+      </form>`, [{ label: 'Tra cứu lịch', href: '#/lookup' }, { label: 'Lịch đã lưu' }]);
+  }
+  function pageBookingPhone() {
+    return bookingShell(4, `<h1 class="ct-title">Xác minh số điện thoại</h1>
+      <p class="ct-subtitle">Xác minh qua SMS để bạn có thể lấy lại mã lịch khi cần.</p>
+      ${bookingSmsStatus()}
+      ${bookingSmsPanel('booking')}`, null, '', '', true);
+  }
+
+  async function submitBookingSms(form) {
+    if (Object.hasOwn(form.dataset, 'serverPending')) return;
+    const purpose = form.dataset.purpose;
+    const send = form.dataset.form === 'booking-sms-send';
+    const values = new FormData(form);
+    const button = form.querySelector('[type="submit"]');
+    if (button.disabled) return;
+    const label = button.textContent;
+    clearFormFeedback(form);
+    form.dataset.serverPending = '';
+    button.disabled = true;
+    button.textContent = send ? 'Đang gửi mã…' : 'Đang xác minh…';
+    let focus = '';
+    try {
+      if (send) {
+        const phone = String(values.get('phone') || '');
+        const result = await api({ action: 'startBookingOtp', purpose, phone });
+        if (!form.isConnected) return;
+        bookingSmsFlow = { ...result, purpose, phone };
+        focus = '[name="otp"]';
+      } else {
+        const result = await api({ action: 'verifyBookingOtp', purpose, ticket: bookingSmsFlow?.ticket, otp: values.get('otp') });
+        if (!form.isConnected) return;
+        if (purpose === 'booking') {
+          bookingSmsFlow = null;
+          bookingPhoneProof = result.proof || '';
+          try {
+            await prepareDepositBooking(true);
+            if (form.isConnected) route('/booking/deposit');
+          } catch (error) {
+            if (!form.isConnected) return;
+            toast(error.message);
+            route(error.status === 409 || error.fieldErrors?.time ? '/booking/time' : '/booking/info');
+          }
+        } else {
+          bookingSmsFlow = { purpose, bookings: result.bookings, hasMore: result.hasMore };
+          focus = '#booking-sms-result';
+        }
+      }
+    } catch (error) {
+      if (error.code === 'BOOKING_SMS_NOT_CONFIGURED' && form.isConnected) {
+        state.settings.bookingSmsEnabled = false;
+        delete form.dataset.serverPending;
+        render();
+      } else showFormFeedback(form, error);
+    }
+    finally {
+      delete form.dataset.serverPending;
+      button.disabled = send && state.settings.bookingSmsEnabled !== true;
+      button.textContent = label;
+    }
+    if (focus) {
+      render();
+      $(focus)?.focus();
+    }
   }
   function progress(step) {
     const names=['Dịch vụ','Thời gian','Địa điểm','Thông tin','Đặt cọc','Xác nhận'];
@@ -1315,7 +1764,11 @@
     return `<div class="page couture">${publicHeader()}<main id="main" class="ct-main ct-booking">${progress(step)}${body}${hasCustomFooter?'':`<footer class="ct-booking-footer"><div>${summary||`${esc(service().name)} · ${bookingFooterPrice(step)}`}</div><div class="ct-actions"><button class="btn" data-action="booking-back" data-step="${step}">Quay lại</button>${nextPath?`<button class="btn btn-dark" data-action="ct-next" data-next="${nextPath}" data-step="${step}">${nextLabel}</button>`:''}</div></footer>`}</main>${publicFooter()}</div>`;
   }
   function pageBookingService() {
-    return bookingShell(1,`<h1 class="ct-title">Chọn dịch vụ trang điểm</h1><p class="ct-subtitle">Lựa chọn dành cho khoảnh khắc của bạn.</p><section class="ct-service-grid ct-select-services">${state.services.filter(s=>s.enabled).map(s=>`<button class="ct-service-option ${s.id===state.booking.serviceId?'selected':''}" data-action="booking-service" data-id="${s.id}"><img src="/assets/${imageFor(s)}" alt="${esc(s.name)}"><h2>${esc(s.name)}</h2><p>${s.contact?'Tư vấn riêng':`${money(s.price)} · ${s.duration} phút`}</p><span>${s.id===state.booking.serviceId?'✓ Đã chọn':'Chọn dịch vụ'}</span></button>`).join('')}</section>`,'/booking/time','TIẾP TỤC · THỜI GIAN');
+    const b = state.brand || {};
+    const title = b.headline || 'Chọn dịch vụ trang điểm';
+    const subtitle = b.description || 'Lựa chọn dành cho khoảnh khắc của bạn.';
+    const checkSvg = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.2 8.4 6.5 11.6 12.8 4.8"/></svg>';
+    return bookingShell(1,`<h1 class="ct-title">${esc(title)}</h1><p class="ct-subtitle">${esc(subtitle)}</p><section class="ct-service-grid ct-select-services">${state.services.filter(s=>s.enabled).map(s=>{const on=s.id===state.booking.serviceId;return `<button type="button" class="ct-service-option ${on?'selected':''}" aria-pressed="${on}" data-action="booking-service" data-id="${s.id}"><span class="ct-service-option-media"><img src="/assets/${imageFor(s)}" alt="${esc(s.name)}"><i class="ct-service-option-seal" aria-hidden="true">${checkSvg}</i></span><h2>${esc(s.name)}</h2><p>${s.contact?'Tư vấn riêng':`${money(s.price)} · ${s.duration} phút`}</p><span class="ct-service-option-status">${on?'✓ Đã chọn':'Chọn dịch vụ'}</span></button>`;}).join('')}</section>`,'/booking/time','TIẾP TỤC · THỜI GIAN');
   }
   function calendarMarkup() {
     const today = localIso();
@@ -1326,25 +1779,25 @@
     const end=new Date();end.setDate(end.getDate()+Number(state.settings.bookingWindow||60));
     return `<div class="ct-calendar"><header><button class="icon-btn" data-action="ct-month" data-delta="-1" aria-label="Tháng trước">${icon('back')}</button><h3>Tháng ${m+1}, ${y}</h3><button class="icon-btn" data-action="ct-month" data-delta="1" aria-label="Tháng sau">${icon('arrow')}</button></header><div class="ct-calendar-grid">${['T2','T3','T4','T5','T6','T7','CN'].map(t=>`<span>${t}</span>`).join('')}${'<span></span>'.repeat(offset)}${Array.from({length:new Date(y,m+1,0).getDate()},(_,i)=>{const iso=`${y}-${String(m+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`;return `<button class="${iso===state.booking.date?'selected':''}" data-action="ct-date" data-date="${iso}" ${iso<today||iso>localIso(end)?'disabled':''} aria-label="${dateLabel(iso)}" aria-pressed="${iso===state.booking.date}">${i+1}</button>`}).join('')}</div></div>`;
   }
-  function availableTimes() {
-    return [...new Set([...hourlyTimes('00:00', '24:00'), ...state.scheduleSlots.filter(s=>s.slotDate===state.booking.date).map(s=>s.slotTime)])].sort();
-  }
   function pageBookingTime() {
     const today = localIso();
     if (!state.booking.date || state.booking.date < today) {
       state.booking.date = today;
       state.booking.time = '';
     }
-    const times = availableTimes();
-    if (state.booking.time && slotUnavailable(state.booking.date, state.booking.time)) {
-      state.booking.time = '';
-    }
-    if (!state.booking.time) {
-      const firstAvail = times.find(t => !slotUnavailable(state.booking.date, t));
-      state.booking.time = firstAvail || defaultBookingTime(state.booking.date);
+    const availability = loadAvailability();
+    const times = availability?.times;
+    if (times && !times.includes(state.booking.time)) {
+      state.booking.time = times[0] || '';
       saveState();
     }
-    return bookingShell(2,`<h1 class="ct-title">Chọn ngày và giờ</h1><p class="ct-subtitle">Thời gian hiển thị theo giờ Việt Nam.</p><section class="ct-time-layout">${calendarMarkup()}<div><h2>Giờ bắt đầu · ${dateLabel()}</h2><div class="ct-time-slots">${times.map(t=>{const toMinutes=value=>Number(value.slice(0,2))*60+Number(value.slice(3));const start=toMinutes(t),duration=service().duration;const booked=state.appointments.some(a=>a.date===state.booking.date&&activeAppointment(a)&&start<toMinutes(a.time)+(service(a.serviceId)?.duration||90)&&start+duration>toMinutes(a.time));const no=slotUnavailable(state.booking.date,t)||!state.settings.scheduleOpen;return `<button class="btn ${state.booking.time===t&&!no?'btn-dark':''}${no?' time-slot-unavailable':''}" data-action="time-select" data-time="${t}" title="${booked?'Đã có khách đặt khung giờ này':no?'Khung giờ không khả dụng':'Chọn khung giờ '+t}" aria-label="${t}${booked?' - Đã có khách đặt':''}" ${no?'disabled':''}>${t}${booked?'<small>Đã có khách</small>':''}</button>`}).join('')}</div><p>${icon('clock')} Thời lượng: ${service().duration} phút</p><p class="muted">Giờ đã có lịch hoặc được chặn sẽ không thể chọn.</p></div></section>`,'/booking/location','TIẾP TỤC · ĐỊA ĐIỂM');
+    const slotContent = isPreview ? '<p>Giờ có thể đặt được tải theo ngày khách chọn.</p>'
+      : availability?.error
+      ? `<p role="alert">${esc(availability.error)}</p><button class="btn" data-action="retry-availability">Thử lại</button>`
+      : !times ? '<p role="status">Đang tải giờ còn trống…</p>'
+      : times.length ? `<div class="ct-time-slots">${times.map(time => `<button type="button" class="btn ${state.booking.time === time ? 'btn-dark' : ''}" data-action="time-select" data-time="${esc(time)}" aria-pressed="${state.booking.time === time}">${esc(time)}</button>`).join('')}</div>`
+      : '<p role="status">Ngày này đã hết giờ có thể đặt. Vui lòng chọn ngày khác.</p>';
+    return bookingShell(2,`<h1 class="ct-title">Chọn ngày và giờ</h1><p class="ct-subtitle">Thời gian hiển thị theo giờ Việt Nam.</p><section class="ct-time-layout">${calendarMarkup()}<div><h2>Giờ bắt đầu · ${dateLabel()}</h2>${slotContent}<p>${icon('clock')} Thời lượng: ${service()?.duration || 0} phút</p></div></section>`,'/booking/location','TIẾP TỤC · ĐỊA ĐIỂM');
   }
 
   function pageBookingLocation() {
@@ -1358,7 +1811,7 @@
     <h1 class="ct-title">Thông tin & mong muốn</h1>
     <p class="ct-subtitle">Chia sẻ thêm thông tin để Hoàn có thể chuẩn bị tốt nhất cho bạn.</p>
     <div class="mockup-container">
-      <form class="ct-form" data-form="info">
+      <form novalidate class="ct-form" data-form="info">
         <h2 class="mockup-section-title">Thông tin liên hệ</h2>
 
         <div class="mockup-grid-2">
@@ -1374,8 +1827,8 @@
         </div>
 
         <label class="mockup-field full">
-          <span class="mockup-label">Email (tùy chọn)</span>
-          <input class="mockup-input" type="email" name="email" placeholder="Nhập email của bạn..." value="${esc(state.booking.email || '')}">
+          <span class="mockup-label">Email <span class="mockup-req">*</span></span>
+          <input class="mockup-input" type="email" name="email" autocomplete="email" maxlength="254" placeholder="Nhập email của bạn..." value="${esc(state.booking.email || '')}" required>
         </label>
 
         <h2 class="mockup-section-title">Mong muốn trang điểm</h2>
@@ -1468,7 +1921,7 @@
       </form>
     </div>`;
 
-    return bookingShell(4, body, '/booking/deposit', 'TIẾP TỤC · ĐẶT CỌC');
+    return bookingShell(4, body, '/booking/deposit', state.settings.bookingSmsEnabled && !state.booking.code ? 'TIẾP TỤC · XÁC MINH SỐ' : 'TIẾP TỤC · ĐẶT CỌC');
   }
   function paymentRows(total,deposit,received=0,travel=state.booking.travelFee) {
     return `<div class="ct-money-row"><span>Giá dịch vụ</span><strong>${money(total-Number(travel||0))}</strong></div><div class="ct-money-row"><span>Phí di chuyển</span><strong>${money(Number(travel||0))}</strong></div><div class="ct-money-row"><span>Tổng chi phí</span><strong>${money(total)}</strong></div><div class="ct-money-row ct-emphasis"><span>Cọc yêu cầu</span><strong>${money(deposit)}</strong></div><div class="ct-money-row"><span>Đã thanh toán (sau hoàn)</span><strong>${money(received)}</strong></div><div class="ct-money-row"><span>Còn phải thanh toán</span><strong>${money(Math.max(0,total-received))}</strong></div>`;
@@ -1522,8 +1975,6 @@
     const paid = Number(apt.finance?.netReceived ?? apt.deposit ?? 0);
     const remaining = Math.max(0, total - paid);
     const toPay = Math.max(0, deposit - paid);
-    const receiptData = state.booking.receiptData || '';
-    const receiptName = state.booking.receiptName || '';
 
     const bankName = instructions.bankName || '';
     const bankOwner = instructions.bankOwner || '';
@@ -1734,7 +2185,7 @@
   function pageBookingSuccess() {
     const a = getAppointment();
     if (!a) return missingBooking();
-    return ctPage('lookup', 'Yêu cầu đặt lịch đã được ghi nhận', `<section class="ct-result"><div class="success-icon">${icon('check')}</div><p>Hoàn sẽ kiểm tra thông tin và khoản cọc để xác nhận lịch của bạn.</p><p class="ct-overline">MÃ LỊCH HẸN</p><h2>${esc(a.code)}</h2><div class="ct-status">${a.paymentStatus==='pending_verification'?'Chờ đối soát':'Chưa thanh toán cọc'} · ${statusLabel(a.status)}</div><div class="ct-summary"><h2>${esc(service(a.serviceId).name)}</h2><p>${dateLabel(a.date)} · ${a.time}</p><p>${esc([a.address,a.ward,a.district].filter(Boolean).join(', '))}</p><div class="ct-money-row"><span>Tổng chi phí</span><strong>${money(a.total)}</strong></div></div><a class="btn btn-dark" href="#/booking/${a.code}">XEM & QUẢN LÝ LỊCH HẸN</a></section>`, 'Đặt lịch / Kết quả');
+    return ctPage('lookup', 'Yêu cầu đặt lịch đã được ghi nhận', `<section class="ct-result"><div class="success-icon">${icon('check')}</div><p>Hoàn sẽ kiểm tra thông tin và khoản cọc để xác nhận lịch của bạn.</p><p class="ct-overline">MÃ LỊCH HẸN</p><h2>${esc(a.code)}</h2><div class="ct-status">${a.paymentStatus==='pending_verification'?'Chờ đối soát':'Chưa thanh toán cọc'} · ${statusLabel(a.status)}</div><div class="ct-summary"><h2>${esc(service(a.serviceId).name)}</h2><p>${dateLabel(a.date)} · ${a.time}</p><p>${esc([a.address,a.ward,a.district].filter(Boolean).join(', '))}</p><div class="ct-money-row"><span>Tổng chi phí</span><strong>${money(a.total)}</strong></div></div><a class="btn btn-dark" href="#/booking/${a.code}">XEM & QUẢN LÝ LỊCH HẸN</a>${googleBookingAction(a)}</section>`, 'Đặt lịch / Kết quả');
   }
   function pageBookingDetail(code) {
     const a = getAppointment(code);
@@ -1744,7 +2195,7 @@
     const needed = Number(meta.depositRequired ?? Math.min(Number(state.settings.deposit ?? 200000), a.total));
     const isPaid = a.paymentStatus === 'received' && Number(a.deposit) >= needed;
     const isPending = !isPaid && a.paymentStatus === 'pending_verification';
-    return ctPage('lookup', 'Chi tiết lịch hẹn', `<div class="ct-detail-top"><b>${esc(a.code)}</b><span class="ct-status">${statusLabel(a.status)}</span><span class="ct-status">${isPaid ? 'Đã nhận cọc' : isPending ? 'Chờ đối soát' : 'Chưa thanh toán'}</span></div><section class="ct-two-col"><article><h2>Thông tin buổi hẹn</h2>${[['Dịch vụ',s.name],['Ngày',dateLabel(a.date)],['Giờ bắt đầu',a.time],['Địa điểm',[a.address,a.ward,a.district,meta.city].filter(Boolean).join(', ')],['Khách hàng',a.customer],['Điện thoại',a.phone],['Phong cách',a.style],['Ghi chú',a.note]].map(([t,v])=>`<div class="ct-money-row"><span>${t}</span><b>${esc(v||'—')}</b></div>`).join('')}<div class="ct-upload-previews">${(meta.references||[]).map(r=>`<img src="${r}" alt="Ảnh phong cách tham khảo">`).join('')}</div>${meta.skin?`<p>Tình trạng da: ${esc(meta.skin)} · Dị ứng: ${esc(meta.allergy)} ${esc(meta.allergyNote||'')}</p>`:''}<div class="ct-actions">${a.status!=='cancelled'&&a.status!=='completed'?`<a class="btn" href="#/booking/${code}/reschedule">Yêu cầu đổi lịch</a><a class="btn" href="#/booking/${code}/cancel">Yêu cầu hủy / hoàn cọc</a>`:''}<button class="btn" data-action="ct-calendar-download" data-code="${code}">Thêm vào lịch</button></div><h3>Chuẩn bị cho buổi hẹn</h3><p>Giữ da sạch và dưỡng ẩm nhẹ. Chuẩn bị ảnh trang phục, phong cách nếu có.</p><a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a>${(state.requests||[]).filter(r=>r.code===code).map(r=>`<div class="ct-notice"><b>${esc(r.subject)}</b><p>${esc(r.status==='resolved'?'Đã xử lý':'Chờ xử lý')}</p>${r.reply?`<p>${esc(r.reply)}</p>`:''}</div>`).join('')}</article><aside class="ct-summary"><h2>Thanh toán</h2>${statusTrack(isPaid, isPending)}${paymentRows(a.total,needed,a.deposit,meta.travelFee??Math.max(0,a.total-s.price))}${(a.finance?.received ?? a.deposit)>0?`<a class="btn btn-dark btn-wide" href="#/booking/${code}/receipt">XEM BIÊN NHẬN</a>`:''}${a.deposit<needed&&a.status!=='cancelled'?paymentInstructions(a):''}<button class="btn btn-wide" data-action="ct-refresh">KIỂM TRA TRẠNG THÁI</button></aside></section>`, 'Tra cứu lịch / ' + code);
+    return ctPage('lookup', 'Chi tiết lịch hẹn', `<div class="ct-detail-top"><b>${esc(a.code)}</b><span class="ct-status">${statusLabel(a.status)}</span><span class="ct-status">${isPaid ? 'Đã nhận cọc' : isPending ? 'Chờ đối soát' : 'Chưa thanh toán'}</span></div>${googleBookingAction(a)}<section class="ct-two-col"><article><h2>Thông tin buổi hẹn</h2>${[['Dịch vụ',s.name],['Ngày',dateLabel(a.date)],['Giờ bắt đầu',a.time],['Địa điểm',[a.address,a.ward,a.district,meta.city].filter(Boolean).join(', ')],['Khách hàng',a.customer],['Điện thoại',a.phone],['Phong cách',a.style],['Ghi chú',a.note]].map(([t,v])=>`<div class="ct-money-row"><span>${t}</span><b>${esc(v||'—')}</b></div>`).join('')}<div class="ct-upload-previews">${(meta.references||[]).map(r=>`<img src="${r}" alt="Ảnh phong cách tham khảo">`).join('')}</div>${meta.skin?`<p>Tình trạng da: ${esc(meta.skin)} · Dị ứng: ${esc(meta.allergy)} ${esc(meta.allergyNote||'')}</p>`:''}<div class="ct-actions">${a.status!=='cancelled'&&a.status!=='completed'?`<a class="btn" href="#/booking/${code}/reschedule">Yêu cầu đổi lịch</a><a class="btn" href="#/booking/${code}/cancel">Yêu cầu hủy / hoàn cọc</a>`:''}<button class="btn" data-action="ct-calendar-download" data-code="${code}">Thêm vào lịch</button></div><h3>Chuẩn bị cho buổi hẹn</h3><p>Giữ da sạch và dưỡng ẩm nhẹ. Chuẩn bị ảnh trang phục, phong cách nếu có.</p><a class="link" href="#/contact">Liên hệ Hoàn ${icon('arrow')}</a>${(state.requests||[]).filter(r=>r.code===code).map(r=>`<div class="ct-notice"><b>${esc(r.subject)}</b><p>${esc(r.status==='resolved'?'Đã xử lý':'Chờ xử lý')}</p>${r.reply?`<p>${esc(r.reply)}</p>`:''}</div>`).join('')}</article><aside class="ct-summary"><h2>Thanh toán</h2>${statusTrack(isPaid, isPending)}${paymentRows(a.total,needed,a.deposit,meta.travelFee??Math.max(0,a.total-s.price))}${(a.finance?.received ?? a.deposit)>0?`<a class="btn btn-dark btn-wide" href="#/booking/${code}/receipt">XEM BIÊN NHẬN</a>`:''}${a.deposit<needed&&a.status!=='cancelled'?paymentInstructions(a):''}<button class="btn btn-wide" data-action="ct-refresh">KIỂM TRA TRẠNG THÁI</button></aside></section>`, 'Tra cứu lịch / ' + code);
   }
   function paymentInstructions(a) {
     const settings = state.paymentInstructionsByCode?.[a.code] || state.settings;
@@ -1754,18 +2205,120 @@
   function pageReceipt(code) {
     const appointment = getAppointment(code);
     if (!appointment) return missingBooking();
-    const finance = appointment.finance || { received: Number(appointment.deposit||0), refunded:0, netReceived:Number(appointment.deposit||0), remaining:Math.max(0,appointment.total-Number(appointment.deposit||0)) };
-    if (!finance.received) return ctPage('lookup','Chưa có biên nhận',`<p class="ct-subtitle">Chưa có khoản thu đã được Hoàn đối soát.</p><a class="btn" href="#/booking/${esc(code)}">QUAY LẠI LỊCH HẸN</a>`);
-    const history = state.paymentHistoryByCode?.[code] || finance.entries || [];
-    return ctPage('lookup','Biên nhận thanh toán',`<article class="ct-receipt">${brandMarkup()}<p class="ct-status">GIAO DỊCH ĐÃ ĐỐI SOÁT</p><h2>${esc(appointment.code)}</h2>${[['Khách hàng',appointment.customer],['Dịch vụ',service(appointment.serviceId).name],['Ngày giờ',dateLabel(appointment.date)+' · '+appointment.time]].map(([title,value])=>`<div class="ct-money-row"><span>${title}</span><b>${esc(value)}</b></div>`).join('')}${[['Tổng chi phí',appointment.total],['Tổng tiền đã nhận',finance.received],['Đã hoàn cho khách',finance.refunded],['Thực nhận sau hoàn',finance.netReceived],['Còn phải thanh toán',appointment.status==='cancelled'?0:finance.remaining]].map(([title,value])=>`<div class="ct-money-row"><span>${title}</span><b>${money(value)}</b></div>`).join('')}${history.length?`<h3>Lịch sử thu / hoàn</h3>${history.map(entry=>`<div class="ct-money-row"><span>${esc(({deposit:'Thu cọc',balance:'Thu phần còn lại',refund:'Hoàn tiền',opening:'Số dư đã nhận chuyển sang',opening_refund:'Khoản hoàn chuyển sang'})[entry.kind]||entry.kind)}${!entry.kind.startsWith('opening')&&entry.occurredAt?' · '+esc(new Date(entry.occurredAt).toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'})):''}</span><b>${money(entry.amount)}</b></div>`).join('')}`:''}<p>Khoản đã thanh toán được trừ vào tổng chi phí. Biên nhận phản ánh những giao dịch Hoàn đã kiểm tra.</p></article><div class="ct-center-cta"><button class="btn btn-dark" data-action="print">IN / LƯU PDF</button><a class="btn" href="#/booking/${esc(code)}">TRỞ VỀ LỊCH HẸN</a></div>`,'Lịch hẹn / Biên nhận');
+    const ledgerRows = (state.paymentTransactions || []).filter(entry => entry.appointmentCode === code);
+    const finance = appointment.finance || { received: Number(appointment.deposit || 0), refunded: 0, netReceived: Number(appointment.deposit || 0), remaining: Math.max(0, appointment.total - Number(appointment.deposit || 0)) };
+    if (!finance.received) return ctPage('lookup', 'Chưa có biên nhận', `<p class="ct-subtitle">Chưa có khoản thu đã được Hoàn đối soát.</p><a class="btn" href="#/booking/${esc(code)}">QUAY LẠI LỊCH HẸN</a>`);
+    const history = state.paymentHistoryByCode?.[code] || finance.entries || ledgerRows;
+    const remainingAmount = appointment.status === 'cancelled' ? 0 : finance.remaining;
+    const brandName = state.brand?.name || 'HOÀN';
+    const brandRole = state.brand?.role || 'MAKEUP ARTIST';
+    const kindLabels = {
+      deposit: 'Thu cọc',
+      balance: 'Thu phần còn lại',
+      refund: 'Hoàn tiền',
+      opening: 'Số dư đã nhận chuyển sang',
+      opening_refund: 'Khoản hoàn chuyển sang'
+    };
+
+    return ctPage(
+      'lookup',
+      '',
+      `<article class="ct-receipt" aria-labelledby="ct-receipt-heading">
+        <header class="ct-receipt-header">
+          ${brandMarkup()}
+          <h1 id="ct-receipt-heading" class="ct-receipt-title">Biên nhận thanh toán</h1>
+        </header>
+
+        <section class="ct-receipt-meta" aria-label="Mã và trạng thái biên nhận">
+          <div class="ct-receipt-meta-cell ct-receipt-meta-left">
+            <span class="ct-receipt-label">MÃ BIÊN NHẬN</span>
+            <strong class="ct-receipt-code">${esc(appointment.code)}</strong>
+          </div>
+          <div class="ct-receipt-meta-cell ct-receipt-meta-right">
+            <span class="ct-receipt-label">TRẠNG THÁI GIAO DỊCH</span>
+            <strong class="ct-receipt-status">ĐÃ ĐỐI SOÁT</strong>
+          </div>
+        </section>
+
+        <section class="ct-receipt-section">
+          <h2 class="ct-receipt-section-title">THÔNG TIN LỊCH HẸN</h2>
+          <div class="ct-receipt-info-grid">
+            <div class="ct-receipt-info-cell ct-receipt-info-left ct-receipt-info-top">
+              <span class="ct-receipt-label">KHÁCH HÀNG</span>
+              <b class="ct-receipt-info-primary">${esc(appointment.customer)}</b>
+            </div>
+            <div class="ct-receipt-info-cell ct-receipt-info-right ct-receipt-info-top">
+              <span class="ct-receipt-label">DỊCH VỤ</span>
+              <b class="ct-receipt-info-primary">${esc(service(appointment.serviceId).name)}</b>
+            </div>
+            <div class="ct-receipt-info-cell ct-receipt-info-left">
+              <span class="ct-receipt-label">NGÀY HẸN</span>
+              <b class="ct-receipt-info-secondary">${esc(dateLabel(appointment.date))}</b>
+            </div>
+            <div class="ct-receipt-info-cell ct-receipt-info-right">
+              <span class="ct-receipt-label">GIỜ HẸN</span>
+              <b class="ct-receipt-info-secondary">${esc(appointment.time)}</b>
+            </div>
+          </div>
+        </section>
+
+        <section class="ct-receipt-section">
+          <h2 class="ct-receipt-section-title">CHI TIẾT THANH TOÁN</h2>
+          <div class="ct-receipt-rows">
+            ${[
+              ['Tổng chi phí', appointment.total],
+              ['Tổng tiền đã nhận', finance.received],
+              ['Đã hoàn cho khách', finance.refunded],
+              ['Thực nhận sau hoàn', finance.netReceived]
+            ].map(([title, value]) => `<div class="ct-receipt-row"><span>${title}</span><b>${money(value)}</b></div>`).join('')}
+          </div>
+
+          <div class="ct-receipt-balance-box">
+            <div class="ct-receipt-balance-copy">
+              <strong>CÒN PHẢI THANH TOÁN</strong>
+              <span>Số tiền còn lại của lịch hẹn</span>
+            </div>
+            <b class="ct-receipt-balance-amount">${money(remainingAmount)}</b>
+          </div>
+        </section>
+
+        ${history.length ? `<section class="ct-receipt-section ct-receipt-history">
+          <h2 class="ct-receipt-section-title">LỊCH SỬ THU / HOÀN</h2>
+          <div class="ct-receipt-rows">
+            ${history.map(entry => {
+              const label = kindLabels[entry.kind] || entry.kind;
+              const timeText = !entry.kind.startsWith('opening') && entry.occurredAt
+                ? ' · ' + new Date(entry.occurredAt).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })
+                : '';
+              return `<div class="ct-receipt-row"><span>${esc(label + timeText)}</span><b>${money(entry.amount)}</b></div>`;
+            }).join('')}
+          </div>
+        </section>` : ''}
+
+        <div class="ct-receipt-notes">
+          <p>Khoản đã thanh toán được trừ vào tổng chi phí.</p>
+          <p>Biên nhận phản ánh những giao dịch Hoàn đã kiểm tra.</p>
+        </div>
+
+        <footer class="ct-receipt-doc-footer">
+          <span>${esc(brandName)} &nbsp;/&nbsp; ${esc(brandRole)}</span>
+          <span>01 / 01</span>
+        </footer>
+      </article>
+      <div class="ct-center-cta ct-receipt-actions">
+        <button class="btn btn-dark" data-action="print">IN / LƯU PDF</button>
+        <a class="btn" href="#/booking/${esc(code)}">TRỞ VỀ LỊCH HẸN</a>
+      </div>`,
+      'Lịch hẹn / Biên nhận'
+    );
   }
   function pageReschedule(code) {
     const a=getAppointment(code);if(!a)return missingBooking();
-    return ctPage('lookup','Yêu cầu đổi lịch',`<form class="ct-form ct-lookup" data-form="booking-request"><input type="hidden" name="code" value="${esc(code)}"><input type="hidden" name="subject" value="Yêu cầu đổi lịch"><div class="ct-notice">${esc(service(a.serviceId).name)} · ${dateLabel(a.date)} · ${a.time}</div>${field('date','Ngày mong muốn','date',true,a.date)}${field('time','Giờ mong muốn','time',true,a.time)}<label class="ct-field">Lý do đổi lịch *<textarea name="message" required></textarea></label><p>Ngày giờ mới cần được Hoàn kiểm tra trước khi xác nhận. Lịch hiện tại được giữ trong khi chờ xử lý.</p><a class="link" href="#/policies/change">Chính sách đổi lịch</a><button class="btn btn-dark btn-wide">GỬI YÊU CẦU ĐỔI LỊCH</button><p class="ct-form-status" role="status"></p></form>`,'Lịch hẹn / Đổi lịch');
+    return ctPage('lookup','Yêu cầu đổi lịch',`<form novalidate class="ct-form ct-lookup" data-form="booking-request"><input type="hidden" name="code" value="${esc(code)}"><input type="hidden" name="subject" value="Yêu cầu đổi lịch"><div class="ct-notice">${esc(service(a.serviceId).name)} · ${dateLabel(a.date)} · ${a.time}</div>${field('date','Ngày mong muốn','date',true,a.date)}${field('time','Giờ mong muốn','time',true,a.time)}<label class="ct-field">Lý do đổi lịch *<textarea name="message" required></textarea></label><p>Ngày giờ mới cần được Hoàn kiểm tra trước khi xác nhận. Lịch hiện tại được giữ trong khi chờ xử lý.</p><a class="link" href="#/policies/change">Chính sách đổi lịch</a><button class="btn btn-dark btn-wide">GỬI YÊU CẦU ĐỔI LỊCH</button><p class="ct-form-status" role="status"></p></form>`,'Lịch hẹn / Đổi lịch');
   }
   function pageCancel(code) {
     const a=getAppointment(code);if(!a)return missingBooking();
-    return ctPage('lookup','Yêu cầu hủy / hoàn cọc',`<form class="ct-form ct-lookup" data-form="booking-request"><input type="hidden" name="code" value="${esc(code)}"><input type="hidden" name="subject" value="Yêu cầu hủy / hoàn cọc"><div class="ct-notice">${esc(service(a.serviceId).name)} · ${dateLabel(a.date)} · ${a.time}</div><div class="ct-money-row"><span>Cọc đã nhận</span><b>${money(a.deposit)}</b></div><p>Hoàn sẽ xem xét yêu cầu và thông báo khoản cọc được hoàn theo điều kiện áp dụng. Việc gửi yêu cầu chưa tự động hoàn tiền.</p><a class="link" href="#/policies/cancel">Xem chính sách hủy & hoàn cọc</a><label class="ct-field">Lý do *<textarea name="message" required></textarea></label><label class="ct-check"><input type="checkbox" required> Tôi đã đọc điều kiện hủy lịch và hoàn cọc.</label><button class="btn btn-dark btn-wide">GỬI YÊU CẦU</button><p class="ct-form-status" role="status"></p></form>`,'Lịch hẹn / Hủy lịch');
+    return ctPage('lookup','Yêu cầu hủy / hoàn cọc',`<form novalidate class="ct-form ct-lookup" data-form="booking-request"><input type="hidden" name="code" value="${esc(code)}"><input type="hidden" name="subject" value="Yêu cầu hủy / hoàn cọc"><div class="ct-notice">${esc(service(a.serviceId).name)} · ${dateLabel(a.date)} · ${a.time}</div><div class="ct-money-row"><span>Cọc đã nhận</span><b>${money(a.deposit)}</b></div><p>Hoàn sẽ xem xét yêu cầu và thông báo khoản cọc được hoàn theo điều kiện áp dụng. Việc gửi yêu cầu chưa tự động hoàn tiền.</p><a class="link" href="#/policies/cancel">Xem chính sách hủy & hoàn cọc</a><label class="ct-field">Lý do *<textarea name="message" required></textarea></label><label class="ct-check"><input type="checkbox" required> Tôi đã đọc điều kiện hủy lịch và hoàn cọc.</label><button class="btn btn-dark btn-wide">GỬI YÊU CẦU</button><p class="ct-form-status" role="status"></p></form>`,'Lịch hẹn / Hủy lịch');
   }
   function pageSearch() {
     const q=new URLSearchParams(location.hash.split('?')[1]).get('q')||'';const entries=[...state.services.map(s=>[s.name,'/services/'+s.id]),...helpSections.flatMap(s=>s[2]).map(([id,t])=>[t,'/support/'+id]),...policySections.map(([id,t])=>[t,'/policies/'+id]),['Về Hoàn','/about'],['Liên hệ','/contact'],['Tra cứu lịch','/lookup']];
@@ -1774,7 +2327,7 @@
 
   const adminLinks = [
     ['overview','grid','Tổng quan'],['appointments','calendar','Lịch hẹn'],['schedule','clock','Lịch làm việc'],
-    ['services','tag','Dịch vụ'],['customers','user','Khách hàng'],['payments','card','Thu chi & tiền cọc'],['promotions','ticket','Mã ưu đãi'],
+    ['services','tag','Dịch vụ'],['customers','user','Khách hàng'],['payments','card','Thanh toán'],['promotions','ticket','Mã ưu đãi'],
     ['gallery','image','Bộ sưu tập'],['content','content','Nội dung website'],['notifications','bell','Thông báo'],['requests','mail','Yêu cầu hỗ trợ'],
     ['reports','report','Báo cáo'],['permissions','shield','Phân quyền'],['audit','log','Nhật ký'],['settings','settings','Cài đặt'],
     ['visitors','user','Khách truy cập website']
@@ -1791,27 +2344,16 @@
     const headHtml = active === 'schedule' ? '' : `<header class="admin-head"><div><h1>${title}</h1><p>${subtitle}</p></div><div class="admin-head-actions">${actions}</div></header>`;
     const unreadNotifications = (state.notifications || []).filter(notification => notification.status === 'unread').length;
     const notificationBadge = unreadNotifications ? `<b>${unreadNotifications > 99 ? '99+' : unreadNotifications}</b>` : '';
-    return `<div class="admin-page"><header class="admin-top"><a class="admin-brand" href="#/admin">HOÀN <small>QUẢN TRỊ VẬN HÀNH</small></a><label class="admin-search-wrap">${icon('search')}<input class="admin-search" id="admin-global-search" placeholder="Tìm lịch hẹn, khách hàng hoặc giao dịch..."></label><div class="admin-user"><a class="admin-view-site-btn" href="#/" target="_blank" title="Xem website khách đặt lịch"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg><span>Xem website</span></a><button class="admin-notification" aria-label="Thông báo${unreadNotifications ? `, ${unreadNotifications} chưa đọc` : ''}" data-action="goto-notifications" title="${unreadNotifications ? `${unreadNotifications} thông báo chưa đọc` : 'Không có thông báo mới'}">${icon('bell')}${notificationBadge}</button><span class="admin-profile" data-action="goto-profile" title="Hoàn Nguyễn - Quản trị viên"><i>HN</i><span>Hoàn Nguyễn<small>Quản trị viên</small></span></span></div></header><div class="admin-layout"><aside class="admin-sidebar">${groups.map(g=>`<div class="admin-group-title">${g[0]}</div>${g[1].map(key=>{const l=adminLinks.find(x=>x[0]===key);return `<a class="admin-link ${active===key?'active':''}" href="#/admin/${key==='overview'?'':key}">${icon(l[1],l[2])}<span>${l[2]}</span></a>`}).join('')}`).join('')}</aside><main id="main" class="admin-content" data-admin-page="${active}">${headHtml}${body}</main></div></div>`;
+    return `<div class="admin-page"><header class="admin-top"><a class="admin-brand" href="#/admin">HOÀN <small>QUẢN TRỊ VẬN HÀNH</small></a><label class="admin-search-wrap">${icon('search')}<input class="admin-search" id="admin-global-search" aria-label="Tìm lịch hẹn, khách hàng hoặc giao dịch" placeholder="Tìm lịch, khách, giao dịch… (Enter)"></label><div class="admin-user"><a class="admin-view-site-btn" href="#/" target="_blank" title="Xem website khách đặt lịch"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg><span>Xem website</span></a><button class="admin-notification" aria-label="Thông báo${unreadNotifications ? `, ${unreadNotifications} chưa đọc` : ''}" data-action="goto-notifications" title="${unreadNotifications ? `${unreadNotifications} thông báo chưa đọc` : 'Không có thông báo mới'}">${icon('bell')}${notificationBadge}</button><span class="admin-profile" data-action="goto-profile" title="Hoàn Nguyễn - Quản trị viên"><i>HN</i><span>Hoàn Nguyễn<small>Quản trị viên</small></span></span><button class="admin-logout-button" data-action="admin-logout">Đăng xuất</button></div></header><div class="admin-layout"><aside class="admin-sidebar">${groups.map(g=>`<div class="admin-group-title">${g[0]}</div>${g[1].map(key=>{const l=adminLinks.find(x=>x[0]===key);return `<a class="admin-link ${active===key?'active':''}" href="#/admin/${key==='overview'?'':key}">${icon(l[1],l[2])}<span>${l[2]}</span></a>`}).join('')}`).join('')}</aside><main id="main" class="admin-content" data-admin-page="${active}">${headHtml}${body}</main></div></div>`;
   }
 
   function adminOverview() {
-    const appts = state.appointments;
-    const today = localIso(new Date());
-    const currentMonth = today.slice(0,7);
-    const todayRows = appts.filter(a=>a.date===today && a.status!=='cancelled');
-    const pending = appts.filter(a=>a.status==='pending').length;
-    const paymentPending = appts.filter(a=>a.paymentStatus==='pending_verification').length;
-    const deposits = appts.reduce((sum,appointment)=>sum+Number(appointment.finance?.netReceived ?? appointment.deposit ?? 0),0);
-    const rescheduleRequests = (state.requests || []).filter(r => r.code && /đổi lịch|đổi ngày|reschedule/i.test(String(r.subject || '')) && ['pending','in_progress'].includes(r.status || 'pending')).length;
-    const revenue = cashNet(actualCashEntries().filter(entry => transactionDay(entry).startsWith(currentMonth)));
-    const body = `${state.backendError?`<div class="data-alert">Không thể tải dữ liệu: ${state.backendError}</div>`:''}<section class="stat-grid"><div class="stat-card"><small>Lịch hôm nay</small><strong class="numeric">${String(todayRows.length).padStart(2,'0')}</strong><span>Dữ liệu cập nhật trực tiếp</span></div><div class="stat-card"><small>Chờ xác nhận</small><strong class="numeric">${String(pending).padStart(2,'0')}</strong><span>${pending?'Cần kiểm tra lịch mới':'Không có lịch chờ'}</span></div><div class="stat-card"><small>Thực còn giữ từ khách</small><strong class="numeric">${money(deposits)}</strong><span>${paymentPending} giao dịch chờ đối soát</span></div><div class="stat-card"><small>Thu ròng tháng</small><strong class="numeric">${money(revenue)}</strong><span>Tiền thực thu trừ tiền đã hoàn</span></div></section><section class="admin-grid"><div class="admin-section"><div class="section-head"><h2>Dòng lịch hôm nay</h2><a class="link wine" href="#/admin/appointments">Xem toàn bộ lịch hẹn →</a></div>${appointmentsTable(todayRows)}</div><aside class="admin-section"><h2>Cần xử lý</h2><div class="task-item"><span class="task-num numeric">${String(pending).padStart(2,'0')}</span><div><b>Lịch chờ xác nhận</b><small class="muted">Cập nhật theo dữ liệu thật</small></div>→</div><div class="task-item"><span class="task-num numeric">${String(paymentPending).padStart(2,'0')}</span><div><b>Giao dịch cần đối soát</b><small class="muted">Chưa ghi nhận tiền cọc</small></div>→</div><div class="task-item"><span class="task-num numeric">${String(rescheduleRequests).padStart(2,'0')}</span><div><b>Yêu cầu đổi lịch</b><small class="muted">${rescheduleRequests?'Cần kiểm tra lịch mới':'Không có yêu cầu mới'}</small></div>→</div></aside></section><section class="admin-grid rule"><div class="admin-section"><h2>Thu ròng 7 ngày</h2>${lineChart()}</div><div class="admin-section"><h2>Hiệu suất dịch vụ</h2>${barChart()}</div></section>`;
-    return adminShell('overview',body,'Tổng quan hôm nay',formatLongDate(new Date()),`<button class="btn" data-action="export-report">${icon('download')} Xuất báo cáo</button><button class="btn btn-dark" data-action="new-appointment">${icon('plus')} Tạo lịch hẹn</button>`);
+    return overviewAdmin?.desktop() || adminShell('overview', overviewLoadError ? '<p role="alert">Chưa tải được Tổng quan. Vui lòng tải lại trang.</p><button class="btn" data-action="reload-overview">Tải lại trang</button>' : '<p role="status">Đang tải Tổng quan…</p>', 'Tổng quan hôm nay', 'Đang chuẩn bị dữ liệu.');
   }
 
   function appointmentsTable(rows) {
     return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Giờ</th><th>Khách hàng</th><th>Dịch vụ</th><th>Khu vực</th><th>Thanh toán</th><th>Trạng thái</th><th style="min-width:320px;">Thao tác</th></tr></thead><tbody>${rows.length?rows.map(a=>{
-      const isConf = (a.status === 'confirmed' || a.paymentStatus === 'received');
-      return `<tr class="clickable-row" data-action="admin-view-appointment" data-code="${a.code}" title="Nhấp vào dòng để xem chi tiết lịch hẹn"><td class="numeric"><b>${a.time}</b></td><td><b class="row-hover-link">${esc(a.customer)}</b><br><small class="numeric" style="color:#6b7280;">${a.phone}</small></td><td>${service(a.serviceId).name}</td><td>${esc(a.ward || state.bookingDetails?.[a.code]?.city || a.district || '—')}<br>${adminLocations?.shortcut(a, state.bookingDetails?.[a.code]) || ''}</td><td class="numeric">${a.deposit>0?'Đã thu '+money(a.finance?.netReceived ?? a.deposit):a.paymentStatus==='pending_verification'?'Chờ đối soát':'Chưa thanh toán'}</td><td><span class="badge ${a.status==='confirmed'?'success':a.status==='pending'?'warning':''}">${statusLabel(a.status)}</span></td><td><div class="table-actions"><button class="action-btn action-btn-view" data-action="admin-view-appointment" data-code="${a.code}" title="Xem chi tiết lịch hẹn">${icon('eye')}<span>Xem</span></button><button class="action-btn action-btn-edit" data-action="admin-edit-appointment" data-code="${a.code}" title="Chỉnh sửa thông tin lịch hẹn">${icon('edit')}<span>Sửa</span></button><button class="action-btn action-btn-delete" data-action="admin-delete-appointment" data-code="${a.code}" title="Xóa lịch hẹn khỏi hệ thống">${icon('trash')}<span>Xóa</span></button><button class="action-btn action-btn-status" data-action="admin-status" data-code="${a.code}" title="Đổi trạng thái lịch">${icon('clock')}<span>Trạng thái</span></button>${!isConf?`<button class="action-btn action-btn-deposit" data-action="admin-confirm-deposit" data-code="${a.code}" title="Quản trị duyệt cọc">${icon('check')}<span>Duyệt cọc</span></button>`:`<button class="action-btn action-btn-reset" data-action="admin-reset-deposit" data-code="${a.code}" title="Ghi phiếu hoàn tiền"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg><span>Hoàn cọc</span></button>`}</div></td></tr>`;
+      return `<tr class="clickable-row" data-action="admin-view-appointment" data-code="${a.code}" title="Nhấp vào dòng để xem chi tiết lịch hẹn"><td class="numeric"><b>${a.time}</b></td><td><b class="row-hover-link">${esc(a.customer)}</b><br><small class="numeric" style="color:#6b7280;">${esc(a.phone)}</small></td><td>${service(a.serviceId).name}</td><td>${esc(a.ward || state.bookingDetails?.[a.code]?.city || a.district || '—')}<br>${adminLocations?.shortcut(a, state.bookingDetails?.[a.code]) || ''}</td><td class="numeric">${a.deposit>0?'Đã thu '+money(a.finance?.netReceived ?? a.deposit):a.paymentStatus==='pending_verification'?'Chờ đối soát':'Chưa thanh toán'}</td><td><span class="badge ${a.status==='confirmed'?'success':a.status==='pending'?'warning':''}">${statusLabel(a.status)}</span></td><td><div class="table-actions"><button class="action-btn action-btn-view" data-action="admin-view-appointment" data-code="${a.code}" title="Xem chi tiết lịch hẹn">${icon('eye')}<span>Xem</span></button><button class="action-btn action-btn-edit" data-action="admin-edit-appointment" data-code="${a.code}" title="Chỉnh sửa thông tin lịch hẹn">${icon('edit')}<span>Sửa</span></button><button class="action-btn action-btn-delete" data-action="admin-delete-appointment" data-code="${a.code}" title="Lưu trữ lịch hẹn">${icon('trash')}<span>Lưu trữ</span></button><button class="action-btn action-btn-status" data-action="admin-status" data-code="${a.code}" title="Đổi trạng thái lịch">${icon('clock')}<span>Trạng thái</span></button><button class="action-btn" data-action="admin-open-payments" data-code="${esc(a.code)}" title="Xem thanh toán của lịch này">${icon('card')}<span>Thanh toán</span></button></div></td></tr>`;
     }).join(''):'<tr><td colspan="7"><div class="empty-table">Chưa có lịch hẹn. Lịch khách đặt sẽ xuất hiện tại đây.</div></td></tr>'}</tbody></table></div>`;
   }
 
@@ -1828,25 +2370,42 @@
     return rows.length?`<div class="bar-chart">${rows.map(r=>`<div class="bar-row"><span>${r[0]}</span><div class="bar-track"><div class="bar-fill" style="width:${r[1]}%"></div></div><b class="numeric">${r[1]}%</b></div>`).join('')}</div>`:'<div class="empty-table">Chưa có dữ liệu dịch vụ.</div>';
   }
 
+  function appointmentFilters() {
+    return new URLSearchParams(location.hash.split('?')[1] || '');
+  }
+  function filteredAppointmentRows(filter = appointmentFilters()) {
+    const keyword = (filter.get('q') || '').toLocaleLowerCase('vi');
+    const status = filter.get('status') || 'all', date = filter.get('date') || '', serviceId = filter.get('service') || '';
+    return state.appointments.filter(row => (!keyword || [row.customer,row.code,row.phone].join(' ').toLocaleLowerCase('vi').includes(keyword))
+      && (status === 'all' || row.status === status) && (!date || row.date === date && (status === 'cancelled' || row.status !== 'cancelled'))
+      && (!serviceId || row.serviceId === serviceId)).slice().sort((a,b) => (a.date + a.time).localeCompare(b.date + b.time));
+  }
+  function applyAppointmentFilters() {
+    const filter = new URLSearchParams();
+    for (const [key,id] of [['q','appointment-search'],['status','appointment-status'],['date','appointment-date'],['service','appointment-service']]) {
+      const value = document.getElementById(id)?.value || '';
+      if (value && value !== 'all') filter.set(key,value);
+    }
+    history.replaceState(null, '', '#/admin/appointments' + (filter.size ? '?' + filter : ''));
+    $('#appointments-table').innerHTML = appointmentsTable(filteredAppointmentRows(filter));
+  }
   function adminAppointments() {
-    const body = `<div class="toolbar"><input id="appointment-search" placeholder="Tìm theo khách hàng, mã lịch..."><select id="appointment-status"><option value="all">Tất cả trạng thái</option><option value="confirmed">Đã xác nhận</option><option value="pending">Chờ xác nhận</option><option value="completed">Đã hoàn thành</option></select><input type="date" id="appointment-date"><button class="btn btn-sm" data-action="reset-appointment-filter">Đặt lại</button></div><div id="appointments-table">${appointmentsTable(state.appointments)}</div>`;
-    return adminShell('appointments',body,'Lịch hẹn','Quản lý toàn bộ lịch hẹn và trạng thái phục vụ.',`<button class="btn" data-action="export-appointments">${icon('download')} Xuất danh sách</button><button class="btn btn-dark" data-action="new-appointment">${icon('plus')} Tạo lịch hẹn</button>`);
+    const filter = appointmentFilters();
+    const services = [...state.services];
+    for (const row of state.appointments) if (!services.some(service => service.id === row.serviceId)) services.push({id:row.serviceId,name:'Dịch vụ cũ · ' + row.serviceId});
+    const body = `<div class="toolbar"><input id="appointment-search" aria-label="Tìm lịch hẹn" placeholder="Tên, số điện thoại hoặc mã lịch" value="${esc(filter.get('q') || '')}"><select id="appointment-status" aria-label="Trạng thái lịch">${[['all','Tất cả trạng thái'],['confirmed','Đã xác nhận'],['pending','Chờ xác nhận'],['completed','Đã hoàn thành'],['cancelled','Đã hủy']].map(([value,label])=>`<option value="${value}" ${(filter.get('status') || 'all')===value?'selected':''}>${label}</option>`).join('')}</select><input type="date" id="appointment-date" aria-label="Ngày hẹn" value="${esc(filter.get('date') || '')}"><select id="appointment-service" aria-label="Dịch vụ"><option value="">Tất cả dịch vụ</option>${services.map(row=>`<option value="${esc(row.id)}" ${filter.get('service')===row.id?'selected':''}>${esc(row.name)}</option>`).join('')}</select><button class="btn btn-sm" data-action="reset-appointment-filter">Đặt lại</button></div><div id="appointments-table">${appointmentsTable(filteredAppointmentRows(filter))}</div>`;
+    return adminShell('appointments',body,'Lịch hẹn','Quản lý lịch hẹn và trạng thái phục vụ.',`<button class="btn" data-action="appointment-archive">Đã lưu trữ</button><button class="btn" data-action="export-appointments">${icon('download')} Xuất danh sách</button><button class="btn btn-dark" data-action="new-appointment">${icon('plus')} Tạo lịch hẹn</button>`);
   }
 
   // Clean seed appointments & slots (No mock data)
-  const SEED_SCHEDULE_APPOINTMENTS = [];
-  const SEED_SCHEDULE_SLOTS = [];
+  const _SEED_SCHEDULE_APPOINTMENTS = [];
+  const _SEED_SCHEDULE_SLOTS = [];
 
   function ensureScheduleSeedData() {
     if (!state.appointments) state.appointments = [];
     if (!state.scheduleSlots) state.scheduleSlots = [];
     if (!state.customers) state.customers = [];
 
-    // Purge only explicitly known legacy test appointments.
-    const staleCodes = ['HMA-090926-BQ0', 'HMA-090926-MQ3', 'HMA-100926-MS7', 'HMA-090926-BIQ', 'HMA-180926-6W2'];
-    state.appointments = (state.appointments || []).filter(a =>
-      !staleCodes.includes(a.code)
-    );
   }
 
   function modalEditAppointment(code) {
@@ -1907,22 +2466,43 @@
     const a = getAppointment(code);
     if (!a) return toast('Không tìm thấy lịch hẹn');
     const sName = service(a.serviceId)?.name || a.serviceId;
-    modal('Xác nhận xóa lịch hẹn', `
+    modal('Lưu trữ lịch hẹn', `
       <div style="font-size:14px;line-height:1.6;color:#1f2937;">
         <p style="font-size:15px;color:#1f2937;margin-bottom:14px;line-height:1.5;">
-          Bạn có chắc chắn muốn xóa lịch hẹn của khách hàng <b>${esc(a.customer)}</b>?
+          Lưu trữ lịch hẹn của khách hàng <b>${esc(a.customer)}</b>?
         </p>
         <div style="margin-bottom:16px;">
           <div class="summary-row"><span>Mã lịch</span><b class="numeric">${a.code}</b></div>
           <div class="summary-row"><span>Thời gian</span><b class="numeric">${a.time}, ${a.date}</b></div>
           <div class="summary-row"><span>Dịch vụ</span><b>${esc(sName)}</b></div>
-          <div class="summary-row"><span>Số điện thoại</span><b class="numeric">${a.phone || '—'}</b></div>
+          <div class="summary-row"><span>Số điện thoại</span><b class="numeric">${esc(a.phone || '—')}</b></div>
         </div>
         <p style="font-size:13px;color:#6b7280;margin:0;line-height:1.5;">
-          Dữ liệu lịch hẹn sau khi xóa sẽ được gỡ hoàn toàn khỏi hệ thống và không thể khôi phục.
+          Lịch được chuyển vào mục Đã lưu trữ. Bạn có thể khôi phục khi khung giờ còn phù hợp. Lịch có giao dịch được giữ trong sổ đối soát.
         </p>
       </div>
-    `, 'Xác nhận xóa', `delete-appointment:${a.code}`, 'btn-danger');
+    `, 'Lưu trữ', `delete-appointment:${esc(a.code)}`);
+  }
+
+  async function openAppointmentArchive(offset = 0) {
+    modal('Lịch đã lưu trữ', '<div data-appointment-archive role="status">Đang tải…</div>');
+    const target = $('[data-appointment-archive]');
+    try {
+      const response = await fetch('/api/data?' + new URLSearchParams({ admin: '1', view: 'archive', offset: String(offset) }), { cache: 'no-store', credentials: 'same-origin' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Chưa tải được lịch đã lưu trữ.');
+      if (!target.isConnected) return;
+      const rows = data.appointments.map(row => `<div class="summary-row">
+        <div><b>${esc(row.customer)}</b><br><small>${esc(row.code)} · ${esc(row.time)} · ${esc(dateLabel(row.date))}</small></div>
+        <button type="button" class="btn btn-sm" data-action="restore-archived-appointment" data-code="${esc(row.code)}">Khôi phục</button>
+      </div>`).join('');
+      target.innerHTML = (rows || '<p>Chưa có lịch đã lưu trữ.</p>') + `<div class="toolbar">
+        <button class="btn btn-sm" data-action="appointment-archive" data-offset="${Math.max(0, offset - 25)}" ${offset ? '' : 'disabled'}>Trước</button>
+        <button class="btn btn-sm" data-action="appointment-archive" data-offset="${offset + 25}" ${data.hasNext ? '' : 'disabled'}>Sau</button>
+      </div>`;
+    } catch (error) {
+      if (target.isConnected) target.textContent = error.message;
+    }
   }
 
   function modalAddSlot(defaultDate = '', defaultTime = '09:00', defaultEndTime = '10:15') {
@@ -2010,10 +2590,8 @@
     const monday = mondayForOffset(state.adminWeekOffset);
     const dayDates = Array.from({length:7}, (_,i) => { const d = new Date(monday); d.setDate(monday.getDate()+i); return d; });
     const dayNames = ['T2','T3','T4','T5','T6','T7','CN'];
-    const todayIso = localIso(new Date());
 
     // Stale codes to exclude
-    const staleCodes = ['HMA-090926-BQ0', 'HMA-090926-MQ3', 'HMA-100926-MS7', 'HMA-090926-BIQ', 'HMA-180926-6W2'];
 
     // Determine which days are "open" (on)
     const dayOpen = state.settings.weekDayOpen || [true,true,true,true,true,true,false];
@@ -2055,7 +2633,7 @@
 
       if (isOpen) {
         // Appointments
-        const dayApts = state.appointments.filter(a => a.date === iso && a.status === 'confirmed' && !staleCodes.includes(a.code));
+        const dayApts = state.appointments.filter(a => a.date === iso && a.status === 'confirmed');
         for (const a of dayApts) {
           const startMin = timeToMin(a.time);
           const endLabel = a.endTime || addMinutes(a.time, 75);
@@ -2130,7 +2708,6 @@
 
     // Day headers
     const dayHeaders = dayDates.map((d, i) => {
-      const iso = localIso(d);
       const open = dayOpen[i];
       return `<div class="schv2-day-header">
         <span class="schv2-day-name">${dayNames[i]}</span>
@@ -2313,12 +2890,12 @@
   }
 
   function adminCustomers() {
-    const body = `<div class="toolbar"><input id="customer-search" placeholder="Tìm tên, số điện thoại, email..."><select><option>Tất cả khách hàng</option><option>Khách quay lại</option><option>Khách mới</option></select></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Khách hàng</th><th>Liên hệ</th><th>Số lần đặt</th><th>Tổng chi tiêu</th><th>Ghi chú</th><th style="min-width:120px;">Thao tác</th></tr></thead><tbody id="customer-body">${state.customers.map((c,i)=>`<tr><td><b>${c.name}</b></td><td>${c.phone}<br><small>${c.email}</small></td><td>${c.visits}</td><td>${money(c.spent)}</td><td>${c.note}</td><td><button class="action-btn action-btn-edit" data-action="edit-customer" data-index="${i}">${icon('edit')}<span>Chỉnh sửa</span></button><br>${adminLocations?.customerShortcut(c) || ''}</td></tr>`).join('')}</tbody></table></div>`;
+    const body = `<div class="toolbar"><input id="customer-search" placeholder="Tìm tên, số điện thoại, email..."><select><option>Tất cả khách hàng</option><option>Khách quay lại</option><option>Khách mới</option></select></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Khách hàng</th><th>Liên hệ</th><th>Số lần đặt</th><th>Tổng chi tiêu</th><th>Ghi chú</th><th style="min-width:120px;">Thao tác</th></tr></thead><tbody id="customer-body">${state.customers.map((c,i)=>`<tr><td><b>${esc(c.name)}</b></td><td>${esc(c.phone)}<br><small>${esc(c.email)}</small></td><td>${esc(c.visits)}</td><td>${money(c.spent)}</td><td>${esc(c.note)}</td><td><button class="action-btn action-btn-edit" data-action="edit-customer" data-index="${i}">${icon('edit')}<span>Chỉnh sửa</span></button><br>${adminLocations?.customerShortcut(c) || ''}</td></tr>`).join('')}</tbody></table></div>`;
     return adminShell('customers',body,'Khách hàng','Lịch sử đặt lịch, thông tin liên hệ và ghi chú phục vụ.',`<button class="btn" data-action="export-customers">${icon('download')} Xuất danh sách</button><button class="btn btn-dark" data-action="add-customer">${icon('plus')} Thêm khách hàng</button>`);
   }
 
   function adminPayments() {
-    return adminShell('payments', financeAdmin?.html() || '<p role="status">Đang tải sổ thu chi…</p>', 'Thu chi & tiền cọc', 'Theo dõi từng khoản thu, hoàn tiền và số còn phải thu.');
+    return adminShell('payments', financeAdmin?.html() || '<p role="status">Đang tải sổ thu chi…</p>', 'Thanh toán', 'Quản lý tiền cọc, thu còn lại và hoàn tiền tại một nơi.');
   }
 
   function adminPromotions() {
@@ -2340,7 +2917,7 @@
         <button class="btn btn-dark" style="margin-left:auto" data-action="open-add-portfolio-modal">+ Thêm ảnh</button>
       </div>
       <div class="admin-card-grid" id="admin-gallery">
-        ${filtered.map((g,i)=>`
+        ${filtered.map(g=>`
           <article class="admin-card">
             <div style="height:220px;overflow:hidden;position:relative;background:#f8f9fa;">
               ${img(g.image,g.title)}
@@ -2373,7 +2950,7 @@
     );
   }
 
-  function legacyAdminContent() {
+  function _legacyAdminContent() {
     const b = state.brand || {};
     const s = state.settings || {};
     const viewMode = state.contentViewMode || (state.contentActiveTab === 'pages' ? 'pages' : 'pages');
@@ -2900,7 +3477,7 @@
           </div>
           <p style="color:#6b7280;font-size:11px;margin:0 0 12px;">${esc(b.servicesPageSubtitle || 'Lựa chọn dành cho khoảnh khắc của bạn.')}</p>
           <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
-            ${state.services.filter(s=>s.enabled).slice(0,3).map((sv,idx)=>`
+            ${state.services.filter(s=>s.enabled).slice(0,3).map(sv=>`
               <div style="border:1px solid #e5e7eb;border-radius:4px;padding:10px;display:flex;justify-content:space-between;align-items:center;">
                 <div>
                   <b style="font-size:12.5px;display:block;">${esc(sv.name)}</b>
@@ -3026,7 +3603,7 @@
             </button>
           `).join('')}
         </nav>
-        <form class="content-form" data-form="content">
+        <form novalidate class="content-form" data-form="content">
           ${tabHtml}
           <div style="margin-top:24px;display:flex;gap:10px;position:sticky;bottom:0;background:#ffffff;padding-top:12px;border-top:1px solid #eee;">
             <button type="submit" class="btn btn-dark btn-wide" style="flex:1;">
@@ -3082,9 +3659,7 @@
   }
 
   function adminPermissions() {
-    const roles = [{name:'Chủ hệ thống',members:1,rights:['Toàn quyền','Thanh toán','Phân quyền']},{name:'Quản lý lịch',members:1,rights:['Lịch hẹn','Khách hàng','Thông báo']},{name:'Kế toán',members:1,rights:['Thanh toán','Báo cáo']},{name:'Cộng tác viên',members:2,rights:['Xem lịch được giao']}];
-    const body = `<div class="admin-card-grid">${roles.map((r,i)=>`<article class="admin-card"><div class="section-head"><h3>${r.name}</h3><span class="badge">${r.members} thành viên</span></div><p class="muted">${r.rights.join(' · ')}</p><div class="summary-row"><span>Truy cập trang quản trị</span><button class="toggle ${i<3?'on':''}" data-action="permission-toggle"></button></div><div class="admin-card-actions"><button class="btn btn-sm" data-action="edit-role" data-role="${r.name}">Chỉnh quyền</button><button class="btn btn-sm" data-action="role-members" data-role="${r.name}">Thành viên</button></div></article>`).join('')}</div><div class="manage-card"><h2>Nguyên tắc bảo mật</h2><p class="muted">Mỗi người chỉ nhìn thấy dữ liệu cần thiết cho vai trò. Các thay đổi về quyền được ghi lại trong Nhật ký hoạt động.</p></div>`;
-    return adminShell('permissions',body,'Phân quyền','Kiểm soát quyền truy cập và phạm vi thao tác.',`<button class="btn btn-dark" data-action="add-role">${icon('plus')} Tạo vai trò</button>`);
+    return adminShell('permissions', '<section class="manage-card"><h2>Chủ quản trị</h2><p>Khóa chủ quản trị có quyền xem lịch, khách hàng và sổ giao dịch. Mỗi lần đăng nhập tạo một phiên có thời hạn. Đăng xuất sẽ thu hồi phiên đó.</p></section>', 'Quyền quản trị', 'Phạm vi quyền đang áp dụng cho website.');
   }
 
   function adminAudit() {
@@ -3096,6 +3671,75 @@
     return adminShell('settings', window.HoanSettingsView?.content() || '<p role="status">Đang tải cài đặt…</p>', 'Cài đặt', 'Quản lý lịch hẹn, tài khoản nhận tiền và thông tin liên hệ.');
   }
 
+  function adminLogin() {
+    return `<main id="main" class="security-login">
+      <div class="security-login-card">
+        <div class="security-login-cover">
+          <img src="/assets/campaign.png" alt="" width="2060" height="763" fetchpriority="high">
+          <div class="security-login-brand">HOÀN<span>Makeup Artist</span></div>
+        </div>
+        <section class="security-login-panel" aria-labelledby="admin-login-title">
+          <div class="security-login-content">
+            <h1 id="admin-login-title">Đăng nhập quản trị</h1>
+            <p class="security-login-intro">Nhập khóa do chủ website cấp để vào trang quản trị.</p>
+            <form data-form="admin-login" novalidate>
+              <label for="admin-access-key">Khóa quản trị</label>
+              <div class="security-login-key">
+                <input id="admin-access-key" name="token" type="password" autocomplete="current-password" spellcheck="false" autocapitalize="off" aria-required="true">
+                <button class="security-login-toggle" type="button" data-login-toggle aria-controls="admin-access-key" aria-pressed="false">Hiện khóa</button>
+              </div>
+              <p class="server-form-feedback" role="alert" tabindex="-1" data-login-status data-form-feedback hidden></p>
+              <button class="security-login-submit" type="submit">Đăng nhập</button>
+            </form>
+            <a class="security-login-home" href="#/">Về website</a>
+          </div>
+        </section>
+      </div>
+    </main>`;
+  }
+
+  async function signInAdmin(key) {
+    const response = await fetch('/api/admin-session', {
+      method: 'POST', cache: 'no-store', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw serverError(response, result);
+    adminSessionGeneration++;
+    adminLogoutPending = false;
+    clearLegacyAdminKey();
+    await hydrateBackend(true);
+    if (!state.adminAuthorized) throw new Error('Phiên quản trị chưa sẵn sàng. Vui lòng thử lại.');
+  }
+
+  function expireAdminView() {
+    adminSessionGeneration++;
+    adminLogoutPending = true;
+    clearLegacyAdminKey();
+    clearAdminData();
+    closeModal(); route('/admin/login'); render();
+  }
+
+  async function logoutAdmin() {
+    expireAdminView();
+    try { localStorage.setItem(adminLogoutSignal, String(Date.now())); } catch { /* Browser storage can be disabled. */ }
+    try {
+      const response = await fetch('/api/admin-session', { method: 'DELETE', cache: 'no-store', credentials: 'same-origin' });
+      if (!response.ok) throw new Error('Chưa thu hồi được phiên ở máy chủ.');
+    } catch { toast('Chưa thu hồi được phiên ở máy chủ. Hãy thử đăng xuất lại khi có kết nối.'); }
+  }
+  window.HoanAdminAuth = { signIn: signInAdmin, loginHtml: adminLogin };
+  document.addEventListener('click', event => {
+    const toggle = event.target.closest('[data-login-toggle]');
+    if (!toggle) return;
+    const field = toggle.closest('form').elements.namedItem('token');
+    const reveal = field.type === 'password';
+    field.type = reveal ? 'text' : 'password';
+    toggle.setAttribute('aria-pressed', String(reveal));
+    toggle.textContent = reveal ? 'Ẩn khóa' : 'Hiện khóa';
+  });
+  document.addEventListener('hoan:admin-logout', logoutAdmin);
+
   function modal(title, content, confirmLabel = 'Lưu', onConfirm = '', confirmClass = 'btn-dark') {
     const isWide = content.includes('admin-preview-grid');
     adminLocations?.beforeRender($('#modal-root'));
@@ -3103,9 +3747,10 @@
     $('#modal-root').innerHTML = `<div class="modal-backdrop" role="presentation" data-action="modal-backdrop"><section class="modal ${isWide ? 'modal-wide' : ''}" role="dialog" aria-modal="true" aria-labelledby="modal-title"><h2 id="modal-title">${title}</h2><div>${content}</div><div class="modal-actions">${actions}</div></section></div>`;
     bindAdminRecordForm();
     adminLocations?.mount(document);
+    window.HoanVietnamDate?.mount(document);
     setTimeout(() => $('.modal input, .modal select, .modal textarea')?.focus(), 0);
   }
-  const closeModal = () => { adminLocations?.beforeRender($('#modal-root')); $('#modal-root').innerHTML = ''; };
+  const closeModal = () => { window.HoanVietnamDate?.close(); adminLocations?.beforeRender($('#modal-root')); $('#modal-root').innerHTML = ''; };
 
   function downloadText(filename, content) {
     const blob = new Blob([content], {type:'text/plain;charset=utf-8'});
@@ -3137,86 +3782,325 @@
   let motionObserver = null;
   let motionRoute = null;
   let motionCleanup = () => {};
-  function mountCoutureMotion(path) {
+  function mountCoutureMotion(path, routeChanged = true) {
     if (!window.matchMedia) return;
     motionObserver?.disconnect();
     motionCleanup();
     const previous = motionRoute;
     motionRoute = location.hash;
-    const main = document.querySelector('.couture main');
-    if (!main || new URLSearchParams(location.search).get('cmsPreview') === '1' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    if (main.querySelector('.policy-document, .support-desk, .support-article')) return;
+    const main = document.querySelector?.('.couture main');
+    if (!main || new URLSearchParams(location.search || '').get('cmsPreview') === '1' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const cleanups = [];
     const animations = new Set();
     const animate = (node, frames, options) => {
-      if (!node.animate) return;
+      if (!node || typeof node.animate !== 'function') return null;
       const animation = node.animate(frames, options);
       animations.add(animation);
-      animation.finished.then(() => animations.delete(animation), () => animations.delete(animation));
+      animation.finished?.then(() => animations.delete(animation), () => animations.delete(animation));
+      return animation;
     };
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
     const stop = () => {
       motionObserver?.disconnect();
-      animations.forEach(animation => animation.cancel());
+      animations.forEach(animation => animation.cancel?.());
+      animations.clear();
       cleanups.forEach(fn => fn());
     };
     const preferenceChanged = () => { if (reduced.matches) stop(); };
     reduced.addEventListener?.('change', preferenceChanged);
     motionCleanup = () => { stop(); reduced.removeEventListener?.('change', preferenceChanged); };
-    // Keep the masthead still; turn the content plane into its new position.
-    if (previous !== motionRoute) {
+
+    // Sticky header glass & hairline elevation on scroll
+    const header = document.getElementById?.('site-header');
+    if (header?.classList && typeof window.addEventListener === 'function') {
+      const syncHeader = () => header.classList.toggle('is-scrolled', (window.scrollY || 0) > 12);
+      syncHeader();
+      window.addEventListener('scroll', syncHeader, { passive: true });
+      cleanups.push(() => window.removeEventListener?.('scroll', syncHeader));
+    }
+
+    const isReadingDoc = Boolean(main.querySelector?.('.policy-document, .support-desk, .support-article'));
+
+    // Route transition: top silk sweep + synchronous above-the-fold choreography + curtain scroll reveal
+    if (routeChanged && previous !== motionRoute) {
+      if (header && typeof document.createElement === 'function' && previous !== null) {
+        let sweep = header.querySelector?.('.ct-route-sweep');
+        if (!sweep && typeof header.appendChild === 'function') {
+          sweep = document.createElement('span');
+          sweep.className = 'ct-route-sweep';
+          sweep.setAttribute('aria-hidden', 'true');
+          header.appendChild(sweep);
+        }
+        animate(sweep, [
+          { transform: 'scaleX(0)', transformOrigin: 'left center', opacity: 1 },
+          { transform: 'scaleX(0.82)', transformOrigin: 'left center', opacity: 1, offset: 0.65 },
+          { transform: 'scaleX(1)', transformOrigin: 'left center', opacity: 0 }
+        ], { duration: 620, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'forwards' });
+      }
+
+      // Crisp 2D atmospheric veil dissolve (keeps typography razor-sharp with zero 3D blur)
       animate(main, [
-        { opacity: 0.12, transform: 'perspective(1600px) translate3d(0,26px,-85px) rotateY(-1.2deg)' },
-        { opacity: 1, transform: 'perspective(1600px) translate3d(0,0,0) rotateY(0deg)' }
-      ], { duration: 620, easing: 'cubic-bezier(.2,.75,.2,1)' });
-    }
-    if ('IntersectionObserver' in window) {
-      motionObserver = new IntersectionObserver(entries => {
-        entries.forEach(({target, isIntersecting}) => {
-          if (!isIntersecting) return;
-          const photo = target.matches('.fashion-photo, .ct-campaign > img, .ct-about > img, .ct-consult > img');
-          animate(target, [
-            { opacity: 0, transform: photo ? 'perspective(1100px) translateY(38px) rotateX(5deg) scale(.97)' : 'perspective(900px) translateY(22px) rotateX(-4deg)' },
-            { opacity: 1, transform: 'perspective(1100px) translateY(0) rotateX(0deg) scale(1)' }
-          ], { duration: photo ? 950 : 760, delay: photo ? 40 : 110, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
-          motionObserver.unobserve(target);
+        { opacity: 0.01 },
+        { opacity: 1 }
+      ], { duration: 340, easing: 'cubic-bezier(.22,1,.36,1)' });
+
+      if (!isReadingDoc && typeof main.querySelectorAll === 'function') {
+        const viewH = window.innerHeight || 900;
+        const isMobile = window.matchMedia('(max-width: 700px)').matches;
+
+        // 1. Campaign hero Ken Burns settle & masked editorial copy stagger
+        const heroImg = main.querySelector('.ct-campaign > img');
+        if (heroImg) {
+          animate(heroImg, [
+            { transform: 'scale(1.065)', filter: 'brightness(0.95)' },
+            { transform: 'scale(1)', filter: 'brightness(1)' }
+          ], { duration: 1350, easing: 'cubic-bezier(.16,1,.3,1)' });
+        }
+        main.querySelectorAll('.ct-campaign-copy > *').forEach((node, idx) => {
+          animate(node, [
+            { opacity: 0, transform: 'translate3d(0, 22px, 0)', clipPath: 'inset(0 0 100% 0)' },
+            { opacity: 1, transform: 'translate3d(0, 0, 0)', clipPath: 'inset(0 0 -12% 0)' }
+          ], { duration: 780, delay: 75 + idx * 85, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
         });
-      }, { threshold: 0.08 });
-      main.querySelectorAll('h1, h2, .ct-overline, .ct-subtitle, .fashion-photo, .ct-campaign > img, .ct-about > img, .ct-consult > img').forEach(node => motionObserver.observe(node));
-    }
-    if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
-      main.querySelectorAll('.fashion-photo').forEach(photo => {
-        // Tilt the link, leaving the image free for its own reveal / zoom.
-        const surface = photo.parentElement;
-        if (!surface || surface.tagName !== 'A') return;
-        surface.classList.add('ct-depth-surface');
-        let frame = 0;
-        const reset = () => {
-          cancelAnimationFrame(frame);
-          frame = 0;
-          surface.style.removeProperty('--depth-x');
-          surface.style.removeProperty('--depth-y');
+
+        // 2. Top page header choreography (breadcrumbs, progress bar, H1 title, subtitle, filter tabs)
+        const topChrome = main.querySelectorAll(':scope > .breadcrumbs, :scope > .ct-progress');
+        topChrome.forEach(node => {
+          animate(node, [
+            { opacity: 0, transform: 'translate3d(0, 8px, 0)' },
+            { opacity: 1, transform: 'translate3d(0, 0, 0)' }
+          ], { duration: 440, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
+        });
+        const topTitle = main.querySelector(':scope > .ct-title, :scope > h1');
+        if (topTitle) {
+          animate(topTitle, [
+            { opacity: 0, transform: 'translate3d(0, 18px, 0)' },
+            { opacity: 1, transform: 'translate3d(0, 0, 0)' }
+          ], { duration: 640, delay: 45, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
+        }
+        const topSub = main.querySelector(':scope > .ct-subtitle');
+        if (topSub) {
+          animate(topSub, [
+            { opacity: 0, transform: 'translate3d(0, 14px, 0)' },
+            { opacity: 1, transform: 'translate3d(0, 0, 0)' }
+          ], { duration: 580, delay: 105, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
+        }
+        const topTabs = main.querySelector(':scope > .ct-tabs');
+        if (topTabs) {
+          animate(topTabs, [
+            { opacity: 0, transform: 'translate3d(0, 10px, 0)' },
+            { opacity: 1, transform: 'translate3d(0, 0, 0)' }
+          ], { duration: 500, delay: 145, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
+        }
+
+        // 3. Cohesive editorial units & shutter-curtain photography
+        const shutterSelector = '.ct-bridal-story > a, .ct-evening > a, .ct-about > img, .ct-about .ct-about-img-wrap, .ct-consult > img, .ct-product-detail > div:first-child';
+        const unitSelector = [
+          shutterSelector,
+          '.ct-select-services .ct-service-option',
+          '.ct-service-card',
+          '.ct-service-style-card',
+          '.ct-look-card',
+          '.ct-editorial > header',
+          '.ct-bridal-story > div',
+          '.ct-evening > div',
+          '.ct-consult > div',
+          '.ct-product-detail > article',
+          '.ct-about > div:not(.ct-about-img-wrap)',
+          '.ct-process article',
+          '.ct-invite',
+          '.ct-time-layout > *',
+          '.mockup-container',
+          '.ct-two-col > *',
+          '.ct-contact > *',
+          '.ct-lookup',
+          '.ct-receipt',
+          '.ct-result'
+        ].join(', ');
+
+        const playReveal = (node, delayMs) => {
+          const isShutter = node.matches?.(shutterSelector);
+          if (isShutter) {
+            animate(node, [
+              { opacity: 0, clipPath: 'inset(8% 0% 12% 0%)', transform: 'translate3d(0, 22px, 0)' },
+              { opacity: 1, clipPath: 'inset(0% 0% 0% 0%)', transform: 'translate3d(0, 0, 0)' }
+            ], { duration: 860, delay: delayMs, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
+            const innerImg = node.matches?.('img') ? node : node.querySelector?.('img');
+            if (innerImg && !node.classList?.contains('ct-detail-crop')) {
+              animate(innerImg, [
+                { transform: 'scale(1.06)' },
+                { transform: 'scale(1)' }
+              ], { duration: 1080, delay: delayMs, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
+            }
+            return;
+          }
+          const isSelectedService = node.classList?.contains('ct-service-option') && node.classList?.contains('selected');
+          const endTransform = isSelectedService ? (isMobile ? 'translateY(-2px)' : 'translateY(-4px)') : 'translate3d(0, 0, 0)';
+          animate(node, [
+            { opacity: 0, transform: 'translate3d(0, 20px, 0)' },
+            { opacity: 1, transform: endTransform }
+          ], { duration: 620, delay: delayMs, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
         };
-        const move = event => {
-          if (event.pointerType !== 'mouse') return;
-          cancelAnimationFrame(frame);
-          frame = requestAnimationFrame(() => {
-            const r = surface.getBoundingClientRect();
-            const x = Math.max(-1, Math.min(1, (event.clientX-r.left)/r.width*2-1));
-            const y = Math.max(-1, Math.min(1, (event.clientY-r.top)/r.height*2-1));
-            surface.style.setProperty('--depth-x', `${-y*3}deg`);
-            surface.style.setProperty('--depth-y', `${x*4}deg`);
+
+        const peerCounts = new Map();
+        const belowFold = [];
+        main.querySelectorAll(unitSelector).forEach(node => {
+          const parent = node.parentElement || main;
+          const idx = peerCounts.get(parent) || 0;
+          peerCounts.set(parent, idx + 1);
+          const rect = typeof node.getBoundingClientRect === 'function' ? node.getBoundingClientRect() : { top: 0 };
+          if (rect.top < viewH * 0.94) {
+            playReveal(node, 130 + Math.min(idx, 5) * 65);
+          } else {
+            belowFold.push(node);
+          }
+        });
+
+        if (belowFold.length && 'IntersectionObserver' in window) {
+          belowFold.forEach(node => {
+            node.style.opacity = '0';
+            cleanups.push(() => { node.style.opacity = ''; });
           });
+          motionObserver = new IntersectionObserver(entries => {
+            let batchIdx = 0;
+            entries.forEach(({ target, isIntersecting }) => {
+              if (!isIntersecting) return;
+              target.style.opacity = '';
+              playReveal(target, Math.min(batchIdx++, 5) * 70);
+              motionObserver.unobserve(target);
+            });
+          }, { threshold: 0.08, rootMargin: '0px 0px -5% 0px' });
+          belowFold.forEach(node => motionObserver.observe(node));
+        }
+      }
+    }
+
+    // Subtle scroll parallax on home campaign hero (desktop)
+    const campaignImg = main.querySelector?.('.ct-campaign > img');
+    if (campaignImg && window.matchMedia('(min-width: 769px)').matches && typeof window.addEventListener === 'function') {
+      let parallaxRaf = 0;
+      const onHeroScroll = () => {
+        if (parallaxRaf) return;
+        parallaxRaf = requestAnimationFrame(() => {
+          parallaxRaf = 0;
+          const y = Math.max(0, Math.min(window.scrollY || 0, 720));
+          campaignImg.style.transform = y > 0 ? `translate3d(0, ${(y * 0.12).toFixed(1)}px, 0) scale(1.02)` : '';
+        });
+      };
+      window.addEventListener('scroll', onHeroScroll, { passive: true });
+      cleanups.push(() => {
+        cancelAnimationFrame(parallaxRaf);
+        campaignImg.style.transform = '';
+        window.removeEventListener?.('scroll', onHeroScroll);
+      });
+    }
+
+    // Atelier optical viewfinder hover: counter-parallax pan, softbox glow & passe-partout frame
+    if (window.matchMedia('(hover: hover) and (pointer: fine)').matches && typeof main.querySelectorAll === 'function') {
+      main.querySelectorAll('.fashion-photo, .ct-real-photo-img-wrap').forEach(frame => {
+        if (frame.closest?.('.ct-select-services')) return;
+        frame.classList.add('ct-atelier-photo');
+        const isDetailCrop = Boolean(frame.closest?.('.ct-detail-crop'));
+        const baseScale = isDetailCrop ? 1.9 : 1;
+        const hoverScale = isDetailCrop ? 1.98 : 1.072;
+        let hovered = false;
+        let rafId = 0;
+        let curPanX = 0, curPanY = 0, targetPanX = 0, targetPanY = 0;
+        let curScale = baseScale, targetScale = baseScale;
+        let curSpotX = 50, curSpotY = 50, targetSpotX = 50, targetSpotY = 50;
+
+        const computeTargets = (event, snapSpot = false) => {
+          const r = frame.getBoundingClientRect();
+          if (!r.width || !r.height) return;
+          const localX = Math.max(0, Math.min(r.width, event.clientX - r.left));
+          const localY = Math.max(0, Math.min(r.height, event.clientY - r.top));
+          const nx = (localX / r.width) * 2 - 1;
+          const ny = (localY / r.height) * 2 - 1;
+          const maxX = Math.min(11, r.width * 0.028);
+          const maxY = Math.min(11, r.height * 0.028);
+          targetPanX = -nx * maxX;
+          targetPanY = -ny * maxY;
+          targetSpotX = (localX / r.width) * 100;
+          targetSpotY = (localY / r.height) * 100;
+          if (snapSpot) {
+            curSpotX = targetSpotX;
+            curSpotY = targetSpotY;
+            frame.style.setProperty('--spot-x', `${curSpotX.toFixed(1)}%`);
+            frame.style.setProperty('--spot-y', `${curSpotY.toFixed(1)}%`);
+          }
         };
-        surface.addEventListener('pointermove', move);
-        surface.addEventListener('pointerleave', reset);
-        surface.addEventListener('pointercancel', reset);
+
+        const tick = () => {
+          curPanX += (targetPanX - curPanX) * 0.16;
+          curPanY += (targetPanY - curPanY) * 0.16;
+          curScale += (targetScale - curScale) * 0.11;
+          curSpotX += (targetSpotX - curSpotX) * 0.18;
+          curSpotY += (targetSpotY - curSpotY) * 0.18;
+          frame.style.setProperty('--pan-x', `${curPanX.toFixed(2)}px`);
+          frame.style.setProperty('--pan-y', `${curPanY.toFixed(2)}px`);
+          frame.style.setProperty('--photo-scale', `${curScale.toFixed(4)}`);
+          frame.style.setProperty('--spot-x', `${curSpotX.toFixed(1)}%`);
+          frame.style.setProperty('--spot-y', `${curSpotY.toFixed(1)}%`);
+          if (
+            hovered ||
+            Math.abs(targetPanX - curPanX) > 0.08 ||
+            Math.abs(targetPanY - curPanY) > 0.08 ||
+            Math.abs(targetScale - curScale) > 0.0012
+          ) {
+            rafId = requestAnimationFrame(tick);
+          } else {
+            rafId = 0;
+            frame.style.setProperty('--pan-x', '0px');
+            frame.style.setProperty('--pan-y', '0px');
+            frame.style.setProperty('--photo-scale', `${baseScale}`);
+          }
+        };
+
+        const ensureLoop = () => {
+          if (!rafId) rafId = requestAnimationFrame(tick);
+        };
+
+        const onEnter = event => {
+          if (event.pointerType && event.pointerType !== 'mouse') return;
+          hovered = true;
+          targetScale = hoverScale;
+          frame.classList.add('is-photo-hovered');
+          computeTargets(event, true);
+          ensureLoop();
+        };
+        const onMove = event => {
+          if (event.pointerType && event.pointerType !== 'mouse') return;
+          if (!hovered) {
+            hovered = true;
+            targetScale = hoverScale;
+            frame.classList.add('is-photo-hovered');
+          }
+          computeTargets(event, false);
+          ensureLoop();
+        };
+        const onLeave = () => {
+          hovered = false;
+          targetScale = baseScale;
+          frame.classList.remove('is-photo-hovered');
+          targetPanX = 0;
+          targetPanY = 0;
+          ensureLoop();
+        };
+
+        frame.addEventListener('pointerenter', onEnter);
+        frame.addEventListener('pointermove', onMove);
+        frame.addEventListener('pointerleave', onLeave);
+        frame.addEventListener('pointercancel', onLeave);
         cleanups.push(() => {
-          reset();
-          surface.classList.remove('ct-depth-surface');
-          surface.removeEventListener('pointermove', move);
-          surface.removeEventListener('pointerleave', reset);
-          surface.removeEventListener('pointercancel', reset);
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+          hovered = false;
+          frame.classList.remove('ct-atelier-photo', 'is-photo-hovered');
+          ['--pan-x', '--pan-y', '--photo-scale', '--spot-x', '--spot-y'].forEach(prop => frame.style.removeProperty(prop));
+          frame.removeEventListener('pointerenter', onEnter);
+          frame.removeEventListener('pointermove', onMove);
+          frame.removeEventListener('pointerleave', onLeave);
+          frame.removeEventListener('pointercancel', onLeave);
         });
       });
     }
@@ -3247,10 +4131,15 @@
     if (path === '/booking/time') return pageBookingTime();
     if (path === '/booking/location') return pageBookingLocation();
     if (path === '/booking/info') return pageBookingInfo();
+    if (path === '/booking/verify-phone') return pageBookingPhone();
     if (path === '/booking/deposit') return pageBookingDeposit();
     if (path === '/booking/confirm') return pageBookingConfirm();
     if (path === '/booking/success') return pageBookingSuccess();
     if (path === '/lookup') return pageLookup();
+    if (path === '/lookup/google/link') return pageBookingGoogleLink();
+    if (['/lookup/recover', '/lookup/recover/google', '/lookup/recover/request'].includes(path)) return pageLookupRecovery();
+    if (path === '/lookup/recover/sms') return pageLookupSms();
+    if (path === '/lookup/recover/saved') return pageLookupRecent();
     if (parts[0] === 'booking' && parts[1] && parts[2] === 'reschedule') return pageReschedule(parts[1]);
     if (parts[0] === 'booking' && parts[1] && parts[2] === 'cancel') return pageCancel(parts[1]);
     if (parts[0] === 'booking' && parts[1] && parts[2] === 'receipt') return pageReceipt(parts[1]);
@@ -3267,16 +4156,33 @@
   let lastRenderedPath = '';
 
   function render() {
-    siteTools?.beforeRender();
-    adminLocations?.beforeRender($('#app'));
     const raw = location.hash.slice(1) || '/';
     const [path, queryString=''] = raw.split('?');
     const query = new URLSearchParams(queryString);
-    const parts = path.split('/').filter(Boolean);
     const appRoot = $('#app');
     const serviceFilter = path === '/services' ? query.get('filter') : null;
     const routeKey = serviceFilter && serviceFilter !== 'all' ? `/services/${serviceFilter}` : path;
+    const linkingGoogle = path === '/lookup/google/link' && bookingGoogleTarget && state.settings.bookingGoogleEnabled === true;
+    // A same-page refresh must not replace a form awaiting its server response.
+    if (routeKey === lastRenderedPath && appRoot.querySelector('form[data-server-pending]')) return;
+    if ((linkingGoogle || bookingGoogleRecovery?.challenge) && routeKey === lastRenderedPath && !bookingGoogleResult
+      && appRoot.querySelector('[data-booking-google][data-google-mounted]')) return;
+    siteTools?.beforeRender();
+    adminLocations?.beforeRender(appRoot);
+    if (path.startsWith('/admin') && (!state.adminAuthorized || path === '/admin/login')) {
+      if (!appRoot.querySelector('[data-form="admin-login"]')) appRoot.innerHTML = adminLogin();
+      return;
+    }
+    if (path !== '/admin/requests') requestFilterRoute = '';
     const routeChanged = routeKey !== lastRenderedPath;
+    if (routeChanged) {
+      bookingSmsFlow = null;
+      bookingGoogleRecovery = null;
+      bookingGoogleResult = null;
+      if (path !== '/lookup/google/link') bookingGoogleTarget = null;
+    }
+    const lookupForm = !routeChanged && (path === '/lookup' || path.startsWith('/lookup/recover') || path === '/booking/verify-phone')
+      ? appRoot.querySelector('form.ct-lookup') : null;
     const policyContentsOpen = !routeChanged && appRoot.querySelector('.policy-mobile-contents')?.open;
     const previousScroll = { x: window.scrollX, y: window.scrollY };
     const activeField = typeof appRoot?.contains === 'function' && appRoot.contains(document.activeElement) && document.activeElement?.matches?.('input, textarea, select, [data-support-panel]')
@@ -3317,22 +4223,34 @@
     }
     bookingLocation?.beforeRender(path);
     appRoot.innerHTML = html;
+    if (lookupForm) {
+      const replacement = appRoot.querySelector('form.ct-lookup');
+      if (replacement?.dataset.form === lookupForm.dataset.form) {
+        if (lookupForm.dataset.form === 'booking-sms-send') {
+          lookupForm.querySelector('[type="submit"]').disabled = replacement.querySelector('[type="submit"]').disabled;
+        }
+        replacement.replaceWith(lookupForm);
+      }
+    }
     if (policyContentsOpen) {
       const contents = appRoot.querySelector('.policy-mobile-contents');
       if (contents) contents.open = true;
     }
     lastRenderedPath = routeKey;
     siteTools?.mount(path);
+    if (path === '/admin/requests' && query.get('id')) setTimeout(() => document.querySelector(`[data-action="req-open-modal"][data-id="${CSS.escape(query.get('id'))}"]`)?.click(), 0);
     if (path === '/admin/appointments' && query.get('code')) {
       setTimeout(() => document.querySelector(`[data-action="admin-view-appointment"][data-code="${CSS.escape(query.get('code'))}"]`)?.click(), 0);
     }
-    mountCoutureMotion(path);
     if (path === '/booking/deposit') {
       initDepositSync();
     }
     document.title = path.startsWith('/admin') ? 'Quản trị — HOÀN' : 'HOÀN — Makeup Artist';
     if (routeChanged) {
       window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      if (path === '/lookup/recover/sms') {
+        appRoot.querySelector('form[data-form="booking-sms-send"] [name="phone"]')?.focus({ preventScroll: true });
+      }
     } else {
       if (focusState) {
         const field = focusState.id
@@ -3347,10 +4265,14 @@
       }
       window.scrollTo(previousScroll.x, previousScroll.y);
     }
+    mountCoutureMotion(path, routeChanged);
     mountPolicyContents();
     bookingLocation?.mount(path);
     adminLocations?.mount(document);
     financeAdmin?.mount();
+    overviewAdmin?.mount();
+    window.HoanVietnamDate?.mount(document);
+    if ((linkingGoogle || bookingGoogleRecovery?.challenge) && !bookingGoogleResult) void mountBookingGoogle();
   }
 
   function initDepositSync() {
@@ -3372,9 +4294,10 @@
     window._depositSyncInterval = setInterval(update, 7000);
   }
 
-  let requestFilterState = { status: 'all', kind: 'all', search: '' };
+  let requestFilterState = { status: 'all', kind: 'all', search: '', type: '' };
+  let requestFilterRoute = '';
 
-  function getInitials(name) {
+  function _getInitials(name) {
     if (!name) return 'KH';
     const parts = name.trim().split(/\s+/);
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
@@ -3392,7 +4315,7 @@
       const hr = String(d.getHours()).padStart(2, '0');
       const min = String(d.getMinutes()).padStart(2, '0');
       return `${hr}:${min} · ${day}/${m}/${y}`;
-    } catch(e) { return iso; }
+    } catch { return iso; }
   }
 
   function modalViewRequest(id) {
@@ -3402,6 +4325,7 @@
     const badgeCls = curStatus === 'resolved' ? 'success' : (curStatus === 'pending' ? 'warning' : (curStatus === 'in_progress' ? 'info' : ''));
     const statusLabel = curStatus === 'resolved' ? 'Đã hoàn thành' : (curStatus === 'in_progress' ? 'Đang xử lý' : (curStatus === 'cancelled' ? 'Đã hủy' : 'Chờ xử lý'));
     const cleanPhone = (r.phone || '').replace(/\D/g, '');
+    const isRecovery = r.purpose === 'booking-code-recovery';
 
     modal(`Chi tiết yêu cầu ${r.id}`, `
       <div style="display:flex;flex-direction:column;gap:12px;font-size:14px;">
@@ -3420,11 +4344,12 @@
         ${r.date ? `<div class="summary-row"><span>Đề xuất đổi lịch</span><b class="numeric">${esc(r.date)}${r.time ? ' lúc ' + esc(r.time) : ''}</b></div>` : ''}
         <div class="summary-row"><span>Lời nhắn</span><b style="max-width:65%;font-weight:500;">${esc(r.message || '—')}</b></div>
         <div class="summary-row"><span>Ghi chú</span><b style="max-width:65%;font-weight:500;">${esc(r.reply || 'Chưa có ghi chú')}</b></div>
+        ${isRecovery ? '<p class="overview-note">Đối chiếu trong mục Lịch hẹn. Xác minh qua số điện thoại đã lưu trên lịch trước khi gửi lại mã.</p>' : ''}
         <div style="display:flex;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6;flex-wrap:wrap;">
           <button class="btn btn-sm btn-dark" data-action="req-status" data-id="${esc(r.id)}">Đổi trạng thái</button>
           <button class="btn btn-sm btn-edit" data-action="req-edit-full" data-id="${esc(r.id)}">Chỉnh sửa</button>
           <button class="btn btn-sm btn-danger" data-action="req-delete-confirm" data-id="${esc(r.id)}">Xóa yêu cầu</button>
-          ${cleanPhone ? `<a class="btn btn-sm" href="https://zalo.me/${cleanPhone}" target="_blank" style="text-decoration:none;display:inline-flex;align-items:center;">Nhắn Zalo →</a>` : ''}
+          ${isRecovery ? '<a class="btn btn-sm" href="#/admin/appointments" data-action="req-find-appointment">Tìm lịch hẹn</a>' : cleanPhone ? `<a class="btn btn-sm" href="https://zalo.me/${cleanPhone}" target="_blank" style="text-decoration:none;display:inline-flex;align-items:center;">Nhắn Zalo →</a>` : ''}
           ${r.code ? `<a class="btn btn-sm" href="#/booking/${esc(r.code)}" target="_blank" style="text-decoration:none;display:inline-flex;align-items:center;">Xem trang khách →</a>` : ''}
         </div>
       </div>
@@ -3521,6 +4446,11 @@
 
   function adminRequests() {
     const all = (state.requests || []).slice().sort((a,b) => String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+    if (requestFilterRoute !== location.hash) {
+      requestFilterRoute = location.hash;
+      const query = new URLSearchParams(location.hash.split('?')[1] || '');
+      requestFilterState = {status:query.get('status') || 'all',kind:query.get('kind') || 'all',search:query.get('q') || '',type:query.get('type') || ''};
+    }
     const filter = requestFilterState;
     
     const countPending = all.filter(r => !r.status || r.status === 'pending').length;
@@ -3530,7 +4460,8 @@
 
     const filtered = all.filter(r => {
       const st = r.status || 'pending';
-      if (filter.status !== 'all' && st !== filter.status) return false;
+      if (filter.status === 'open' ? !['pending','in_progress'].includes(st) : filter.status !== 'all' && st !== filter.status) return false;
+      if (filter.type === 'reschedule' && !(r.code && /đổi lịch|đổi ngày|reschedule/i.test(String(r.subject || '')))) return false;
       const kind = r.kind || (r.code ? 'appointment' : 'consultation');
       if (filter.kind !== 'all' && kind !== filter.kind) return false;
       if (filter.search) {
@@ -3568,6 +4499,7 @@
       <div class="toolbar">
         <input id="req-search" placeholder="Tìm theo tên khách hàng, số điện thoại, email, mã yêu cầu..." value="${esc(filter.search || '')}">
         <select id="req-status-filter">
+          <option value="open" ${filter.status === 'open' ? 'selected' : ''}>Chờ hoặc đang xử lý</option>
           <option value="all" ${filter.status === 'all' ? 'selected' : ''}>Tất cả trạng thái (${all.length})</option>
           <option value="pending" ${filter.status === 'pending' ? 'selected' : ''}>Chờ xử lý (${countPending})</option>
           <option value="in_progress" ${filter.status === 'in_progress' ? 'selected' : ''}>Đang xử lý (${countInProgress})</option>
@@ -3579,6 +4511,7 @@
           <option value="consultation" ${filter.kind === 'consultation' ? 'selected' : ''}>Chỉ tư vấn</option>
           <option value="appointment" ${filter.kind === 'appointment' ? 'selected' : ''}>Theo lịch hẹn</option>
         </select>
+        <select id="req-type-filter" aria-label="Chủ đề yêu cầu"><option value="">Tất cả chủ đề</option><option value="reschedule" ${filter.type === 'reschedule' ? 'selected' : ''}>Yêu cầu đổi lịch</option></select>
         <button class="btn btn-sm" data-action="reset-req-filter">Đặt lại bộ lọc</button>
       </div>
 
@@ -3600,7 +4533,6 @@
               const curStatus = r.status || 'pending';
               const badgeCls = curStatus === 'resolved' ? 'success' : (curStatus === 'pending' ? 'warning' : (curStatus === 'in_progress' ? 'info' : ''));
               const statusLabel = curStatus === 'resolved' ? 'Đã hoàn thành' : (curStatus === 'in_progress' ? 'Đang xử lý' : (curStatus === 'cancelled' ? 'Đã hủy' : 'Chờ xử lý'));
-              const cleanPhone = (r.phone || '').replace(/\D/g, '');
               return `
                 <tr class="clickable-row" data-action="req-open-modal" data-id="${esc(r.id)}" data-status="${curStatus}" title="Nhấp vào dòng để xem chi tiết yêu cầu">
                   <td class="numeric">
@@ -3662,10 +4594,44 @@
   }
   document.addEventListener('submit',async event=>{
     const form=event.target,kind=form.dataset.form;
+    if (kind === 'admin-login') {
+      event.preventDefault(); event.stopImmediatePropagation();
+      const button = form.querySelector('[type="submit"]');
+      if (button.disabled) return;
+      clearFormFeedback(form);
+      button.disabled = true;
+      button.textContent = 'Đang xác minh…';
+      form.setAttribute('aria-busy', 'true');
+      try {
+        const token = new FormData(form).get('token').toString().trim();
+        await signInAdmin(token);
+        if (location.hash === '#/admin/login') route('/admin');
+        render();
+      } catch (error) { showFormFeedback(form, error); }
+      finally {
+        button.disabled = false;
+        button.textContent = 'Đăng nhập';
+        form.removeAttribute('aria-busy');
+      }
+      return;
+    }
+    if (kind === 'booking-sms-send' || kind === 'booking-sms-verify') {
+      event.preventDefault(); event.stopImmediatePropagation();
+      await submitBookingSms(form);
+      return;
+    }
+    if (kind === 'booking-google-email') {
+      event.preventDefault(); event.stopImmediatePropagation();
+      await submitBookingGoogleEmail(form);
+      return;
+    }
     if(!['contact','booking-request','site-search','support-search','resolve-request','contact-settings','content'].includes(kind))return;
     event.preventDefault();event.stopImmediatePropagation();const data=Object.fromEntries(new FormData(form));
+    if (Object.hasOwn(form.dataset, 'serverPending')) return;
+    clearFormFeedback(form);
+    if (kind === 'booking-request') data.phone = getAppointment(data.code)?.phone || '';
     if(kind==='site-search'||kind==='support-search')return route('/'+(kind==='site-search'?'search':'support')+'?q='+encodeURIComponent(data.q||'')+(kind==='support-search'&&data.category?'&category='+encodeURIComponent(data.category):''));
-    if(kind==='contact-settings'){try{await api({action:'saveContent',key:'brand',value:{...state.brand,...data}});Object.assign(state.brand,data);toast('Đã lưu thông tin liên hệ');}catch(error){toast(error.message);}return;}
+    if(kind==='contact-settings'){try{await api({action:'saveContent',key:'brand',value:{...state.brand,...data}});Object.assign(state.brand,data);toast('Đã lưu thông tin liên hệ');}catch(error){showFormFeedback(form,error);}return;}
     if(kind==='content'){
       try {
         Object.assign(state.brand, data);
@@ -3682,14 +4648,16 @@
       return;
     }
     const button=form.querySelector('button[type=submit],button:not([type])');if(button)button.disabled=true;
+    form.dataset.serverPending = '';
     try{
       const r=await api(kind==='resolve-request'?{action:'resolveRequest',...data}:{action:'createRequest',...data});
       await hydrateBackend(true);
-      if(kind==='resolve-request'){closeModal();render();toast('Đã lưu kết quả xử lý');return;}
-      const status=form.querySelector('[role=status]');if(status)status.textContent='Đã nhận yêu cầu '+r.request.id+'. Hoàn sẽ kiểm tra và liên hệ với bạn.';
+      if(kind==='resolve-request'){delete form.dataset.serverPending;closeModal();render();toast('Đã lưu kết quả xử lý');return;}
+      const status = form.querySelector('[role=status]');
+      if (status) status.textContent = `Đã nhận yêu cầu ${r.request.id}. Hoàn sẽ kiểm tra và liên hệ với bạn.`;
       form.reset();toast('Đã gửi yêu cầu '+r.request.id);
-    }catch(error){const status=form.querySelector('[role=status]');if(status)status.textContent=error.message;else toast(error.message);}
-    finally{if(button)button.disabled=false;}
+    }catch(error){showFormFeedback(form,error);}
+    finally{delete form.dataset.serverPending;if(button)button.disabled=false;}
   });
   document.addEventListener('change',async event=>{
     const input=event.target;
@@ -3698,7 +4666,7 @@
       if(file.size>5*1024*1024)return toast('Ảnh QR không quá 5 MB.');
       const data=new FormData();data.append('files',file);input.disabled=true;
       try{
-        const response=await fetch('/api/uploads',{method:'POST',body:data});const result=await response.json();
+        const response=await fetch('/api/uploads',{method:'POST',body:data,credentials:'same-origin'});const result=await response.json();
         if(!response.ok)throw Error(result.error);
         const settings={...state.settings,paymentQrUrl:result.paths[0]};
         await api({action:'saveContent',key:'settings',value:settings});
@@ -3769,10 +4737,10 @@
         startNewBooking();
       }else if(action==='admin-confirm-deposit'||action==='ct-admin-confirm-deposit'){
         if (!financeAdmin) return toast('Đang tải sổ thu chi. Vui lòng thử lại.');
-        financeAdmin.open(el.dataset.code || state.booking.code || '', 'deposit');
+        closeModal(); financeAdmin.navigate(el.dataset.code || state.booking.code || '');
       }else if(action==='admin-reset-deposit'||action==='ct-admin-reset-deposit'){
         if (!financeAdmin) return toast('Đang tải sổ thu chi. Vui lòng thử lại.');
-        financeAdmin.open(el.dataset.code || state.booking.code || '', 'refund');
+        closeModal(); financeAdmin.navigate(el.dataset.code || state.booking.code || '');
       }else if(action==='ct-copy-transfer'){
         const val=document.getElementById('transfer-code-val')?.value||'';
         if(val){
@@ -3846,15 +4814,51 @@
         route('/booking/deposit');
       }else if(action==='ct-contact-attach'){
         document.getElementById('contact-file-input')?.click();
+      }else if(action==='ct-link-booking-google'){
+        const appointment = getAppointment(el.dataset.code);
+        if (!appointment?.phone) return;
+        bookingGoogleTarget = { code: appointment.code, phone: appointment.phone };
+        route('/lookup/google/link');
+      }else if(action==='ct-retry-booking-google'){
+        const panel = el.closest('[data-booking-google]');
+        if (panel) {
+          panel.removeAttribute('data-google-mounted');
+          void mountBookingGoogle(true);
+        }
+      }else if(action==='ct-edit-booking-email'){
+        bookingGoogleRecovery = { email: bookingGoogleResult ? '' : bookingGoogleRecovery?.email || '' };
+        bookingGoogleResult = null;
+        render();
+        $('#booking-recovery-email')?.focus();
+      }else if(action==='ct-retry-sms-status'){
+        el.disabled = true;
+        await hydrateBackend();
+        el.disabled = false;
+      }else if(action==='ct-reset-sms'){
+        if (el.closest('[data-server-pending]')) return;
+        bookingSmsFlow = { purpose: bookingSmsFlow?.purpose, phone: bookingSmsFlow?.phone };
+        render();
+        $('[data-form="booking-sms-send"] [name="phone"]')?.focus();
       }else if(action==='ct-prepare-deposit'){
         el.disabled = true;
-        try { await prepareDepositBooking(true); render(); } catch (error) { render(); toast(error.message); }
+        try { await prepareDepositBooking(true); render(); }
+        catch (error) {
+          if (error.status === 428) route('/booking/verify-phone');
+          else if (error.fieldErrors?.email) { route('/booking/info'); toast(error.fieldErrors.email); }
+          else { render(); toast(error.message); }
+        }
       }else if(action==='ct-next'){
-
-        const step=Number(el.dataset.step),form=document.querySelector('.ct-booking form');
-        if(step===3 && !bookingLocation?.validate()) return;
+        const step = Number(el.dataset.step), form = document.querySelector('.ct-booking form');
+        if (el.disabled) return;
+        if (step === 3) {
+          if (!form) return;
+          form.dataset.serverPending = '';
+          el.disabled = true;
+          try { if (!await bookingLocation?.validate()) return; }
+          finally { delete form.dataset.serverPending; el.disabled = false; }
+          if (!form?.isConnected) return;
+        }
         if(form){
-          if(!form.reportValidity())return;
           Object.assign(state.booking,Object.fromEntries(new FormData(form)));
           for(const box of form.querySelectorAll('input[type=checkbox][name]'))state.booking[box.name]=box.checked;
         }
@@ -3862,7 +4866,22 @@
         if(step===2){if(!state.booking.time||slotUnavailable(state.booking.date,state.booking.time)||!state.settings.scheduleOpen)return toast('Vui lòng chọn một khung giờ còn trống.');}
         if(step===3){state.booking.locationType='client';state.booking.district='';state.booking.travelFee=Math.max(0,Number(state.settings.travelFee??50000)||0);}
         saveState();
-        if (step === 4) { el.disabled = true; el.textContent = 'Đang tạo mã lịch…'; await prepareDepositBooking(true); }
+        if (step === 4) {
+          if (!form) return;
+          clearFormFeedback(form);
+          form.dataset.serverPending = '';
+          const label = el.textContent;
+          el.disabled = true;
+          el.textContent = 'Đang tạo mã lịch…';
+          try { await prepareDepositBooking(true); }
+          catch (error) {
+            if (error.status === 428 && form.isConnected) route('/booking/verify-phone');
+            else showFormFeedback(form, error, { customer: 'name' });
+            return;
+          }
+          finally { delete form.dataset.serverPending; el.disabled = false; el.textContent = label; }
+          if (!form?.isConnected) return;
+        }
         route(el.dataset.next);
       }else if(action==='ct-date'){state.booking.date=el.dataset.date;state.booking.time=defaultBookingTime(el.dataset.date);saveState();render();}
       else if(action==='ct-month'){const d=new Date((state.calendarMonth||state.booking.date).slice(0,7)+'-01T12:00:00');d.setMonth(d.getMonth()+Number(el.dataset.delta));state.calendarMonth=localIso(d);render();}
@@ -3892,6 +4911,9 @@
       else if(action==='ct-calendar-download'){const c=el.dataset.code||'HOAN-MAU-001';const a=getAppointment(c)||{code:c,date:localIso(),time:'10:00',serviceId:'party',status:'confirmed'};const sObj=service(a.serviceId)||{name:'Trang điểm dự tiệc',duration:90};const d=new Date((a.date||localIso())+'T'+(a.time||'10:00')+':00+07:00'),end=new Date(d.getTime()+(sObj.duration||90)*60000),fmt=d=>d.toISOString().replace(/[-:]/g,'').replace('.000','');downloadText('lich-'+a.code+'.ics',['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//HOAN//Booking//VI','BEGIN:VEVENT','UID:'+a.code+'@hoan','DTSTAMP:'+fmt(new Date()),'DTSTART:'+fmt(d),'DTEND:'+fmt(end),'SUMMARY:'+sObj.name+' - HOÀN','STATUS:'+(a.status==='confirmed'?'CONFIRMED':'TENTATIVE'),'END:VEVENT','END:VCALENDAR'].join('\r\n'));toast('Đã tải lịch hẹn vào máy');}
       else if(action==='ct-resolve' || action==='req-open-modal'){
         modalViewRequest(el.dataset.id);
+      }
+      else if(action==='req-find-appointment'){
+        closeModal(); route('/admin/appointments');
       }
       else if(action==='req-status'){
         modalReqStatus(el.dataset.id);
@@ -3926,6 +4948,7 @@
       requestFilterState.status = event.target.value;
       render();
     }
+    if (event.target && event.target.id === 'req-type-filter') { requestFilterState.type = event.target.value; render(); }
     if (event.target && event.target.id === 'req-kind-filter') {
       requestFilterState.kind = event.target.value;
       render();
@@ -3937,24 +4960,20 @@
     if (!form.dataset.form) return;
     event.preventDefault();
     const data = Object.fromEntries(new FormData(form));
-    if (form.dataset.form === 'location') {
-      Object.assign(state.booking, data);
-      state.booking.travelFee = state.booking.locationType === 'artist' ? 0 : 50000;
-      saveState('Đã lưu địa chỉ phục vụ');
-    } else if (form.dataset.form === 'info') {
-      Object.assign(state.booking, data);
-      saveState('Đã lưu thông tin của bạn');
-    } else if (form.dataset.form === 'lookup') {
+    if (form.dataset.form === 'location' || form.dataset.form === 'info') {
+      document.querySelector('.ct-booking [data-action="ct-next"]')?.click();
+    } else if (form.dataset.form === 'lookup' || form.dataset.form === 'lookup-recent') {
+      if (Object.hasOwn(form.dataset, 'serverPending')) return;
+      clearFormFeedback(form);
+      form.dataset.serverPending = '';
+      const button = form.querySelector('button');
+      button.disabled = true;
       try {
-        const response = await fetch('/api/data?code=' + encodeURIComponent(String(data.code || '')) + '&phone=' + encodeURIComponent(String(data.phone || '')));
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Chưa tìm thấy lịch phù hợp.');
-        retainVerifiedBooking(result);
-        route('/booking/' + result.appointment.code);
-      } catch (error) {
-        const status = form.querySelector('[role=status]');
-        if (status) status.textContent = error.message;
-      }
+        const code = form.dataset.form === 'lookup-recent' ? rememberedBookingCode() : String(data.code || '');
+        const appointment = await lookupOwnBooking(code, String(data.phone || ''));
+        if (form.isConnected) route('/booking/' + appointment.code);
+      } catch (error) { showFormFeedback(form, error); }
+      finally { delete form.dataset.serverPending; button.disabled = false; }
     } else if (form.dataset.form === 'help-search') {
       const q = String(data.q || '').toLowerCase();
       $$('.accordion-item').forEach((item,i)=>item.style.display = faqItems[i].join(' ').toLowerCase().includes(q) ? '' : 'none');
@@ -3978,9 +4997,13 @@
       }
       catch(error){ toast(error.message); }
     } else if (form.dataset.form === 'settings') {
-      Object.assign(state.settings, data);
-      try { await api({action:'saveContent',key:'settings',value:state.settings}); toast('Đã lưu cài đặt'); }
-      catch(error){ toast(error.message); }
+      clearFormFeedback(form);
+      const value = { ...state.settings, ...data };
+      try {
+        await api({action:'saveContent',key:'settings',value});
+        state.settings = value;
+        toast('Đã lưu cài đặt');
+      } catch(error) { showFormFeedback(form, error); }
     }
   });
 
@@ -4044,12 +5067,7 @@
         document.documentElement.style.setProperty('--wine', val);
       }
     }
-    if (event.target.id === 'appointment-search' || event.target.id === 'appointment-status') {
-      const q = ($('#appointment-search')?.value || '').toLowerCase();
-      const status = $('#appointment-status')?.value || 'all';
-      const rows = state.appointments.filter(a => (a.customer+' '+a.code+' '+a.phone).toLowerCase().includes(q) && (status==='all'||a.status===status));
-      $('#appointments-table').innerHTML = appointmentsTable(rows);
-    }
+    if (event.target.id === 'appointment-search') applyAppointmentFilters();
     if (event.target.id === 'customer-search') {
       const q = event.target.value.toLowerCase();
       $$('#customer-body tr').forEach(row => row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none');
@@ -4057,6 +5075,7 @@
   });
 
   document.addEventListener('change', (event) => {
+    if (['appointment-status','appointment-date','appointment-service'].includes(event.target.id)) applyAppointmentFilters();
     if (event.target.matches('[data-action="reference-upload"]')) toast('Đã thêm '+event.target.files.length+' ảnh tham khảo');
     if (event.target.matches('[data-action="gallery-upload"]')) {
       toast('Đã chọn '+event.target.files.length+' ảnh. Ảnh sẽ xuất hiện sau khi đăng.');
@@ -4098,8 +5117,7 @@
       form.dataset.uploading = '1'; controls.forEach(button => { button.disabled = true; }); status.textContent = 'Đang tải ảnh…';
       try {
         const data = new FormData(); data.append('files', file);
-        let token = ''; try { token = localStorage.getItem('hoanAdminToken') || sessionStorage.getItem('hoanAdminToken') || ''; } catch {}
-        const response = await fetch('/api/uploads', { method:'POST', body:data, headers:token ? { Authorization:'Bearer ' + token } : {} });
+        const response = await fetch('/api/uploads', { method: 'POST', body: data, credentials: 'same-origin' });
         const result = await response.json(); if (!response.ok || !result.paths?.[0]) throw new Error(result.error || 'Không tải được ảnh.');
         input.value = result.paths[0]; preview.src = input.value; status.textContent = 'Đã tải ảnh: ' + file.name;
       } catch (error) { status.textContent = error.message; }
@@ -4111,20 +5129,96 @@
     const el = event.target.closest('[data-action]');
     if (!el) return;
     const action = el.dataset.action;
-    if (action === 'mobile-menu') {const on=$('#site-header')?.classList.toggle('menu-open');el.setAttribute('aria-expanded',String(!!on));}
+    if (action === 'admin-logout') {
+      logoutAdmin(); return;
+    }
+    if (action === 'reload-overview') { location.reload(); }
+    else if (action === 'reset-appointment-filter') { route('/admin/appointments'); render(); }
+    else if (action === 'mobile-menu') {const on=$('#site-header')?.classList.toggle('menu-open');el.setAttribute('aria-expanded',String(!!on));}
     else if (action === 'choose-service' || action === 'booking-service') {
       const selected = state.services.find(s => s.id === el.dataset.id && s.enabled);
       if (!selected) return toast('Dịch vụ hiện không khả dụng. Vui lòng chọn dịch vụ khác.');
-      if (state.booking.serviceId !== selected.id) state.booking.style = '';
+      const changed = state.booking.serviceId !== selected.id;
+      if (changed) state.booking.style = '';
       state.booking.serviceId = selected.id;
       if (el.dataset.style) state.booking.style = el.dataset.style;
       saveState();
-      route(action === 'choose-service' ? (selected.contact ? '/contact' : '/booking/time') : '/booking/service');
-      render();
+      if (action === 'choose-service') {
+        route(selected.contact ? '/contact' : '/booking/time');
+        render();
+      } else {
+        const currentPath = (location.hash.slice(1) || '/').split('?')[0];
+        const grid = el.closest?.('.ct-select-services');
+        if (currentPath === '/booking/service' && grid) {
+          const getStatusNode = card => card.querySelector?.('.ct-service-option-status')
+            || [...(card.children || [])].reverse().find(ch => ch.tagName === 'SPAN' && !ch.classList?.contains('ct-service-option-media'))
+            || card.querySelector?.('span:last-of-type');
+          grid.querySelectorAll('.ct-service-option').forEach(card => {
+            if (Array.isArray(card._selectAnims)) {
+              card._selectAnims.forEach(anim => anim.cancel());
+              card._selectAnims = [];
+            }
+            card.classList.remove('is-just-selected');
+            const isSelected = card === el;
+            card.classList.toggle('selected', isSelected);
+            card.setAttribute('aria-pressed', String(isSelected));
+            const statusSpan = getStatusNode(card);
+            if (statusSpan) statusSpan.textContent = isSelected ? '✓ Đã chọn' : 'Chọn dịch vụ';
+          });
+          const footerSummary = document.querySelector('.ct-booking-footer > div:first-child');
+          if (footerSummary) {
+            footerSummary.innerHTML = `${esc(service().name)} · ${bookingFooterPrice(1)}`;
+            if (changed && typeof footerSummary.animate === 'function' && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+              footerSummary.animate([
+                { opacity: 0.55, transform: 'translateY(4px)' },
+                { opacity: 1, transform: 'translateY(0)' }
+              ], { duration: 240, easing: 'cubic-bezier(.22,1,.36,1)' });
+            }
+          }
+          if (!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+            void el.offsetWidth;
+            el.classList.add('is-just-selected');
+            const anims = [];
+            if (typeof el.animate === 'function') {
+              anims.push(el.animate([
+                { transform: 'translateY(-1px) scale(0.99)' },
+                { transform: 'translateY(-4px) scale(1)' }
+              ], {
+                duration: 380,
+                easing: 'cubic-bezier(.22,1,.36,1)'
+              }));
+            }
+            const img = el.querySelector?.('img');
+            if (img && typeof img.animate === 'function') {
+              anims.push(img.animate([
+                { transform: 'scale(1.045)' },
+                { transform: 'scale(1.018)' }
+              ], {
+                duration: 620,
+                easing: 'cubic-bezier(.22,1,.36,1)'
+              }));
+            }
+            const statusSpan = getStatusNode(el);
+            if (statusSpan && typeof statusSpan.animate === 'function') {
+              anims.push(statusSpan.animate([
+                { opacity: 0.6, transform: 'translateX(-5px)' },
+                { opacity: 1, transform: 'translateX(0)' }
+              ], {
+                duration: 320,
+                easing: 'cubic-bezier(.22,1,.36,1)'
+              }));
+            }
+            el._selectAnims = anims;
+          }
+        } else {
+          route('/booking/service');
+          render();
+        }
+      }
     }
     else if (action === 'go-step') {
       const form = document.querySelector('.ct-booking form');
-      if (location.hash.split('?')[0] === '#/booking/location' && ['/booking/info','/booking/deposit','/booking/confirm'].includes(el.dataset.target) && !bookingLocation?.validate()) return;
+      if (location.hash.split('?')[0] === '#/booking/location' && ['/booking/info','/booking/deposit','/booking/confirm'].includes(el.dataset.target) && !await bookingLocation?.validate()) return;
       if (form && form.dataset.form !== 'location') {
         Object.assign(state.booking, Object.fromEntries(new FormData(form)));
         for (const box of form.querySelectorAll('input[type=checkbox][name]')) state.booking[box.name] = box.checked;
@@ -4168,6 +5262,10 @@
       }
     }
     else if (action === 'date-select') { const m = (state.calendarMonth || state.booking.date || localIso()).slice(0,7); state.booking.date = `${m}-${String(el.dataset.day).padStart(2,'0')}`; saveState(); render(); }
+    else if (action === 'retry-availability') {
+      bookingAvailability = null;
+      render();
+    }
     else if (action === 'time-select') {
       if (el.disabled || slotUnavailable(state.booking.date, el.dataset.time)) {
         toast('Khung giờ này đã có khách hoặc không còn khả dụng. Vui lòng chọn giờ khác.');
@@ -4193,7 +5291,8 @@
           bookingCode = b.code; saveState(); route('/booking/success'); return;
         }
         requireBookingLocation(b);
-        const result=await api({action:'createAppointment',...b,customer:b.name,paymentStatus:b.depositReported?'pending_verification':'not_paid'});
+        const result=await api({action:'createAppointment',...b,customer:b.name,paymentStatus:b.depositReported?'pending_verification':'not_paid',phoneProof:bookingPhoneProof});
+        bookingPhoneProof = '';
         bookingCode=result.appointment.code;
         try { if (!isPreview) localStorage.setItem('hoanLastBookingCode',bookingCode); } catch {}
         state.appointments.unshift(result.appointment);
@@ -4202,7 +5301,12 @@
         state.booking.depositStatus=null;
         await hydrateBackend(true);
         route('/booking/success'); render();
-      } catch(error) { toast(error.message); el.disabled=false; el.textContent=origText; }
+      } catch(error) {
+        if (error.status === 428) route('/booking/verify-phone');
+        else if (error.fieldErrors?.email) { route('/booking/info'); toast(error.fieldErrors.email); }
+        else toast(error.message);
+        el.disabled=false; el.textContent=origText;
+      }
     }
     else if (action === 'save-look') { el.textContent = '♥ Đã lưu phong cách'; toast('Đã lưu phong cách vào lịch đặt'); }
     else if (action === 'gallery-filter') route('/gallery?filter='+el.dataset.filter);
@@ -4246,6 +5350,7 @@
     else if (action === 'confirm-reschedule') { try{const a=getAppointment(el.dataset.code);const result=await api({action:'updateAppointment',code:a.code,date:'2026-09-19',time:'10:00'});Object.assign(a,result.appointment);toast('Đổi lịch thành công');route('/booking/'+a.code);}catch(error){toast(error.message)} }
     else if (action === 'confirm-cancel') { if (!$('#cancel-confirm')?.checked) return toast('Vui lòng xác nhận điều kiện hủy lịch'); try{const a=getAppointment(el.dataset.code);const result=await api({action:'updateAppointment',code:a.code,status:'cancelled'});Object.assign(a,result.appointment);toast('Đã hủy lịch hẹn');route('/booking/'+a.code);}catch(error){toast(error.message)} }
     else if (action === 'new-appointment') { modal('Tạo lịch hẹn mới',`<div class="form-grid"><div class="field full"><label>Khách hàng</label><input id="modal-customer" placeholder="Họ và tên"></div><div class="field"><label>Dịch vụ</label><select id="modal-service">${state.services.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select></div><div class="field"><label>Ngày</label><input id="modal-date" type="date" value="${localIso()}"></div><div class="field"><label>Giờ</label><input id="modal-time" type="time" value="09:30"></div><div class="field"><label>Số điện thoại</label><input id="modal-phone" placeholder="Số điện thoại"></div></div>`,'Tạo lịch','create-appointment'); }
+    else if (action === 'admin-open-payments') { closeModal(); route('/admin/payments?q='+encodeURIComponent(el.dataset.code || '')); }
     else if (action === 'admin-status') {
       const a=getAppointment(el.dataset.code);
       if (!a) return toast('Không tìm thấy lịch hẹn');
@@ -4253,13 +5358,27 @@
       const statusNames = { pending:'Chờ xác nhận', confirmed:'Đã xác nhận', completed:'Đã hoàn thành', cancelled:'Đã hủy' };
       const options = [a.status, ...(transitions[a.status] || [])].filter((status, index, list) => list.indexOf(status) === index).map(status => `<option value="${status}" ${status === a.status ? 'selected' : ''}>${statusNames[status]}</option>`).join('');
       const paymentLabel = a.paymentStatus === 'received' ? 'Đã nhận' : a.paymentStatus === 'pending_verification' ? 'Chờ đối soát' : 'Chưa thanh toán';
-      modal('Cập nhật trạng thái',`<div class="field"><label>Trạng thái lịch</label><select id="modal-status">${options}</select><small style="display:block;margin-top:8px;color:#6b7280;">Chỉ thay đổi trạng thái phục vụ. Tiền cọc hiện tại: <b>${paymentLabel}</b>.</small></div><div class="form-grid"><div class="field"><label>Ngày hẹn</label><input id="modal-appointment-date" type="date" value="${a.date}"></div><div class="field"><label>Giờ bắt đầu</label><input id="modal-appointment-time" type="time" value="${a.time}"></div></div>`,'Cập nhật','update-status:'+a.code);
+      modal('Cập nhật trạng thái',`<div class="field"><label>Trạng thái lịch</label><select id="modal-status">${options}</select><small style="display:block;margin-top:8px;color:#6b7280;">Chỉ thay đổi trạng thái phục vụ. Thanh toán hiện tại: <b>${paymentLabel}</b>. Nhận đủ cọc tại mục Thanh toán sẽ xác nhận lịch cùng lúc.</small></div><div class="form-grid"><div class="field"><label>Ngày hẹn</label><input id="modal-appointment-date" type="date" value="${a.date}"></div><div class="field"><label>Giờ bắt đầu</label><input id="modal-appointment-time" type="time" value="${a.time}"></div></div>`,'Cập nhật','update-status:'+a.code);
     }
     else if (action === 'admin-edit-appointment') {
       modalEditAppointment(el.dataset.code);
     }
     else if (action === 'admin-delete-appointment') {
       modalDeleteAppointment(el.dataset.code);
+    }
+    else if (action === 'appointment-archive') {
+      if (adminPath() && state.adminAuthorized) void openAppointmentArchive(Number(el.dataset.offset) || 0);
+    }
+    else if (action === 'restore-archived-appointment') {
+      if (!adminPath() || !state.adminAuthorized) return;
+      el.disabled = true;
+      try {
+        await api({ action: 'restoreAppointment', code: el.dataset.code });
+        await hydrateBackend(true);
+        render();
+        toast('Đã khôi phục lịch hẹn.');
+        await openAppointmentArchive();
+      } catch (error) { toast(error.message); el.disabled = false; }
     }
     else if (action === 'admin-view-appointment') {
       const code = el.dataset.code;
@@ -4278,7 +5397,7 @@
               </div>
               <span class="badge ${a.status==='confirmed'?'success':a.status==='pending'?'warning':''}" style="font-size:12px;padding:4px 10px;">${statusLabel(a.status)}</span>
             </div>
-            <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Số điện thoại</span><b class="numeric">${a.phone || '—'}</b></div>
+            <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Số điện thoại</span><b class="numeric">${esc(a.phone || '—')}</b></div>
             <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Dịch vụ</span><b>${s.name} (${dur} phút)</b></div>
             <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Thời gian</span><b class="numeric">${a.time} – ${endTime}, ${a.date}</b></div>
             ${adminLocations?.html(a, state.bookingDetails?.[a.code]) || `<div class="summary-row"><span>Địa điểm</span><b>${esc(a.address || a.district || 'Chưa cung cấp địa chỉ')}</b></div>`}
@@ -4286,9 +5405,10 @@
             <div class="summary-row" style="display:flex;justify-content:space-between;padding:4px 0;"><span>Thực nhận sau hoàn</span><b class="numeric">${money(a.finance?.netReceived ?? a.deposit)}</b></div>
             ${a.note ? `<div style="background:#f9fafb;padding:8px 12px;border-radius:6px;font-size:13px;color:#4b5563;"><b>Ghi chú:</b> ${esc(a.note)}</div>` : ''}
             <div style="display:flex;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6;flex-wrap:wrap;">
-              <button class="btn btn-sm btn-dark" data-action="admin-status" data-code="${a.code}">Đổi trạng thái</button>
+              <button class="btn btn-sm btn-dark" data-action="admin-open-payments" data-code="${esc(a.code)}">Xem thanh toán</button>
+              <button class="btn btn-sm" data-action="admin-status" data-code="${a.code}">Đổi trạng thái</button>
               <button class="btn btn-sm btn-edit" data-action="admin-edit-appointment" data-code="${a.code}">Chỉnh sửa</button>
-              <button class="btn btn-sm btn-danger" data-action="admin-delete-appointment" data-code="${a.code}">Xóa lịch</button>
+              <button class="btn btn-sm" data-action="admin-delete-appointment" data-code="${esc(a.code)}">Lưu trữ lịch</button>
               <a class="btn btn-sm" href="#/booking/${a.code}" target="_blank" style="text-decoration:none;display:inline-flex;align-items:center;">Xem trang khách →</a>
             </div>
           </div>
@@ -4318,7 +5438,7 @@
       }), 'Thêm dịch vụ', 'add-service');
     }
     else if (action === 'delete-service') { if(state.services.length<=1)return toast('Cần giữ ít nhất một dịch vụ');try{await api({action:'deleteService',id:el.dataset.id});state.services=state.services.filter(s=>s.id!==el.dataset.id);toast('Đã xóa dịch vụ');render();}catch(error){toast(error.message)} }
-    else if (action === 'edit-customer') { const c=state.customers[Number(el.dataset.index)]; modal('Chỉnh sửa khách hàng',`<div class="field"><label>Họ tên</label><input id="modal-customer-name" value="${c.name}"></div><div class="field"><label>Ghi chú</label><textarea id="modal-customer-note">${c.note}</textarea></div>`,'Lưu','edit-customer:'+el.dataset.index); }
+    else if (action === 'edit-customer') { const c=state.customers[Number(el.dataset.index)]; modal('Chỉnh sửa khách hàng',`<div class="field"><label>Họ tên</label><input id="modal-customer-name" value="${esc(c.name)}"></div><div class="field"><label>Ghi chú</label><textarea id="modal-customer-note">${esc(c.note)}</textarea></div>`,'Lưu','edit-customer:'+el.dataset.index); }
     else if (action === 'add-customer') modal('Thêm khách hàng',`<div class="field"><label>Họ tên</label><input id="modal-customer-name"></div><div class="field"><label>Số điện thoại</label><input id="modal-customer-phone"></div><div class="field"><label>Email</label><input id="modal-customer-email" type="email"></div>`,'Thêm','add-customer');
     else if (action === 'toggle-promo') { state.promotions[Number(el.dataset.index)].active=!state.promotions[Number(el.dataset.index)].active; saveState('Đã cập nhật mã ưu đãi'); render(); }
     else if (action === 'add-promo') modal('Tạo mã ưu đãi',`<div class="field"><label>Mã ưu đãi</label><input id="modal-promo-code" value="NEWCLIENT"></div><div class="field"><label>Giá trị</label><input id="modal-promo-value" value="100.000đ"></div>`,'Tạo mã','add-promo');
@@ -4449,11 +5569,17 @@
     else if (action === 'week-today') { state.adminWeekOffset = 0; saveState(); render(); }
     else if (action === 'toggle-weekday') {
       const idx = Number(el.dataset.index);
-      if (!state.settings.weekDayOpen) state.settings.weekDayOpen = [true,true,true,true,true,true,false];
-      state.settings.weekDayOpen[idx] = !state.settings.weekDayOpen[idx];
-      try { await api({action:'saveContent',key:'settings',value:state.settings}); } catch(e){}
-      saveState(); render();
-      toast(state.settings.weekDayOpen[idx] ? 'Đã bật nhận lịch ngày này' : 'Đã tắt nhận lịch ngày này');
+      const buttons = $$('[data-action="toggle-weekday"]');
+      const weekDayOpen = [...(state.settings.weekDayOpen || [true, true, true, true, true, true, false])];
+      weekDayOpen[idx] = !weekDayOpen[idx];
+      buttons.forEach(button => { button.disabled = true; });
+      try {
+        await api({ action: 'saveContent', key: 'settings', value: { ...state.settings, weekDayOpen } });
+        state.settings.weekDayOpen = weekDayOpen;
+        render();
+        toast(weekDayOpen[idx] ? 'Đã bật nhận lịch ngày này' : 'Đã tắt nhận lịch ngày này');
+      } catch (error) { toast(error.message); }
+      finally { buttons.forEach(button => { button.disabled = false; }); }
     }
     else if (action === 'copy-week') { toast('Đã sao chép thiết lập sang tuần sau'); }
     else if (action === 'schedule-cell-v2') {
@@ -4508,7 +5634,7 @@
       }
     }
     else if (action === 'block-time') modal('Chặn khung giờ',`<div class="form-grid"><div class="field"><label>Ngày</label><input id="modal-block-date" type="date" value="${localIso()}"></div><div class="field"><label>Giờ bắt đầu</label><input id="modal-block-time" type="time" value="07:00"></div></div><div class="field"><label>Lý do</label><input id="modal-block-reason" value="Việc cá nhân"></div>`,'Chặn giờ','block-time');
-    else if (action === 'manual-payment') { financeAdmin ? financeAdmin.open(el.dataset.code || '', 'deposit') : toast('Đang tải sổ thu chi. Vui lòng thử lại.'); }
+    else if (action === 'manual-payment') { if (financeAdmin) { closeModal(); financeAdmin.navigate(el.dataset.code || ''); } else toast('Đang tải sổ thu chi. Vui lòng thử lại.'); }
     else if (action === 'payment-receipt') route('/booking/'+el.dataset.code+'/receipt');
     else if (action?.startsWith('export')) exportAdminRecords(action);
     else if (action === 'refresh-report') toast('Đã cập nhật số liệu báo cáo');
@@ -4519,13 +5645,11 @@
   });
 
   async function handleModalConfirm(action) {
+    const activeModal = $('.modal');
+    clearFormFeedback(activeModal);
     const recordForm = document.querySelector('.admin-record-form');
     if (recordForm) {
       if (recordForm.dataset.uploading) return toast('Đang tải ảnh. Vui lòng đợi ảnh tải xong.');
-      for (const field of recordForm.querySelectorAll('input:not([type="hidden"]):not([type="file"]), textarea, select')) {
-        if (field.required && field.type === 'text') field.value = field.value.trim();
-        if (!field.reportValidity()) return;
-      }
     }
     if (action.startsWith('update-req-status:')) {
       const id = action.split(':')[1];
@@ -4554,8 +5678,6 @@
       const message = $('#modal-edit-req-message')?.value?.trim();
       const reply = $('#modal-edit-req-reply')?.value?.trim();
 
-      if (!name || !phone) { toast('Vui lòng nhập họ tên và số điện thoại'); return; }
-
       try {
         await api({ action: 'resolveRequest', id, name, phone, email, subject, status, message, reply });
         const r = (state.requests || []).find(x => x.id === id);
@@ -4565,7 +5687,7 @@
         saveState();
         toast('Đã cập nhật thông tin yêu cầu');
       } catch (err) {
-        toast(err.message || 'Lỗi khi cập nhật yêu cầu');
+        showFormFeedback(activeModal, err, { name: 'modal-edit-req-name', phone: 'modal-edit-req-phone', email: 'modal-edit-req-email', subject: 'modal-edit-req-subject', message: 'modal-edit-req-message' });
         return;
       }
     } else if (action.startsWith('delete-request:')) {
@@ -4587,12 +5709,9 @@
       const date = $('#modal-edit-date')?.value;
       const time = $('#modal-edit-time')?.value;
       const status = $('#modal-edit-status')?.value;
-      const total = Number($('#modal-edit-total')?.value || 0);
+      const total = $('#modal-edit-total')?.value || '';
       const address = $('#modal-edit-address')?.value?.trim();
       const note = $('#modal-edit-note')?.value?.trim();
-
-      if (!customer || !phone) { toast('Vui lòng nhập họ tên và số điện thoại'); return; }
-      if (!date || !time) { toast('Vui lòng chọn ngày và giờ hẹn'); return; }
 
       try {
         const result = await api({
@@ -4613,90 +5732,53 @@
         saveState();
         toast('✓ Đã cập nhật thông tin lịch hẹn');
       } catch (err) {
-        toast(err.message || 'Lỗi khi cập nhật lịch hẹn');
+        showFormFeedback($('.modal'), err, { customer: 'modal-edit-customer', phone: 'modal-edit-phone', serviceId: 'modal-edit-service', date: 'modal-edit-date', time: 'modal-edit-time', total: 'modal-edit-total' });
         return;
       }
     } else if (action.startsWith('delete-appointment:')) {
       const code = action.split(':')[1];
       try {
-        const deletedApt = state.appointments.find(x => x.code === code);
-        await api({ action: 'deleteAppointment', code });
+        await api({ action: 'archiveAppointment', code });
         state.appointments = state.appointments.filter(x => x.code !== code);
-        // Xóa khách hàng khỏi danh sách nếu không còn lịch hẹn nào
-        if (deletedApt) {
-          const stillHasApt = state.appointments.some(x => x.phone === deletedApt.phone || x.customer === deletedApt.customer);
-          if (!stillHasApt) {
-            state.customers = (state.customers || []).filter(c => c.phone !== deletedApt.phone && c.name !== deletedApt.customer);
-          }
-        }
-        saveState();
-        toast('✓ Đã xóa lịch hẹn thành công');
+        toast('Đã lưu trữ lịch hẹn.');
       } catch (err) {
-        toast(err.message || 'Lỗi khi xóa lịch hẹn');
+        toast(err.message || 'Chưa lưu trữ được lịch hẹn.');
         return;
       }
     } else if (action === 'create-appointment') {
       try {
         const result=await api({action:'createAppointment',customer:$('#modal-customer').value,phone:$('#modal-phone').value,serviceId:$('#modal-service').value,date:$('#modal-date').value,time:$('#modal-time').value,travelFee:0});
         state.appointments.unshift(result.appointment); await hydrateBackend(true); toast('Đã tạo lịch hẹn mới');
-      } catch(error) { toast(error.message); return; }
+      } catch(error) {
+        showFormFeedback($('.modal'), error, { customer: 'modal-customer', phone: 'modal-phone', serviceId: 'modal-service', date: 'modal-date', time: 'modal-time' });
+        return;
+      }
     } else if (action === 'create-slot') {
-      const date = $('#modal-slot-date')?.value || localIso();
+      const date = $('#modal-slot-date')?.value || '';
       const type = $('#modal-slot-type')?.value || 'available';
-      const start = $('#modal-slot-start')?.value || '09:00';
-      const end = $('#modal-slot-end')?.value || '10:15';
+      const start = $('#modal-slot-start')?.value || '';
+      const end = $('#modal-slot-end')?.value || '';
       const title = $('#modal-slot-title')?.value?.trim() || '';
       const serviceId = $('#modal-slot-service')?.value || 'party';
       const phone = $('#modal-slot-phone')?.value?.trim() || '';
       const note = $('#modal-slot-note')?.value?.trim() || '';
 
-      if (type === 'appointment') {
-        const cust = title || 'Khách hẹn';
-        const sObj = service(serviceId) || state.services[0];
-        const newApt = {
-          code: 'HOAN-' + Date.now().toString(36).toUpperCase().slice(-6),
-          customer: cust,
-          phone: phone || '0901234567',
-          serviceId: sObj.id,
-          date: date,
-          time: start,
-          endTime: end,
-          address: note || 'Tại studio HOÀN',
-          status: 'confirmed',
-          paymentStatus: 'received',
-          deposit: Number(state.settings.deposit || 200000),
-          total: sObj.price || 650000
-        };
-        try {
-          const res = await api({ action: 'createAppointment', ...newApt });
-          if (res && res.appointment) Object.assign(newApt, res.appointment);
-        } catch(e){}
-        state.appointments.unshift(newApt);
-        saveState();
-        toast(`✓ Đã thêm lịch hẹn cho ${cust} (${start} – ${end})`);
-      } else {
-        const slotStatus = type;
-        const slotNote = title || note || (type === 'travel' ? 'Di chuyển' : type === 'break' ? 'Nghỉ giữa lịch' : 'Không khả dụng');
-        const newSlot = {
-          slotDate: date,
-          slotTime: start,
-          endTime: end,
-          status: slotStatus,
-          note: slotNote
-        };
-        try {
-          await api({ action: 'setScheduleSlot', date, time: start, endTime: end, status: slotStatus, note: slotNote });
-        } catch(e){}
-        const existing = slotRecord(date, start);
-        if (existing) {
-          existing.status = slotStatus;
-          existing.endTime = end;
-          existing.note = slotNote;
+      try {
+        if (type === 'appointment') {
+          await api({ action: 'createAppointment', customer: title, phone, serviceId, date, time: start, address: note, locationType: 'artist' });
+          toast('Đã tạo lịch hẹn. Lịch đang chờ xác nhận.');
         } else {
-          state.scheduleSlots.push(newSlot);
+          const slotNote = title || note || ({ travel: 'Di chuyển', break: 'Nghỉ giữa lịch', available: 'Mở nhận lịch' }[type] || 'Không khả dụng');
+          await api({ action: 'setScheduleSlot', date, time: start, endTime: end, status: type, note: slotNote });
+          toast('Đã lưu khung giờ.');
         }
-        saveState();
-        toast(`✓ Đã thêm khung giờ ${slotNote} (${start} – ${end})`);
+        await hydrateBackend(true);
+      } catch (error) {
+        showFormFeedback($('.modal'), error, {
+          date: 'modal-slot-date', time: 'modal-slot-start', endTime: 'modal-slot-end',
+          customer: 'modal-slot-title', phone: 'modal-slot-phone', serviceId: 'modal-slot-service',
+        });
+        return;
       }
       closeModal();
       render();
@@ -4819,16 +5901,30 @@
   });
   document.addEventListener('click',e=>{
     const toggle=e.target.closest('[data-nav-toggle]');
-    if(toggle){const opened=toggle.getAttribute('aria-expanded')==='true';opened?closeEditorial():openEditorial(toggle.dataset.navToggle);}
+    if(toggle){const opened=toggle.getAttribute('aria-expanded')==='true';if(opened)closeEditorial();else openEditorial(toggle.dataset.navToggle);}
     if(e.target.closest('.editorial-close'))closeEditorial(true);
     if(e.target.closest('.nav-veil')||e.target.closest('[data-action="mobile-menu"]'))closeEditorial();
     if(e.target.closest('.editorial-menu a'))closeEditorial();
   });
   window.addEventListener('resize',()=>closeEditorial());
   window.addEventListener('hashchange',()=>closeEditorial());
-  window.addEventListener('hashchange', render);
+  let wasAdminPath = adminPath();
+  window.addEventListener('hashchange', () => {
+    const nextAdminPath = adminPath();
+    if (wasAdminPath !== nextAdminPath) {
+      wasAdminPath = nextAdminPath;
+      if (!nextAdminPath) clearAdminData();
+      void hydrateBackend();
+    }
+    if (location.hash.split('?')[0] !== '#/booking/time') bookingAvailability = null;
+    render();
+  });
   window.addEventListener('storage', async (event) => {
     if (isPreview) return;
+    if (event.key === adminLogoutSignal) {
+      if (adminPath()) expireAdminView();
+      return;
+    }
     if (event.url && event.url.includes('cmsPreview=1')) return;
     if (event.key && !['hoanDepositSyncTrigger', 'hoanMakeupDraft', 'hoanLastBookingCode'].includes(event.key)) return;
     const currentRoute = (location.hash.slice(1) || '/').split('?')[0];
@@ -4842,22 +5938,47 @@
   });
   if (!location.hash) location.hash = '#/';
   if (typeof document.createElement === 'function' && location.origin) {
+    import('/maps-settings.js?v=3.0').then(({ createMapsSettings }) => {
+      mapsSettings = createMapsSettings({ getState: () => state, api, esc, toast });
+      window.HoanMapSettings = mapsSettings; mapsSettings.mount();
+      if (location.hash.split('?')[0] === '#/admin/settings') render();
+    }).catch(error => console.error('Chưa tải được cấu hình bản đồ:', error));
+    import('/admin-overview.js?v=2.2').then(async ({ createAdminOverview, ensureOverviewStyles }) => {
+      await ensureOverviewStyles();
+      overviewAdmin = createAdminOverview({ getState: () => state, esc, money, icon, adminShell, refresh: () => hydrateBackend(true), render, toast, modal });
+      window.HoanOverview = overviewAdmin;
+      if (location.hash.startsWith('#/admin')) render();
+    }).catch(error => {
+      console.error('Không tải được Tổng quan:', error);
+      overviewLoadError = true;
+      window.HoanOverviewError = true;
+      if (location.hash.split('?')[0].replace(/\/$/, '') === '#/admin') render();
+    });
     import('/policy-navigation.js?v=1.0').then(({ mountPolicyNavigation }) => {
       policyNavigation = mountPolicyNavigation;
       mountPolicyContents();
     }).catch(error => console.error('Không tải được mục lục chính sách:', error));
-    import('/admin-location.js?v=3.5').then(({ createAdminLocations }) => {
+    import('/admin-location.js?v=4.0').then(({ createAdminLocations }) => {
       adminLocations = createAdminLocations({ getState: () => state, modal, toast });
       window.HoanAdminLocations = adminLocations;
-      if (location.hash.startsWith('#/admin')) render();
+      if (location.hash.split('?')[0].replace(/\/$/, '').startsWith('#/admin/')) render();
     }).catch(error => console.error('Không tải được bản đồ quản trị:', error));
-    import('/finance-admin.js?v=2.0').then(({ createFinanceAdmin }) => {
-      financeAdmin = createFinanceAdmin({ getState: () => state, api, refresh: () => hydrateBackend(), toast, esc, money });
+    import('/vietnam-date.js?v=1.2').then(({ createVietnamDate }) => {
+      window.HoanVietnamDate = createVietnamDate();
+      window.HoanVietnamDate.mount(document);
+    }).catch(error => console.error('Chưa tải được lịch tiếng Việt:', error));
+    import('/finance-admin.js?v=3.4').then(({ createFinanceAdmin }) => {
+      financeAdmin = createFinanceAdmin({ getState: () => state, api, refresh: async () => { await hydrateBackend(); if (state.backendError) throw new Error(state.backendError); }, toast, esc, money });
       window.HoanFinanceAdmin = financeAdmin;
-      if (location.hash.startsWith('#/admin')) render();
+      if (location.hash.split('?')[0].replace(/\/$/, '').startsWith('#/admin/')) render();
     }).catch(error => console.error('Không tải được quản lý thu chi:', error));
-    import('/booking-location.js?v=9.3').then(({ createBookingLocation }) => {
-      bookingLocation = createBookingLocation({ getBooking: () => state.booking, getService: service, getSettings: () => state.settings, save: saveState, render, esc, money });
+    import('/booking-location.js?v=10.4').then(({ createBookingLocation }) => {
+      bookingLocation = createBookingLocation({
+        getBooking: () => state.booking, getService: service, getSettings: () => state.settings,
+        save: saveState, render, esc, money,
+        validateAddress: address => api({ action: 'validateBookingLocation', ...address }),
+        showErrors: showFormFeedback, clearErrors: clearFormFeedback,
+      });
       if (location.hash.split('?')[0] === '#/booking/location') render();
       return bookingLocation.load();
     }).catch(() => {
@@ -4880,7 +6001,7 @@
       window.HoanNoticeAdmin = createAdminNotifications({ getState: () => state, api, render, toast, esc });
       if (location.hash.split('?')[0] === '#/admin/notifications') render();
     }).catch(error => console.error('Không tải được thông báo:', error));
-    import('/site-tools.js?v=147.0').then(({ createSiteTools }) => {
+    import('/site-tools.js?v=148.5').then(({ createSiteTools }) => {
       siteTools = createSiteTools({ getState: () => state, render, renderPathHtml, hydrateBackend, adminShell, publicHeader, publicFooter, esc, toast, icon });
       siteTools.start();
       if (location.hash.split('?')[0] === '#/admin/visitors') render();
@@ -4891,5 +6012,6 @@
   }
   render();
   hydrateBackend();
+  if (typeof window.dispatchEvent === 'function' && typeof Event === 'function') window.dispatchEvent(new Event('hoan:app-ready'));
   if (typeof window.initHoanScroll === 'function') window.initHoanScroll();
 })();

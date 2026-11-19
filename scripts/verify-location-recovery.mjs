@@ -27,6 +27,7 @@ async function offlineFixtures(context,onReverse=()=>{}) {
   });
   await context.route('**/api/**',route=>{
     const request=route.request(),path=new URL(request.url()).pathname;
+    if(path==='/api/map-tiles')return route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect width="256" height="256" fill="#f0f0ed"/></svg>'});
     if(path==='/api/data') {
       if(request.method()==='GET')return route.fulfill({json:snapshot});
       const payload=request.postDataJSON();
@@ -59,7 +60,7 @@ try {
     self.addEventListener('fetch',event=>{if(event.request.mode==='navigate')event.respondWith(caches.match('/'));});
   `;
   await page.evaluate(async () => {
-    const registration=await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.register('/sw.js');
     await navigator.serviceWorker.ready;
     if (!navigator.serviceWorker.controller) await new Promise(resolve=>navigator.serviceWorker.addEventListener('controllerchange',resolve,{once:true}));
   });

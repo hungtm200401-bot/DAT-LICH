@@ -1,5 +1,5 @@
 import { createLocationTiles } from './location-map-tiles.js?v=1.0';
-import { canConfirmLocationPoint } from './location-utils.js?v=5.0';
+import { canConfirmLocationPoint } from './location-utils.js?v=6.0';
 import { locationPinMarkup } from './location-marker.js?v=1.0';
 
 let library;
@@ -152,7 +152,7 @@ async function mountMap(container, point, confirm, { signal, bounds, devicePoint
       } else { circle?.remove(); circle = null; }
       gpsKey = nextGpsKey;
     }
-    if (pointChanged && nextPoint?.mode === 'gps') {
+    if (pointChanged && nextPoint && (nextPoint.mode === 'gps' || forceCenter)) {
       if (circle && gps.accuracy > 150) map.fitBounds(circle.getBounds(), { maxZoom: 16, padding: [20, 20], animate: false });
       else map.setView([nextPoint.lat, nextPoint.lon], 18, { animate: false });
     }

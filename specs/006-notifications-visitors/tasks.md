@@ -21,3 +21,19 @@ Dependencies: T001 -> T002 -> T003 -> T004 -> T005. Shared files sequential; ind
 - `git diff --cached --check` PASS; reviewed staged diff: no payments, booking, location, date picker, CMS behavior or tracking API changes. Shared integration functions transplanted onto HEAD; all existing unrelated working edits remain unstaged.
 - Remote main matched initial HEAD before commit; no force operations planned.
 - Commit `bce739e` pushed successfully to `origin/main`; Git reported `39b64e8..bce739e main -> main`.
+
+## US4 - Mã phiên truy cập
+
+- [x] T007 Thêm số phiên tự tăng, cấp mã cho dữ liệu cũ và tích hợp vào migration local.
+- [x] T008 Trả mã trong API quản trị và dùng mã khi hiển thị, tìm trong trang và xuất CSV.
+- [x] T009 Kiểm tra D1 và trình duyệt với dữ liệu mẫu, sau đó chạy migration trên dữ liệu local.
+
+`npm.cmd test`: build thành công, 154 kiểm thử đạt và một kiểm thử bản đồ trực tiếp được bỏ qua theo cấu hình. `node scripts/verify-admin-operations.mjs`: đạt trên desktop/mobile, gồm hiển thị, tìm theo mã, CSV và liên kết sự kiện. Worker đã build chạy với D1 riêng xác nhận cấp mã đồng thời, giữ mã khi tiếp tục phiên, chạy lại migration và giữ hành trình cũ. Migration local thành công, kiểm tra cho thấy 148/148 phiên đã có mã.
+
+## US5 - Tên trang và mốc thời gian
+
+- [x] T010 Lưu tín hiệu rời trang và lọc phiên hoạt động theo trạng thái mới.
+- [x] T011 Hiển thị tên trang, giờ bắt đầu và mốc cuối ở danh sách và chi tiết.
+- [x] T012 Xác minh dữ liệu phiên cũ, phiên có tín hiệu rời, tiếp tục phiên và giao diện desktop/mobile.
+
+`npm.cmd test`: build thành công, 154 kiểm thử đạt, một kiểm thử bản đồ trực tiếp được bỏ qua theo cấu hình. `node scripts/verify-admin-operations.mjs`: đạt trên desktop/mobile, gồm tên Trang chủ, giờ bắt đầu có giây, mốc rời có tín hiệu và mốc cuối cho phiên cũ. Worker với D1 thử nghiệm xác nhận giữ dữ liệu cũ, lưu giờ rời và cập nhật lại phiên khi hoạt động tiếp. Migration đã chạy thành công trên D1 local.

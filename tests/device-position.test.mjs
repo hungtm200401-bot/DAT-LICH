@@ -337,7 +337,7 @@ test('waiting for location permission does not consume acquisition time or start
   assert.equal(requests.length, 1, 'Only the user-initiated native request waits on the browser prompt.');
   assert.deepEqual(stages, ['locating', 'permission']);
   permission.change('granted');
-  context.mock.timers.tick(8000);
+  context.mock.timers.tick(3000);
   const measured = sample(12);
   requests[0].success(measured);
   assert.equal(await promise, measured);
@@ -345,7 +345,7 @@ test('waiting for location permission does not consume acquisition time or start
   assert.equal(permission.listeners.size, 0, 'Permission listeners are removed on success.');
 });
 
-test('the receiver remains bounded to thirty seconds after delayed permission is granted', async context => {
+test('fallback starts after four seconds when permission is granted', async context => {
   clock(context);
   const permission = permissionFixture(), requests = [], cleared = [];
   const promise = acquireDevicePosition({
@@ -357,12 +357,37 @@ test('the receiver remains bounded to thirty seconds after delayed permission is
   context.mock.timers.tick(45000); await flush();
   assert.equal(requests.length, 1);
   permission.change('granted');
-  context.mock.timers.tick(12000); await flush();
+  context.mock.timers.tick(3999); await flush();
+  assert.equal(requests.length, 1);
+  context.mock.timers.tick(1); await flush();
   assert.equal(requests.length, 2);
   context.mock.timers.tick(18000); await rejected;
-  assert.equal(Date.now(), 1793440800000 + 45000 + 30000);
+  assert.equal(Date.now(), 1793440800000 + 45000 + 22000);
   assert.equal(permission.listeners.size, 0);
   assert.deepEqual(cleared, [22]);
+});
+
+test('a useful fresh fix has a short window for higher accuracy before the watch stops', async context => {
+  clock(context);
+  const first = sample(110);
+  let deliver, settled = false;
+  const cleared = [];
+  const attempt = acquireDevicePosition({
+    getCurrentPosition(success) { success(first); },
+    watchPosition(success) { deliver = success; return 23; },
+    clearWatch(id) { cleared.push(id); },
+  }, new AbortController().signal);
+  attempt.then(() => { settled = true; });
+  await flush();
+  context.mock.timers.tick(4000);
+  assert.equal(settled, false);
+  const improved = sample(60);
+  deliver(improved);
+  context.mock.timers.tick(2499); await flush();
+  assert.equal(settled, false);
+  context.mock.timers.tick(1);
+  assert.equal(await attempt, improved);
+  assert.deepEqual(cleared, [23]);
 });
 
 test('native permission denial after a delayed prompt ends the same attempt without retrying', async context => {

@@ -25,6 +25,10 @@ export function sites(): Plugin {
       root = config.root;
     },
     async closeBundle() {
+      // Cloudflare emits local preview secrets beside server bundles. A release
+      // artifact must not carry the developer's admin key; production uses secrets.
+      await rm(resolve(root, 'dist', 'server', '.dev.vars'), { force: true });
+      await rm(resolve(root, 'dist', 'client', '.dev.vars'), { force: true });
       const outputDirectory = resolve(root, "dist", ".openai");
       const hostingConfig = resolve(root, ".openai", "hosting.json");
       const drizzleSource = resolve(root, "drizzle");

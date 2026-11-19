@@ -31,10 +31,12 @@ test("uses the reference typography and white admin canvas", async () => {
   assert.match(css, /grid-template-columns:\s*150px repeat\(7/);
 });
 
-test("prevents selecting an occupied booking time", async () => {
+test("keeps booking availability separate from the private working calendar", async () => {
   const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  assert.match(source, /time-slot-unavailable/);
-  assert.match(source, /Đã có khách/);
+  const availability = source.slice(source.indexOf("function loadAvailability("), source.indexOf("const _formatLongDate"));
+  assert.match(availability, /credentials: 'omit'/);
+  assert.match(availability, /bookingAvailability\.times\?\.includes\(time\)/);
+  assert.doesNotMatch(availability, /state\.(appointments|scheduleSlots)/);
   assert.match(source, /el\.disabled \|\| slotUnavailable/);
 });
 
@@ -87,7 +89,7 @@ test("sends deposit reports to the admin notification flow", async () => {
 test("routes approved appointments into the work schedule", async () => {
   const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
   const mobile = await readFile(new URL("../public/mobile-admin.js", import.meta.url), "utf8");
-  assert.match(source, /a\.status === 'confirmed' && !staleCodes\.includes\(a\.code\)/);
+  assert.match(source, /a\.date === iso && a\.status === 'confirmed'/);
   assert.match(mobile, /a\.status === 'confirmed'/);
   assert.match(source, /query\.get\('code'\)/);
 });
@@ -95,7 +97,7 @@ test("routes approved appointments into the work schedule", async () => {
 test("prevents duplicate deposit reports while awaiting review", async () => {
   const api = await readFile(new URL("../app/api/data/route.ts", import.meta.url), "utf8");
   const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  assert.match(api, /a\.paymentStatus==='pending_verification'/);
+  assert.match(api, /a\.paymentStatus\s*===\s*["']pending_verification["']/);
   assert.match(api, /depositRequired/);
   assert.match(source, /btn-deposit-pending" disabled aria-disabled="true">ĐANG CHỜ ĐỐI SOÁT/);
   assert.doesNotMatch(source, /btn-deposit-pending" data-action="ct-deposit-confirmed-proceed"/);

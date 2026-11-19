@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import directory from '../public/data/vietnam-administrative-latest.json' with { type: 'json' };
-import { findProvince, findWard, normalizeReverseAddress, parseNominatimAddress, parseBigDataCloudAddress, cleanLocationCoordinates, cleanBookingLocation } from '../public/location-utils.js';
+import { findProvince, findWard, normalizeReverseAddress, parseNominatimAddress, parseBigDataCloudAddress, cleanLocationCoordinates, cleanBookingLocation, locationAddressSignature } from '../public/location-utils.js';
 import { reverseGeocode } from '../lib/reverse-geocode.mjs';
 import aliases from '../public/data/vietnam-ward-aliases.json' with { type: 'json' };
 import { readFile } from 'node:fs/promises';
@@ -76,18 +76,23 @@ test('invalid coordinates return 400 before contacting any provider', async () =
   }
 });
 
-test('a confirmed coarse GPS estimate cannot become service directions while its original measurement remains available', () => {
+test('a coarse GPS estimate is not saved; precise or legacy pin coordinates need exact address confirmation', () => {
   const timestamp = new Date().toISOString();
   const original = { lat: 21.1, lon: 105.5, accuracy: 997, mode: 'gps' };
-  const booking = { locationCoordinates: original, locationDeviceCoordinates: original, locationCapturedAt: timestamp, locationConfirmedAt: timestamp, provinceCode: 1, wardCode: 9604, locationRegion: { provinceCode: 1, wardCode: 9604 } };
+  const booking = { city:'Thành phố Hà Nội',ward:'Phường Tùng Thiện',address:'14 Đường kiểm thử',locationCoordinates: original, locationDeviceCoordinates: original, locationCapturedAt: timestamp, locationConfirmedAt: timestamp, provinceCode: 1, wardCode: 9604, locationRegion: { provinceCode: 1, wardCode: 9604 } };
+  booking.locationAddressSignature=locationAddressSignature(booking);
   const coarse = cleanBookingLocation(booking);
   assert.equal(coarse.locationCoordinates, null);
   assert.equal(coarse.locationConfirmedAt, '');
-  assert.deepEqual(coarse.locationDeviceCoordinates, original);
-  const precise = cleanBookingLocation({ ...booking, locationCoordinates: { ...original, accuracy: 12 } });
+  assert.equal(coarse.locationDeviceCoordinates,null);
+  const preciseBooking={ ...booking, locationCoordinates: { ...original, accuracy: 12 } };
+  preciseBooking.locationAddressSignature=locationAddressSignature(preciseBooking);
+  const precise = cleanBookingLocation(preciseBooking);
   assert.equal(precise.locationCoordinates.mode, 'gps');
   assert.equal(precise.locationCoordinates.accuracy, 12);
-  const selected = cleanBookingLocation({ ...booking, locationCoordinates: { lat: 21.101, lon: 105.501, accuracy: null, mode: 'pin' } });
+  const pinBooking={ ...booking, locationCoordinates: { lat: 21.101, lon: 105.501, accuracy: null, mode: 'pin' } };
+  pinBooking.locationAddressSignature=locationAddressSignature(pinBooking);
+  const selected = cleanBookingLocation(pinBooking);
   assert.equal(selected.locationCoordinates.mode, 'pin');
   assert.deepEqual(selected.locationDeviceCoordinates, original);
 });
@@ -189,7 +194,7 @@ test('a cancelled GPS request never starts a device measurement', async () => {
   await assert.rejects(acquireDevicePosition({getCurrentPosition(){throw new Error('Must not start');}},abort.signal),{name:'AbortError'});
 });
 
-test('a coarse GPS fix requests pin confirmation without loading geometry or calling a geocoder', async () => {
+test('a coarse GPS fix skips boundary files and reverse requests', async () => {
   const original = globalThis.fetch;
   let requests = 0;
   globalThis.fetch = () => { requests++;throw new Error('No download is needed'); };
@@ -198,6 +203,37 @@ test('a coarse GPS fix requests pin confirmation without loading geometry or cal
     assert.deepEqual(result,{area:null,reliable:false,address:'',coarse:true});
     assert.equal(requests,0);
   } finally {globalThis.fetch=original;}
+});
+
+test('reverse requests require a verified ward and retain only nearby address details', async t => {
+  const point = { lat: 21.1, lon: 105.5, accuracy: 12, mode: 'gps' };
+  const area = { provinceCode: 1, city: 'Thành phố Hà Nội', wardCode: 9604, ward: 'Phường Tùng Thiện', reliable: true };
+  const signal = new AbortController().signal;
+  let requests = 0, distance = 1;
+  t.mock.method(globalThis, 'fetch', async (_url, { body }) => {
+    requests++;
+    assert.deepEqual(JSON.parse(body), { action: 'reverseGeocode', lat: point.lat, lon: point.lon });
+    return Response.json({
+      countryCode: 'vn', city: area.city, ward: area.ward, featureDistanceMeters: distance,
+      addressParts: { houseNumber: '14', road: 'Đường kiểm thử' },
+    });
+  });
+  for (const unmatched of [null, { ...area, reliable: false }]) {
+    const result = await resolveAddressAtPosition(directory, point, signal, { areaLookup: Promise.resolve(unmatched) });
+    assert.equal(result.address, '');
+    assert.equal(result.reliable, false);
+  }
+  assert.equal(requests, 0);
+  const options = { areaLookup: Promise.resolve(area) };
+  assert.equal((await resolveAddressAtPosition(directory, point, signal, options)).address, '14 Đường kiểm thử');
+  distance = 30;
+  const street = await resolveAddressAtPosition(directory, point, signal, options);
+  assert.equal(street.address, 'Đường kiểm thử');
+  assert.equal(street.addressDetails.precision, 'street');
+  distance = 80;
+  const locality = await resolveAddressAtPosition(directory, point, signal, options);
+  assert.equal(locality.address, '');
+  assert.equal(locality.area.wardCode, 9604);
 });
 
 test('a geocoder street several kilometres from the device is not auto-filled', async () => {
@@ -214,16 +250,27 @@ test('saved booking coordinates preserve a confirmed point and reject malformed 
   assert.equal(cleanLocationCoordinates({lat:NaN,lon:105.5}),null);
 });
 
-test('unconfirmed or mismatched points cannot become the saved destination while original GPS is retained', () => {
-  const location = { locationCoordinates:{lat:21.101,lon:105.501,mode:'pin'},locationDeviceCoordinates:{lat:21.1,lon:105.5,mode:'gps',accuracy:4000},locationCapturedAt:'2026-10-31T08:00:00Z',locationConfirmedAt:'2026-10-31T08:01:00Z',provinceCode:1,wardCode:9604,locationRegion:{provinceCode:1,wardCode:9604} };
+test('unconfirmed or mismatched points cannot be saved with a different address', () => {
+  const location = { city:'Thành phố Hà Nội',ward:'Phường Tùng Thiện',address:'14 Đường kiểm thử',locationCoordinates:{lat:21.101,lon:105.501,mode:'pin'},locationDeviceCoordinates:{lat:21.1,lon:105.5,mode:'gps',accuracy:4000},locationCapturedAt:'2026-10-31T08:00:00Z',locationConfirmedAt:'2026-10-31T08:01:00Z',provinceCode:1,wardCode:9604,locationRegion:{provinceCode:1,wardCode:9604} };
+  location.locationAddressSignature = locationAddressSignature(location);
   const now = Date.parse('2026-10-31T09:00:00Z');
   const valid = cleanBookingLocation(location,now);
   assert.equal(valid.locationCoordinates.lat,21.101);
   assert.equal(valid.locationDeviceCoordinates.accuracy,4000);
-  for (const invalid of [{locationConfirmedAt:''},{locationConfirmedAt:'2030-01-01T00:00:00Z'},{locationRegion:null},{wardCode:1},{provinceCode:2}]) {
+  for (const invalid of [{locationConfirmedAt:''},{locationConfirmedAt:'2030-01-01T00:00:00Z'},{locationRegion:null},{wardCode:1},{provinceCode:2},{address:'99 Đường khác'},{city:'Thành phố khác'},{ward:'Phường khác'},{locationAddressSignature:''},{locationCoordinates:{lat:21.102,lon:105.501,mode:'pin'}}]) {
     const result = cleanBookingLocation({...location,...invalid},now);
     assert.equal(result.locationCoordinates,null);
     assert.equal(result.locationConfirmedAt,'');
-    assert.deepEqual(result.locationDeviceCoordinates,valid.locationDeviceCoordinates);
+    assert.equal(result.locationDeviceCoordinates,null);
+    assert.equal(result.locationCapturedAt,'');
   }
+});
+
+test('manual address needs no GPS and direction notes do not move a confirmed street', () => {
+  const booking={city:'Thành phố Hà Nội',ward:'Phường Tùng Thiện',address:'14 Đường kiểm thử',provinceCode:1,wardCode:9604};
+  assert.equal(cleanBookingLocation(booking).locationCoordinates,null);
+  Object.assign(booking,{locationCoordinates:{lat:21.1,lon:105.5,mode:'gps',accuracy:12},locationDeviceCoordinates:{lat:21.1,lon:105.5,mode:'gps',accuracy:12},locationCapturedAt:'2026-10-31T08:00:00Z',locationConfirmedAt:'2026-10-31T08:01:00Z',locationRegion:{provinceCode:1,wardCode:9604}});
+  booking.locationAddressSignature=locationAddressSignature(booking);
+  assert.ok(cleanBookingLocation({...booking,locationNote:'Tầng 2, cổng bên phải'}).locationCoordinates);
+  assert.equal(cleanBookingLocation({...booking,address:''}).locationCoordinates,null);
 });
