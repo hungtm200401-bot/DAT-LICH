@@ -36,7 +36,7 @@ executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")"
 [[ -f "$app/$executable" ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$plist")" == iphoneos ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :HoanAdminOrigin' "$plist")" == https://* ]]
-xcrun lipo -verify_arch arm64 "$app/$executable"
+xcrun lipo "$app/$executable" -verify_arch arm64
 
 mkdir "$build_dir/Payload"
 staged_app="$build_dir/Payload/HoanAdmin.app"
