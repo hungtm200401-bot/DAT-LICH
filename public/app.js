@@ -8,7 +8,7 @@
     // handlers to an already running legacy app. The version loader refreshes it.
     const existing = typeof document.getElementById === 'function' && document.getElementById('app');
     if (window.state && existing?.childElementCount) { window.__hoanAppBuild = 'legacy'; return; }
-    window.__hoanAppBuild = 'admin-web-app-parity-2';
+    window.__hoanAppBuild = 'iphone-work-reminders-1';
   }
 
   // Guaranteed critical schedule styles injection (bulletproof against browser CSS caching)
@@ -453,7 +453,8 @@
     state.adminAuthorized = false;
     state.appointments = [...verifiedBookings.values()].map(result => result.appointment);
     state.bookingDetails = Object.fromEntries([...verifiedBookings].map(([code, value]) => [code, value.bookingDetails || {}]));
-    Object.assign(state, { customers: [], paymentTransactions: [], requests: [], notifications: [], scheduleSlots: [], settings: { ...defaultState.settings } });
+    Object.assign(state, { customers: [], paymentTransactions: [], workReminders: [], requests: [], notifications: [], scheduleSlots: [], settings: { ...defaultState.settings } });
+    window.HoanMobileAdmin?.syncWorkReminders?.(null);
   }
 
   async function hydrateBackend(silent = false) {
@@ -467,6 +468,7 @@
       state.adminAuthorized = requestedAdmin && Object.hasOwn(data, 'customers') && Object.hasOwn(data, 'paymentTransactions');
       state.bookingDetails = data.bookingDetails || Object.fromEntries([...verifiedBookings].map(([code, value]) => [code, value.bookingDetails || {}]));
       state.paymentTransactions = data.paymentTransactions || [];
+      state.workReminders = data.workReminders || [];
       state.requests = data.requests || [];
       state.notifications = data.notifications || [];
       state.appointments = state.adminAuthorized ? (data.appointments || []) : [...verifiedBookings.values()].map(result => result.appointment);
@@ -478,6 +480,7 @@
       state.backendReady = true;
       state.backendUpdatedAt = new Date().toISOString();
       state.backendError = '';
+      if (state.adminAuthorized) window.HoanMobileAdmin?.syncWorkReminders?.(state.workReminders);
       if (!silent && !isPreview) render();
     } catch (error) {
       if (requestedAdmin !== adminPath() || generation !== adminSessionGeneration) return;
@@ -3779,7 +3782,7 @@
       if (!response.ok) throw new Error('Chưa thu hồi được phiên ở máy chủ.');
     } catch { toast('Chưa thu hồi được phiên ở máy chủ. Hãy thử đăng xuất lại khi có kết nối.'); }
   }
-  window.HoanAdminAuth = { signIn: signInAdmin, loginHtml: adminLogin };
+  window.HoanAdminAuth = { signIn: signInAdmin, loginHtml: adminLogin, request: api, reload: () => hydrateBackend(true) };
   document.addEventListener('click', event => {
     const toggle = event.target.closest('[data-login-toggle]');
     if (!toggle) return;
@@ -4247,7 +4250,9 @@
     } : null;
     const sharedAdminScreen = path === '/admin/menu' || path === '/admin/content-pages'
       || adminLinks.some(([key]) => path === '/admin/' + key);
-    let html = path.startsWith('/admin') && !sharedAdminScreen && window.HoanMobileAdmin?.matches()
+    const iPhoneApp = path.startsWith('/admin') && window.HoanMobileAdmin?.isIPhoneApp?.();
+    let html = iPhoneApp ? window.HoanMobileAdmin.renderIPhone(raw)
+      : path.startsWith('/admin') && !sharedAdminScreen && window.HoanMobileAdmin?.matches()
       ? window.HoanMobileAdmin.render(raw, state)
       : renderPathHtml(raw);
     if (!html) {
@@ -4290,9 +4295,9 @@
       if (contents) contents.open = true;
     }
     lastRenderedPath = routeKey;
-    siteTools?.mount(path);
-    if (path === '/admin/requests' && query.get('id')) setTimeout(() => document.querySelector(`[data-action="req-open-modal"][data-id="${CSS.escape(query.get('id'))}"]`)?.click(), 0);
-    if (path === '/admin/appointments' && query.get('code')) {
+    if (!iPhoneApp) siteTools?.mount(path);
+    if (!iPhoneApp && path === '/admin/requests' && query.get('id')) setTimeout(() => document.querySelector(`[data-action="req-open-modal"][data-id="${CSS.escape(query.get('id'))}"]`)?.click(), 0);
+    if (!iPhoneApp && path === '/admin/appointments' && query.get('code')) {
       setTimeout(() => document.querySelector(`[data-action="admin-view-appointment"][data-code="${CSS.escape(query.get('code'))}"]`)?.click(), 0);
     }
     if (path === '/booking/deposit') {

@@ -192,6 +192,18 @@ try {
     date: vietnamDay(6), locationType: 'artist', email: undefined,
   }), true), 201);
   assert.equal(manual.appointment.email, '');
+  const reportedDeposit = await success(await mutate({
+    action: 'reportPayment', code: manual.appointment.code, phone: manual.appointment.phone,
+  }));
+  const quickPayment = {
+    ...payment, code: manual.appointment.code, amount: 100000, depositReportVersion: reportedDeposit.appointment.updatedAt,
+    confirmAppointment: true,
+  };
+  const concurrentReviews = await Promise.all([randomUUID(), randomUUID()].map(idempotencyKey =>
+    mutate({ ...quickPayment, idempotencyKey }, true)));
+  assert.deepEqual(concurrentReviews.map(result => result.response.status).sort(), [201, 409]);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS total FROM payment_transactions WHERE appointment_code = ?")
+    .bind(manual.appointment.code).first()).total, 1);
   await success(await request('/api/admin-session', { method: 'DELETE', admin: true }));
   assert.equal((await request('/api/data?admin=1', { admin: true })).response.status, 401);
   assert.equal((await request('/api/admin-session', { admin: true })).response.status, 401);
@@ -409,8 +421,68 @@ try {
   await appPage.locator('[data-action="export-customers"]').click();
   assert.match((await exportFile).suggestedFilename(), /\.csv$/i);
   assert.equal((await mutate({ action: 'saveCustomer', name: 'Ẩn danh', phone: '0900002299' })).response.status, 401);
+
+  await appPage.evaluate(() => {
+    document.documentElement.classList.add('hoan-iphone');
+    window.hoanWorkMessages = [];
+    window.webkit = { messageHandlers: { hoanWorkReminders: { postMessage: value => window.hoanWorkMessages.push(value) } } };
+  });
+  await appPage.goto(base + '/#/admin');
+  await appPage.locator('.ma-quick-bottom').waitFor();
+  assert.deepEqual(await appPage.locator('.ma-quick-bottom a span').allTextContents(), ['Lịch làm', 'Duyệt lịch', 'Duyệt cọc', 'Khách']);
+  assert.equal(await appPage.locator('.ma-all-functions').count(), 0);
+  await appPage.getByRole('link', { name: 'Khách', exact: true }).click();
+  await appPage.getByRole('searchbox', { name: 'Tìm khách theo tên hoặc số điện thoại' }).fill('0900002201');
+  await appPage.getByRole('link', { name: /Khách đã cập nhật từ web/ }).click();
+  assert.equal(await appPage.getByRole('link', { name: /Gọi khách/ }).getAttribute('href'), 'tel:0900002201');
+
+  await appPage.getByRole('link', { name: 'Duyệt lịch', exact: true }).click();
+  await appPage.locator('a[href="#/admin/appointments/' + second.code + '"]').click();
+  await appPage.getByRole('button', { name: 'Duyệt lịch', exact: true }).click();
+  await appPage.waitForURL(base + '/#/admin/appointments');
+  const liveAdmin = async () => (await webPage.request.get(base + '/api/data?admin=1')).json();
+  assert.equal((await liveAdmin()).appointments.find(row => row.code === second.code).status, 'confirmed');
+
+  const manualCode = manual.appointment.code;
+  await appPage.getByRole('link', { name: 'Duyệt cọc', exact: true }).click();
+  await appPage.locator('a[href="#/admin/payments/' + manualCode + '"]').click();
+  const depositForm = appPage.locator('form[data-ma-form="approve-deposit"]');
+  assert.equal(await depositForm.locator('[name="amount"]').inputValue(), '100000');
+  await depositForm.getByRole('button', { name: 'Xác nhận đã nhận' }).click();
+  await depositForm.locator('[name="reference"][aria-invalid="true"]').waitFor();
+  await depositForm.locator('[name="reference"]').fill('TEST-QUICK-ADMIN-1');
+  await depositForm.getByRole('button', { name: 'Xác nhận đã nhận' }).click();
+  await appPage.waitForURL(base + '/#/admin/payments');
+  const approved = await liveAdmin();
+  assert.equal(approved.paymentTransactions.filter(row => row.appointmentCode === manualCode).length, 2);
+  assert.equal(approved.appointments.find(row => row.code === manualCode).status, 'confirmed');
+  const reminder = approved.workReminders.find(row => row.code === manualCode);
+  assert.equal(reminder.startsAt, Date.parse(manual.appointment.date + 'T16:00:00+07:00'));
+  assert.equal(reminder.startsAt - reminder.remindAt, 86400000);
+  await appPage.waitForFunction(({ code, remindAt }) => window.hoanWorkMessages.some(message =>
+    message.action === 'sync' && message.reminders.some(row => row.code === code && row.remindAt === remindAt)), { code: manualCode, remindAt: reminder.remindAt });
+
+  const editFromWeb = options => webPage.request.post(base + '/api/data', {
+    headers: { Origin: base }, data: { action: 'updateAppointment', code: manualCode, ...options },
+  });
+  assert.equal((await editFromWeb({ time: '16:30' })).status(), 200);
+  await appPage.bringToFront();
+  await appPage.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await appPage.waitForFunction(({ code, remindAt }) => window.hoanWorkMessages.some(message =>
+    message.action === 'sync' && message.reminders.filter(row => row.code === code && row.remindAt === remindAt).length === 1),
+  { code: manualCode, remindAt: reminder.remindAt + 1800000 });
+  assert.equal((await editFromWeb({ status: 'cancelled' })).status(), 200);
+  await appPage.evaluate(() => {
+    window.hoanWorkMessages.length = 0;
+    window.dispatchEvent(new Event('focus'));
+  });
+  await appPage.waitForFunction(code => window.hoanWorkMessages.some(message =>
+    message.action === 'sync' && !message.reminders.some(row => row.code === code)), manualCode);
+  await appPage.getByRole('link', { name: /Thông báo/ }).click();
+  await appPage.getByRole('button', { name: 'Đăng xuất', exact: true }).click();
+  await appPage.waitForFunction(() => window.hoanWorkMessages.some(message => message.action === 'clear'));
   await Promise.all([desktop.close(), app.close()]);
-  console.log('PASS desktop and iPhone-sized admin: shared menu, all 16 routes, customer changes across sessions, server errors, CSV export and authorization.');
+  console.log('PASS web and iPhone admin: 16 web sections, four app tasks, customer changes, concurrent deposit review, reminders and logout.');
 } finally {
   await browser?.close();
   await worker.dispose();

@@ -1,4 +1,5 @@
 import UIKit
+import UserNotifications
 import WebKit
 
 final class AdminViewController: UIViewController {
@@ -9,12 +10,16 @@ final class AdminViewController: UIViewController {
         scripts.addUserScript(WKUserScript(source: Self.edgeLayout, injectionTime: .atDocumentEnd,
                                            forMainFrameOnly: true, in: .defaultClient))
         scripts.add(StatusBarListener(owner: self), contentWorld: .defaultClient, name: "hoanStatusBar")
+        scripts.add(WorkReminderListener(owner: self), contentWorld: .page, name: "hoanWorkReminders")
         return WKWebView(frame: .zero, configuration: configuration)
     }()
     private let progress = UIActivityIndicatorView(style: .large)
     private let status = UILabel()
     private let retry = UIButton(type: .system)
     private var hasDarkHeader = false
+    private lazy var workReminderScheduler = WorkReminderScheduler { [weak self] status in
+        self?.browser.evaluateJavaScript("window.HoanMobileAdmin?.setReminderPermission?.('\(status)')")
+    }
     private var downloadDestinations: [ObjectIdentifier: URL] = [:]
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
@@ -119,6 +124,33 @@ final class AdminViewController: UIViewController {
             guard let owner, message.frameInfo.isMainFrame, let url = message.frameInfo.request.url,
                   owner.server?.contains(url) == true, let dark = message.body as? Bool else { return }
             owner.updateStatusBar(darkHeader: dark)
+        }
+    }
+
+    private final class WorkReminderListener: NSObject, WKScriptMessageHandler {
+        weak var owner: AdminViewController?
+
+        init(owner: AdminViewController) {
+            self.owner = owner
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard let owner, message.frameInfo.isMainFrame, message.webView === owner.browser,
+                  let frameURL = message.frameInfo.request.url, owner.server?.contains(frameURL) == true,
+                  let body = message.body as? [String: Any], let action = body["action"] as? String
+            else { return }
+            if action == "clear" {
+                owner.workReminderScheduler.clear()
+                return
+            }
+            guard let route = owner.browser.url?.fragment?.split(separator: "?").first,
+                  route == "/admin" || route.hasPrefix("/admin/")
+            else { return }
+            if action == "enable", route != "/admin/login" {
+                owner.workReminderScheduler.enable()
+            } else if action == "sync", let reminders = body["reminders"] as? [[String: Any]] {
+                owner.workReminderScheduler.sync(reminders)
+            }
         }
     }
 
@@ -347,6 +379,7 @@ private extension AdminViewController {
           return JSON.stringify({
             width: innerWidth, height: innerHeight, documentWidth: document.documentElement.scrollWidth,
             compact, login: Boolean(password), dashboard: Boolean(header && tabs),
+            tabs: Array.from(tabs?.querySelectorAll('a span') || [], label => label.textContent),
             headerTop: header?.getBoundingClientRect().top,
             headerInset: header && parseFloat(getComputedStyle(header).paddingTop),
             tabsBottom: tabs?.getBoundingClientRect().bottom,
@@ -356,20 +389,39 @@ private extension AdminViewController {
         """
         webView.evaluateJavaScript(script) { [weak self, weak webView] result, _ in
             guard let self, let webView else { return }
-            if let json = result as? String,
-               var report = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
-               let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
-                report["fillsWindow"] = webView.frame == self.view.bounds
-                report["safeTop"] = self.view.safeAreaInsets.top
-                report["safeBottom"] = self.view.safeAreaInsets.bottom
-                if let data = try? JSONSerialization.data(withJSONObject: report) {
-                    try? data.write(to: directory.appendingPathComponent("hoan-viewport.json"), options: .atomic)
-                }
-            } else if remaining > 0 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self, weak webView] in
-                    if let webView { self?.recordViewport(webView, remaining: remaining - 1) }
+            Task {
+                if let json = result as? String,
+                   var report = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+                   let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+                    report["fillsWindow"] = webView.frame == self.view.bounds
+                    report["safeTop"] = self.view.safeAreaInsets.top
+                    report["safeBottom"] = self.view.safeAreaInsets.bottom
+                    if let timestamp = ProcessInfo.processInfo.environment["HOAN_IOS_TEST_WORK_REMINDER"],
+                       let expected = Double(timestamp) {
+                        let pending = await UNUserNotificationCenter.current().pendingNotificationRequests()
+                            .filter { $0.identifier.hasPrefix(WorkReminderScheduler.identifierPrefix) }
+                        let scheduledAt = (pending.first?.trigger as? UNCalendarNotificationTrigger)?
+                            .nextTriggerDate()?.timeIntervalSince1970 ?? 0
+                        report["pendingWorkReminders"] = pending.count
+                        report["scheduledAt"] = scheduledAt * 1_000
+                        if (pending.count != 1 || abs(scheduledAt * 1_000 - expected) >= 1_000), remaining > 0 {
+                            self.retryViewportReport(webView, remaining: remaining)
+                            return
+                        }
+                    }
+                    if let data = try? JSONSerialization.data(withJSONObject: report) {
+                        try? data.write(to: directory.appendingPathComponent("hoan-viewport.json"), options: .atomic)
+                    }
+                } else if remaining > 0 {
+                    self.retryViewportReport(webView, remaining: remaining)
                 }
             }
+        }
+    }
+
+    func retryViewportReport(_ webView: WKWebView, remaining: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self, weak webView] in
+            if let webView { self?.recordViewport(webView, remaining: remaining - 1) }
         }
     }
 }

@@ -50,6 +50,7 @@
     info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/>',
     check:'<path d="m5 12 4 4L19 6"/>',
     close:'<path d="m6 6 12 12M6 18 18 6"/>',
+    refresh:'<path d="M20 7v5h-5M4 17v-5h5M6 9a7 7 0 0 1 12-3l2 3M4 15l2 3a7 7 0 0 0 12-3"/>',
     download:'<path d="M12 3v12m-5-5 5 5 5-5M4 21h16"/>',
     logout:'<path d="M10 17l5-5-5-5m5 5H3m11-8h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5"/>',
     wifi:'<path d="M2 8a15 15 0 0 1 20 0M5 12a10 10 0 0 1 14 0M8.5 15.5a5 5 0 0 1 7 0M12 20h.01M3 3l18 18"/>',
@@ -60,26 +61,226 @@
   };
   const icon = name => `<svg class="ma-ico" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.chevron}</svg>`;
 
+  const isIPhoneApp = () => document.documentElement.classList.contains('hoan-iphone');
+  const reminderBridge = () => window.webkit?.messageHandlers?.hoanWorkReminders;
+  const vietnamDay = offset => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' })
+    .format(new Date(Date.now() + offset * 86400000));
+  const dueReminders = () => (state().workReminders || []).filter(row => row.remindAt <= Date.now() && row.startsAt > Date.now());
+  const depositRemaining = row => Math.max(0, Math.min(Number(row.total) || 0,
+    Number(state().bookingDetails?.[row.code]?.depositRequired ?? state().settings?.deposit ?? 200000) || 0) - Number(row.deposit || 0));
+  const canReviewDeposit = row => ['pending', 'confirmed'].includes(row.status) &&
+    (row.paymentStatus === 'pending_verification' || row.status === 'pending' && row.paymentStatus === 'received' && depositRemaining(row) > 0);
+  const quickNotices = () => (state().notifications || []).filter(notice => {
+    const row = appointment(notice.entityId);
+    return row && (notice.type === 'appointment.created' && row.status === 'pending' ||
+      notice.type === 'payment.reported' && canReviewDeposit(row));
+  });
+  let reminderPermission = '';
+  const reminderButton = status => ({
+    denied: 'Mở cài đặt thông báo',
+    error: 'Thử lại nhắc lịch'
+  })[status] || 'Bật nhắc lịch';
+
+  function syncWorkReminders(reminders) {
+    if (!isIPhoneApp()) return;
+    if (reminders === null) reminderBridge()?.postMessage({ action: 'clear' });
+    else {
+      const upcoming = reminders.filter(row => row.remindAt > Date.now()).slice(0, 60);
+      reminderBridge()?.postMessage({ action: 'sync', reminders: upcoming });
+    }
+  }
+
+  function setReminderPermission(status) {
+    reminderPermission = status;
+    const control = $('[data-ma-action="enable-work-reminders"]');
+    if (control) {
+      control.hidden = status === 'granted';
+      control.textContent = reminderButton(status);
+    }
+  }
+
+  function reminderControl() {
+    return reminderBridge() && reminderPermission !== 'granted'
+      ? '<button class="ma-btn ma-reminder-opt-in" data-ma-action="enable-work-reminders">' +
+        reminderButton(reminderPermission) + '</button>'
+      : '';
+  }
+
+  function quickTitle(title, action = '') {
+    return '<div class="ma-quick-heading"><h1>' + title + '</h1>' + action + '</div>';
+  }
+
+  function quickRows(rows, payment = false) {
+    return rows.map(row => {
+      const path = (payment ? '/admin/payments/' : '/admin/appointments/') + encodeURIComponent(row.code);
+      return '<a class="ma-quick-row" href="#' + path + '">' +
+        '<span class="ma-quick-time"><b>' + esc(row.time) + '</b><small>' + esc(dateVi(row.date).slice(0, 5)) + '</small></span>' +
+        '<span class="ma-quick-person"><b>' + esc(row.customer) + '</b><small>' + esc(service(row.serviceId).name) + '</small></span>' +
+        icon('chevron') + '</a>';
+    }).join('');
+  }
+
+  function sortedAppointments() {
+    return [...(state().appointments || [])].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  }
+
+  function workAgenda(raw) {
+    const today = vietnamDay(0), tomorrow = vietnamDay(1);
+    const query = queryOf(raw).get('day');
+    const day = ['tomorrow', 'upcoming'].includes(query) ? query : 'today';
+    const confirmed = sortedAppointments().filter(row => row.status === 'confirmed');
+    const rows = confirmed.filter(row => day === 'upcoming' ? row.date >= today : row.date === (day === 'tomorrow' ? tomorrow : today));
+    const periods = [['today', 'Hôm nay'], ['tomorrow', 'Ngày mai'], ['upcoming', 'Sắp tới']];
+    const tabs = '<div class="ma-tabs ma-work-periods">' + periods.map(([key, label]) =>
+      '<a class="ma-tab' + (key === day ? ' active' : '') + '" href="#/admin/schedule?day=' + key + '">' + label + '</a>').join('') + '</div>';
+    const refreshButton = '<button class="ma-icon-btn ma-quick-refresh" data-action="refresh-admin-data" aria-label="Làm mới">' + icon('refresh') + '</button>';
+    return shell(quickTitle('Lịch làm', refreshButton) + reminderControl() + tabs + '<div class="ma-quick-list">' +
+      (quickRows(rows) || '<p class="ma-quick-empty">Chưa có lịch làm.</p>') + '</div>', { home: true, active: 'schedule' });
+  }
+
+  function reviewQueue(payment) {
+    const rows = sortedAppointments().filter(row => payment ? canReviewDeposit(row) : row.status === 'pending');
+    const title = payment ? 'Duyệt cọc' : 'Duyệt lịch';
+    const empty = payment ? 'Không có báo cọc chờ duyệt.' : 'Không có lịch chờ duyệt.';
+    return shell(quickTitle(title, '<span class="ma-quick-count">' + rows.length + '</span>') +
+      '<div class="ma-quick-list">' + (quickRows(rows, payment) || '<p class="ma-quick-empty">' + empty + '</p>') + '</div>',
+      { home: true, active: payment ? 'payments' : 'appointments' });
+  }
+
+  function quickAppointment(row, payment) {
+    const destination = payment ? '/admin/payments' : '/admin/appointments';
+    if (!row) return notFound('Không tìm thấy lịch hẹn', destination);
+    const code = esc(row.code);
+    const details = state().bookingDetails?.[row.code] || {};
+    const address = [row.address, row.ward, details.city].filter(Boolean).join(', ');
+    const info = '<div class="ma-quick-details"><h2>' + esc(row.customer) + '</h2><p>' +
+      esc(row.time) + ' · ' + esc(dateVi(row.date)) + '</p><p>' + esc(service(row.serviceId).name) + '</p>' +
+      (address ? '<p>' + esc(address) + '</p>' : '') +
+      (row.phone ? '<a href="tel:' + esc(row.phone) + '">Gọi khách</a>' : '') + '</div>';
+    const version = esc(row.updatedAt || '');
+    let controls = '';
+    if (payment && canReviewDeposit(row)) controls = quickDepositForm(row);
+    else if (!payment && row.status === 'pending') {
+      controls = '<div class="ma-quick-actions"><button class="ma-btn primary" data-ma-action="review-booking" data-code="' + code +
+        '" data-version="' + version + '" data-status="confirmed">Duyệt lịch</button>' +
+        '<button class="ma-btn" data-ma-action="review-booking" data-code="' + code + '" data-version="' + version +
+        '" data-status="cancelled">Từ chối</button></div>';
+    } else controls = '<p class="ma-quick-state">' + esc(statusText(row.status)) + '</p>';
+    return shell(quickTitle(payment ? 'Duyệt cọc' : 'Chi tiết lịch') + info + controls,
+      { title: row.code, back: payment || row.status === 'pending' ? '#' + destination : '#/admin', active: payment ? 'payments' : row.status === 'pending' ? 'appointments' : 'schedule' });
+  }
+
+  function quickDepositForm(row) {
+    const amount = depositRemaining(row);
+    const nowVN = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 16);
+    return '<form class="ma-quick-deposit" data-ma-form="approve-deposit" data-code="' + esc(row.code) + '" data-version="' +
+      esc(row.updatedAt) + '" data-request-id="' + crypto.randomUUID() + '" novalidate>' +
+      '<label class="ma-field">Số tiền đã nhận <input name="amount" inputmode="numeric" value="' + amount + '"></label>' +
+      '<label class="ma-field">Phương thức <select name="method"><option value="bank">Chuyển khoản</option><option value="cash">Tiền mặt</option></select></label>' +
+      '<label class="ma-field" data-deposit-reference>Mã giao dịch <input name="reference" autocomplete="off"></label>' +
+      '<details><summary>Giờ nhận tiền</summary><label class="ma-field">Giờ Việt Nam <input type="datetime-local" name="occurredAt" value="' +
+      esc(nowVN) + '"></label></details>' +
+      '<button class="ma-btn primary" type="submit">Xác nhận đã nhận</button></form>';
+  }
+
+  function workNotices() {
+    const pendingReminders = dueReminders();
+    const due = pendingReminders.map(reminder => {
+      const row = appointment(reminder.code);
+      if (!row) return '';
+      return '<a class="ma-quick-notice" href="#/admin/appointments/' + encodeURIComponent(row.code) +
+        '">' + icon('clock') + '<span>Nhắc lịch làm<small>' + esc(row.time) + ' · ' + esc(dateVi(row.date)) + '</small></span>' + icon('chevron') + '</a>';
+    }).join('');
+    const pending = quickNotices().filter(item => item.status === 'unread').slice(0, 12).map(item => {
+      const row = appointment(item.entityId);
+      if (!row) return '';
+      const payment = item.type === 'payment.reported';
+      const path = (payment ? '/admin/payments/' : '/admin/appointments/') + encodeURIComponent(row.code);
+      return '<a class="ma-quick-notice" href="#' + path + '" data-ma-action="open-work-notice" data-id="' +
+        esc(item.id) + '">' + icon(payment ? 'card' : 'calendar') + '<span>' + (payment ? 'Báo đã chuyển cọc' : 'Lịch mới') +
+        '<small>' + esc(row.customer) + '</small></span>' + icon('chevron') + '</a>';
+    }).join('');
+    return shell(quickTitle('Thông báo') + reminderControl() + (due || pending ? '<div class="ma-quick-list">' + due + pending + '</div>'
+      : '<p class="ma-quick-empty">Bạn đã xem hết thông báo.</p>') +
+      '<button class="ma-btn ma-quick-logout" data-action="admin-logout">Đăng xuất</button>',
+      { home: true, active: 'schedule' });
+  }
+
+  function quickCustomerRows(query) {
+    const fold = value => String(value || '').toLocaleLowerCase('vi').normalize('NFD').replace(/\p{M}/gu, '').replace(/đ/g, 'd');
+    const keyword = fold(query).trim();
+    const rows = (state().customers || []).filter(row => fold(row.name + ' ' + row.phone).includes(keyword));
+    if (!rows.length) return '<p class="ma-quick-empty">Không tìm thấy khách.</p>';
+    return rows.map(row => '<a class="ma-quick-notice" href="#/admin/customers/' + encodeURIComponent(row.id) + '">' +
+      icon('user') + '<span><b>' + esc(row.name) + '</b><small>' + esc(row.phone) + '</small></span>' + icon('chevron') + '</a>').join('');
+  }
+
+  function quickCustomers(raw) {
+    const query = queryOf(raw).get('q') || '';
+    return shell(quickTitle('Khách') + '<form data-ma-form="quick-customer-search"><label class="ma-search">' +
+      icon('search') + '<input name="q" type="search" value="' + esc(query) + '" placeholder="Tên hoặc số điện thoại" ' +
+      'aria-label="Tìm khách theo tên hoặc số điện thoại" autocomplete="off"></label></form>' +
+      '<div class="ma-quick-list" data-quick-customers>' + quickCustomerRows(query) + '</div>', { home: true, active: 'customers' });
+  }
+
+  function quickCustomer(id) {
+    const customer = (state().customers || []).find(row => String(row.id) === id);
+    if (!customer) return notFound('Không tìm thấy khách hàng', '/admin/customers');
+    const phoneKey = value => {
+      const digits = String(value || '').replace(/\D/g, '');
+      return /^(?:84|0)([35789]\d{8})$/.exec(digits)?.[1] || digits;
+    };
+    const phone = phoneKey(customer.phone);
+    const history = phone ? sortedAppointments().filter(row => phoneKey(row.phone) === phone).reverse() : [];
+    const contact = '<div class="ma-quick-details">' +
+      (customer.phone ? '<a href="tel:' + esc(customer.phone) + '">' + esc(customer.phone) + ' · Gọi khách</a>' : '') +
+      (customer.email ? '<p>' + esc(customer.email) + '</p>' : '') +
+      (customer.note ? '<p>' + esc(customer.note) + '</p>' : '') + '</div>';
+    return shell(quickTitle(esc(customer.name)) + contact + '<div class="ma-quick-heading ma-customer-history"><h2>Lịch hẹn</h2></div>' +
+      '<div class="ma-quick-list">' + (quickRows(history) || '<p class="ma-quick-empty">Chưa có lịch hẹn.</p>') + '</div>',
+      { title: 'Khách', back: '#/admin/customers', active: 'customers' });
+  }
+
+  function renderIPhone(raw) {
+    const path = pathOf(raw);
+    const detail = /^\/admin\/(appointments|payments)\/([^/]+)(?:\/reconcile)?$/.exec(path);
+    if (detail) return quickAppointment(appointment(detail[2]), detail[1] === 'payments');
+    if (path === '/admin/appointments') return reviewQueue(false);
+    if (path === '/admin/payments') return reviewQueue(true);
+    const customerPath = /^\/admin\/customers\/([^/]+)$/.exec(path);
+    if (customerPath) return quickCustomer(customerPath[1]);
+    if (path === '/admin/customers') return quickCustomers(raw);
+    if (path === '/admin/notifications' || path === '/admin/account') return workNotices();
+    return workAgenda(raw);
+  }
+
   function notificationBell() {
-    const unread=(state().notifications||[]).filter(row=>row.status==='unread').length;
+    const rows = isIPhoneApp() ? quickNotices() : (state().notifications || []);
+    const unread = rows.filter(row => row.status === 'unread').length + (isIPhoneApp() ? dueReminders().length : 0);
     return '<a class="ma-icon-btn ma-bell" href="#/admin/notifications" aria-label="Thông báo, '+unread+' chưa đọc">'+icon('bell')+(unread?'<b class="ma-notice-count">'+(unread>99?'99+':unread)+'</b>':'')+'</a>';
   }
 
   function top(title = '', back = '', home = false) {
-    const tools = `<div class="ma-top-tools"><a class="ma-all-functions" href="#/admin/menu" aria-label="Tất cả chức năng">Tất cả</a>${notificationBell()}</div>`;
-    if (home) return `<header class="ma-top ma-home"><a class="ma-brand" href="#/admin">HOÀN <small>ADMIN MOBILE</small></a>${tools}</header>`;
+    const shortcut = isIPhoneApp() ? '' : '<a class="ma-all-functions" href="#/admin/menu" aria-label="Tất cả chức năng">Tất cả</a>';
+    const tools = `<div class="ma-top-tools">${shortcut}${notificationBell()}</div>`;
+    if (home) return `<header class="ma-top ma-home"><a class="ma-brand" href="#/admin">HOÀN${isIPhoneApp() ? '' : ' <small>ADMIN MOBILE</small>'}</a>${tools}</header>`;
     return `<header class="ma-top"><a class="ma-icon-btn" href="${back || '#/admin'}" aria-label="Quay lại">${icon('back')}</a><div class="ma-top-title">${esc(title)}</div>${tools}</header>`;
   }
 
   function bottom(active = 'overview') {
-    const links = [
+    const links = isIPhoneApp() ? [
+      ['schedule','calendar','Lịch làm','/admin'],
+      ['appointments','check','Duyệt lịch','/admin/appointments'],
+      ['payments','card','Duyệt cọc','/admin/payments'],
+      ['customers','user','Khách','/admin/customers']
+    ] : [
       ['overview','home','Tổng quan','/admin'],
       ['appointments','calendar','Lịch hẹn','/admin/appointments'],
       ['payments','card','Tiền cọc','/admin/payments'],
       ['schedule','calendar','Lịch làm việc','/admin/schedule'],
       ['customers','user','Khách','/admin/customers']
     ];
-    return `<nav class="ma-bottom" aria-label="Điều hướng quản trị">${links.map(([key,ico,label,path]) => `<a class="${active === key ? 'active' : ''}" href="#${path}">${icon(ico)}<span>${label}</span></a>`).join('')}</nav>`;
+    return `<nav class="ma-bottom${isIPhoneApp() ? ' ma-quick-bottom' : ''}" aria-label="Điều hướng quản trị">${links.map(([key,ico,label,path]) => `<a class="${active === key ? 'active' : ''}" href="#${path}">${icon(ico)}<span>${label}</span></a>`).join('')}</nav>`;
   }
 
   function shell(content, options = {}) {
@@ -505,6 +706,37 @@
     const action=el.dataset.maAction; event.preventDefault();
     try {
       if(action==='finance-record'){go('/admin/payments?q='+encodeURIComponent(el.dataset.code||''));return;}
+      if (isIPhoneApp() && action === 'enable-work-reminders') {
+        reminderBridge()?.postMessage({ action: 'enable' });
+        return;
+      }
+      if (isIPhoneApp() && action === 'review-booking') {
+        const cancelled = el.dataset.status === 'cancelled';
+        if (cancelled && !window.confirm('Từ chối lịch hẹn này?')) return;
+        el.disabled = true;
+        try {
+          await window.HoanAdminAuth.request({
+            action: 'updateAppointment', code: el.dataset.code, status: el.dataset.status, expectedUpdatedAt: el.dataset.version,
+          });
+          await window.HoanAdminAuth.reload();
+          toast(cancelled ? 'Đã từ chối lịch.' : 'Đã duyệt lịch.');
+          go('/admin/appointments');
+        } catch (error) {
+          if (error.status === 409) {
+            await window.HoanAdminAuth.reload();
+            refresh();
+          }
+          throw error;
+        } finally { el.disabled = false; }
+        return;
+      }
+      if (isIPhoneApp() && action === 'open-work-notice') {
+        try {
+          await window.HoanAdminAuth.request({ action: 'markNotificationsRead', id: el.dataset.id });
+          await window.HoanAdminAuth.reload();
+        } finally { go(el.hash); }
+        return;
+      }
       if(action==='toggle'){ el.classList.toggle('on'); return; }
       if(action==='toggle-service'){
         const s=(state().services || []).find(item => item.id === el.dataset.id);
@@ -547,6 +779,24 @@
     const kind=form.dataset.maForm, data=Object.fromEntries(new FormData(form));
     const submit=form.querySelector('[type="submit"]'); if(submit) submit.disabled=true;
     try {
+      if (kind === 'approve-deposit') {
+        const occurredAt = data.occurredAt ? data.occurredAt + ':00+07:00' : '';
+        const payload = {
+          action: 'recordPayment', kind: 'deposit', code: form.dataset.code,
+          amount: data.amount, method: data.method, reference: data.method === 'bank' ? data.reference : '', occurredAt,
+          idempotencyKey: form.dataset.requestId, confirmAppointment: true, depositReportVersion: form.dataset.version,
+        };
+        await window.HoanAdminAuth.request(payload);
+        await window.HoanAdminAuth.reload();
+        toast('Đã ghi nhận tiền cọc.');
+        go('/admin/payments');
+        return;
+      }
+      if (kind === 'quick-customer-search') {
+        const query = String(data.q || '').trim();
+        go('/admin/customers' + (query ? '?q=' + encodeURIComponent(query) : ''));
+        return;
+      }
       if(kind==='support-search'){const query=queryOf(location.hash);query.set('q',data.q || '');query.set('tab','support');go('/admin/customers?' + query);return;}
       if(kind==='appointment-search'){ const query=queryOf(location.hash); query.set('q',data.q || ''); go('/admin/appointments?' + query); return; }
       if(kind==='new-appointment'){
@@ -600,6 +850,22 @@
     finally { if(submit) submit.disabled=false; }
   },true);
 
+  document.addEventListener('change', event => {
+    const target = event.target;
+    if (target.name !== 'method' || target.form?.dataset.maForm !== 'approve-deposit') return;
+    const reference = target.form.querySelector('[data-deposit-reference]');
+    reference.hidden = target.value === 'cash';
+    reference.querySelector('input').disabled = target.value === 'cash';
+  });
+
+  document.addEventListener('input', event => {
+    const field = event.target;
+    if (field.name === 'q' && field.form?.dataset.maForm === 'quick-customer-search') {
+      const results = $('[data-quick-customers]');
+      if (results) results.innerHTML = quickCustomerRows(field.value);
+    }
+  });
+
   window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); window.__hoanInstallPrompt=event; });
   const isForcedMobile = () => {
     try {
@@ -616,5 +882,8 @@
   let mobile = isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches;
   window.addEventListener('resize',() => { const next=isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches; if(next!==mobile){ mobile=next; refresh(); } });
 
-  window.HoanMobileAdmin = { matches:() => isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches, render, refresh, workspace };
+  window.HoanMobileAdmin = {
+    matches:() => isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches,
+    render, refresh, workspace, isIPhoneApp, renderIPhone, syncWorkReminders, setReminderPermission
+  };
 })();

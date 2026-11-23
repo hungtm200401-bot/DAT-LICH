@@ -67,6 +67,11 @@ jobs:
           HOAN_IOS_TEST_ADMIN_KEY="$(node -p "require('node:crypto').randomBytes(24).toString('hex')")"
           export HOAN_IOS_TEST_ADMIN_KEY
           printf 'ADMIN_TOKEN=%s\n' "$HOAN_IOS_TEST_ADMIN_KEY" > .dev.vars
+          HOAN_IOS_TEST_WORK_REMINDER="$(node -p 'Math.floor((Date.now() + 86400000) / 60000) * 60000')"
+          export HOAN_IOS_TEST_WORK_REMINDER
+          read -r appointment_date appointment_time < <(node -e 'const local = new Date(Number(process.env.HOAN_IOS_TEST_WORK_REMINDER) + 86400000 + 7 * 3600000).toISOString(); console.log(local.slice(0,10), local.slice(11,16));')
+          node node_modules/wrangler/bin/wrangler.js d1 execute site-creator-d1 --config wrangler.local.json --local --command \
+            "INSERT INTO appointments (code, customer, phone, service_id, date, time, total, status) VALUES ('HMA-CI-REMINDER', 'Lịch kiểm tra', '0900000000', 'personal', '${appointment_date}', '${appointment_time}', 450000, 'confirmed');"
           node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort > outputs/hoan-admin-app/ios/test-server.log 2>&1 &
           SERVER_PID=$!
           trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT

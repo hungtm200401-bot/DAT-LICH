@@ -104,12 +104,13 @@ while IFS=$'\t' read -r profile model device_type runtime; do
   echo "Đang kiểm tra $model ($runtime)"
   run_simctl 210 bootstatus "$id" -b
   echo "Đang cài app trên $model"
-  run_simctl 90 install "$id" "$app"
+  run_simctl 150 install "$id" "$app"
   container="$(run_simctl 30 get_app_container "$id" "$bundle_id" data)"
   report="$container/Library/Caches/hoan-viewport.json"
   echo "Đang mở app trên $model"
   test_key="${HOAN_IOS_TEST_ADMIN_KEY:-}"
   if ! SIMCTL_CHILD_HOAN_IOS_TEST_LOOPBACK=1 SIMCTL_CHILD_HOAN_IOS_TEST_ADMIN_KEY="$test_key" \
+    SIMCTL_CHILD_HOAN_IOS_TEST_WORK_REMINDER="${HOAN_IOS_TEST_WORK_REMINDER:-}" \
     run_simctl 120 launch "$id" "$bundle_id"; then
     run_simctl 30 io "$id" screenshot "$output/$profile-failed.png" || true
     exit 1
@@ -123,11 +124,11 @@ while IFS=$'\t' read -r profile model device_type runtime; do
     echo "Không nhận được kết quả đo giao diện từ $model." >&2
     exit 1
   fi
-  python3 - "$report" "$output/$profile.json" "$model" "$runtime" "${test_key:+1}" <<'PY'
+  python3 - "$report" "$output/$profile.json" "$model" "$runtime" "${test_key:+1}" "${HOAN_IOS_TEST_WORK_REMINDER:-}" <<'PY'
 import json
 import sys
 
-source_path, output_path, model, runtime, check_dashboard = sys.argv[1:]
+source_path, output_path, model, runtime, check_dashboard, expected_reminder = sys.argv[1:]
 with open(source_path, encoding='utf-8') as source:
     report = json.load(source)
 report.update(model=model, runtime=runtime)
@@ -141,8 +142,13 @@ if check_dashboard:
             and report['headerInset'] >= report['safeTop'] - 1
             and report['tabsInset'] >= report['safeBottom'] - 1):
         sys.exit('The dashboard bars did not cover the edges and respect the safe area')
+    if report['tabs'] != ['Lịch làm', 'Duyệt lịch', 'Duyệt cọc', 'Khách']:
+        sys.exit('The iPhone app did not show the four work tabs')
 elif not report['login']:
     sys.exit('Unexpected iPhone login layout')
+if expected_reminder and (report.get('pendingWorkReminders') != 1
+                          or abs(report.get('scheduledAt', 0) - int(expected_reminder)) >= 1000):
+    sys.exit('The iPhone did not schedule a local notification 24 hours before the fixture')
 with open(output_path, 'w', encoding='utf-8') as output:
     json.dump(report, output, ensure_ascii=False, indent=2)
     output.write('\n')

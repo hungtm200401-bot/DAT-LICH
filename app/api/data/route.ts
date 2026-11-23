@@ -11,6 +11,7 @@ import { dataErrorMessage } from "../../../lib/data-errors.mjs";
 import { bookingTimeError, validBookingDateTime } from "../../../lib/booking-validation.mjs";
 import { approvedBookingPhone, bookingPhoneRequired, bookingSmsEnabled, handleBookingSms } from "../../../lib/booking-sms";
 import { bookingGoogleEnabled, handleBookingGoogle } from "../../../lib/booking-google";
+import { workReminders } from "../../../lib/work-reminders";
 
 const initialServices = [
   { id: "personal", name: "Trang điểm cá nhân", duration: 60, price: 450000, description: "Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.", enabled: true, contact: false, sortOrder: 1 },
@@ -112,6 +113,7 @@ async function snapshot() {
     services: serviceRows,
     appointments: appointmentRows.map(appointment => ({...appointment,finance:summarizePayments(appointment,paymentRows)})),
     paymentTransactions: paymentRows,
+    workReminders: workReminders(appointmentRows),
     customers: customerRows,
     scheduleSlots: slotRows,
     brand: parseJson(content.brand, initialBrand),
@@ -377,6 +379,10 @@ export async function POST(request: Request) {
         return field ? formError({ [field]: messageFor(error) }) : Response.json({ error: messageFor(error) }, { status: 400, headers: privateHeaders });
       }
       const code=text(payload.code);
+      const reviewVersion = payload.depositReportVersion === undefined ? undefined : text(payload.depositReportVersion);
+      if (reviewVersion !== undefined && (!reviewVersion || reviewVersion.length > 64 || values.kind !== "deposit")) {
+        return Response.json({ error: "Yêu cầu duyệt cọc không hợp lệ." }, { status: 400, headers: privateHeaders });
+      }
       const [current]=await db.select().from(appointments).where(eq(appointments.code,code)).limit(1);
       if(!current)return Response.json({error:"Không tìm thấy lịch hẹn."},{status:404});
       const existing=async()=>{const [row]=await db.select().from(paymentTransactions).where(eq(paymentTransactions.idempotencyKey,values.idempotencyKey)).limit(1);return row;};
@@ -396,7 +402,27 @@ export async function POST(request: Request) {
         }
         if(!transaction){
           try{
-            [transaction]=await db.insert(paymentTransactions).values({id:'TX-'+crypto.randomUUID(),appointmentCode:code,...values,createdAt:new Date().toISOString()}).returning();
+            const id = 'TX-' + crypto.randomUUID();
+            const createdAt = new Date().toISOString();
+            const insert = db.insert(paymentTransactions);
+            const rows = reviewVersion === undefined
+              ? await insert.values({ id, appointmentCode: code, ...values, createdAt }).returning()
+              : await insert.select(sql`
+                  SELECT ${id}, code, ${values.kind}, ${values.amount}, ${values.method}, ${values.reference}, ${values.note},
+                    ${values.occurredAt}, ${createdAt}, ${values.idempotencyKey}, ${Number(values.confirmAppointment)}
+                  FROM appointments
+                  WHERE code = ${code} AND archived_at IS NULL AND status IN ('pending', 'confirmed')
+                    AND updated_at = ${reviewVersion}
+                    AND (payment_status = 'pending_verification' OR (
+                      status = 'pending' AND payment_status = 'received' AND deposit > 0 AND deposit < MIN(total,
+                        COALESCE((SELECT CAST(json_extract(value, '$.depositRequired') AS INTEGER) FROM site_content WHERE key = 'booking:' || appointments.code),
+                          (SELECT CAST(json_extract(value, '$.deposit') AS INTEGER) FROM site_content WHERE key = 'settings'), 200000))
+                    ))
+                `).returning();
+            [transaction] = rows;
+            if (!transaction) {
+              return Response.json({ error: "Báo cọc đã thay đổi. Mở lại danh sách để kiểm tra." }, { status: 409, headers: privateHeaders });
+            }
             createdTransaction=true;
           }catch(error){
             // Concurrent retries share the same idempotency key. The trigger and
@@ -415,7 +441,14 @@ export async function POST(request: Request) {
     if (action === "updateAppointment") {
       const code = text(payload.code);
       if (!code) return Response.json({ error: "Thiếu mã lịch hẹn." }, { status: 400 });
+      const reviewVersion = payload.expectedUpdatedAt === undefined ? undefined : text(payload.expectedUpdatedAt);
+      if (reviewVersion !== undefined && (!reviewVersion || reviewVersion.length > 64)) {
+        return Response.json({ error: "Hồ sơ duyệt không hợp lệ." }, { status: 400, headers: privateHeaders });
+      }
       const allowedStatus = ["pending", "confirmed", "completed", "cancelled"];
+      if (reviewVersion !== undefined && !["confirmed", "cancelled"].includes(text(payload.status))) {
+        return Response.json({ error: "Thao tác duyệt không hợp lệ." }, { status: 400, headers: privateHeaders });
+      }
       const changes: Record<string, string | number> = { updatedAt: new Date().toISOString() };
       if (allowedStatus.includes(text(payload.status))) changes.status = text(payload.status);
       if (/^\d{4}-\d{2}-\d{2}$/.test(text(payload.date))) changes.date = text(payload.date);
@@ -472,7 +505,13 @@ export async function POST(request: Request) {
       }
       if (payload.refundNote !== undefined) changes.refundNote = text(payload.refundNote).slice(0, 1000);
       if (nextStatus === "cancelled" && current.deposit > 0 && !payload.refundStatus) changes.refundStatus = "pending";
-      const [updated] = await db.update(appointments).set(changes).where(and(eq(appointments.code, code), isNull(appointments.archivedAt))).returning();
+      const [updated] = await db.update(appointments).set(changes).where(and(
+        eq(appointments.code, code), isNull(appointments.archivedAt),
+        reviewVersion === undefined ? undefined : and(eq(appointments.status, "pending"), eq(appointments.updatedAt, reviewVersion))
+      )).returning();
+      if (!updated && reviewVersion !== undefined) {
+        return Response.json({ error: "Lịch đã thay đổi. Mở lại để kiểm tra." }, { status: 409, headers: privateHeaders });
+      }
       if (!updated) return Response.json({ error: "Không tìm thấy lịch hẹn." }, { status: 404 });
       if (nextStatus && nextStatus !== current.status) {
         const statusLabels: Record<string, string> = { pending: "chờ xác nhận", confirmed: "đã xác nhận", completed: "đã hoàn thành", cancelled: "đã hủy" };

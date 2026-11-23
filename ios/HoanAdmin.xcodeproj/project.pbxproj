@@ -10,6 +10,7 @@
 		A0000000000000000000000D /* AdminServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000009 /* AdminServer.swift */; };
 		A0000000000000000000000E /* AdminViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000A /* AdminViewController.swift */; };
 		A0000000000000000000000F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000B /* Assets.xcassets */; };
+		A0000000000000000000001C /* WorkReminderScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001B /* WorkReminderScheduler.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -20,6 +21,7 @@
 		A0000000000000000000000A /* AdminViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminViewController.swift; sourceTree = "<group>"; };
 		A0000000000000000000000B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A00000000000000000000019 /* HoanAdmin.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = HoanAdmin.xcconfig; sourceTree = "<group>"; };
+		A0000000000000000000001B /* WorkReminderScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkReminderScheduler.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -53,6 +55,7 @@
 				A00000000000000000000008 /* AppDelegate.swift */,
 				A00000000000000000000009 /* AdminServer.swift */,
 				A0000000000000000000000A /* AdminViewController.swift */,
+				A0000000000000000000001B /* WorkReminderScheduler.swift */,
 				A00000000000000000000007 /* Info.plist */,
 				A0000000000000000000000B /* Assets.xcassets */,
 			);
@@ -117,6 +120,7 @@
 				A0000000000000000000000C /* AppDelegate.swift in Sources */,
 				A0000000000000000000000D /* AdminServer.swift in Sources */,
 				A0000000000000000000000E /* AdminViewController.swift in Sources */,
+				A0000000000000000000001C /* WorkReminderScheduler.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

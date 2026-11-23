@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hoan-makeup-admin-web-app-parity-2';
+const CACHE_NAME = 'hoan-makeup-iphone-work-reminders-1';
 const STATIC_ASSETS = [
   '/admin-security.css?v=1.2',
   '/admin-settings.js?v=1.0',
@@ -13,10 +13,10 @@ const STATIC_ASSETS = [
   '/fonts/tinos-Tinos-Regular.ttf',
   '/styles.css?v=2.5',
   '/couture.css?v=143.9',
-  '/mobile-admin.css?v=1.4',
+  '/mobile-admin.css?v=1.5',
   '/scroll-enhancements.js?v=1.4',
-  '/mobile-admin.js?v=2.7',
-  '/app.js?v=189.11',
+  '/mobile-admin.js?v=2.8',
+  '/app.js?v=189.12',
   '/client-bootstrap.js?v=5.23',
   '/app-version.json',
   '/maps-settings.js?v=3.0',
