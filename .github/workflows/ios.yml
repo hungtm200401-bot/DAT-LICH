@@ -64,6 +64,9 @@ jobs:
           HOAN_SIMULATOR_PROFILE: ${{ matrix.profile }}
         run: |
           mkdir -p outputs/hoan-admin-app/ios
+          HOAN_IOS_TEST_ADMIN_KEY="$(node -p "require('node:crypto').randomBytes(24).toString('hex')")"
+          export HOAN_IOS_TEST_ADMIN_KEY
+          printf 'ADMIN_TOKEN=%s\n' "$HOAN_IOS_TEST_ADMIN_KEY" > .dev.vars
           node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort > outputs/hoan-admin-app/ios/test-server.log 2>&1 &
           SERVER_PID=$!
           trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT

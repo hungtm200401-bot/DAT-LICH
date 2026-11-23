@@ -3,14 +3,27 @@ import WebKit
 
 final class AdminViewController: UIViewController {
     private let server = AdminServer.current
-    private let browser = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+    private lazy var browser: WKWebView = {
+        let configuration = WKWebViewConfiguration()
+        let scripts = configuration.userContentController
+        scripts.addUserScript(WKUserScript(source: Self.edgeLayout, injectionTime: .atDocumentEnd,
+                                           forMainFrameOnly: true, in: .defaultClient))
+        scripts.add(StatusBarListener(owner: self), contentWorld: .defaultClient, name: "hoanStatusBar")
+        return WKWebView(frame: .zero, configuration: configuration)
+    }()
     private let progress = UIActivityIndicatorView(style: .large)
     private let status = UILabel()
     private let retry = UIButton(type: .system)
+    private var hasDarkHeader = false
     private var downloadDestinations: [ObjectIdentifier: URL] = [:]
+
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        hasDarkHeader ? .lightContent : .darkContent
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        overrideUserInterfaceStyle = .light
         view.backgroundColor = .systemBackground
 
         browser.translatesAutoresizingMaskIntoConstraints = false
@@ -43,10 +56,10 @@ final class AdminViewController: UIViewController {
 
         let safeArea = view.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
-            browser.topAnchor.constraint(equalTo: safeArea.topAnchor),
-            browser.bottomAnchor.constraint(equalTo: safeArea.bottomAnchor),
-            browser.leadingAnchor.constraint(equalTo: safeArea.leadingAnchor),
-            browser.trailingAnchor.constraint(equalTo: safeArea.trailingAnchor),
+            browser.topAnchor.constraint(equalTo: view.topAnchor),
+            browser.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            browser.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            browser.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             stack.centerXAnchor.constraint(equalTo: safeArea.centerXAnchor),
             stack.centerYAnchor.constraint(equalTo: safeArea.centerYAnchor),
             stack.leadingAnchor.constraint(greaterThanOrEqualTo: safeArea.leadingAnchor, constant: 24),
@@ -56,6 +69,7 @@ final class AdminViewController: UIViewController {
     }
 
     @objc private func openAdmin() {
+        updateStatusBar(darkHeader: false)
         browser.isHidden = true
         retry.isHidden = true
         status.isHidden = true
@@ -79,6 +93,7 @@ final class AdminViewController: UIViewController {
     }
 
     private func showFailure(_ message: String) {
+        updateStatusBar(darkHeader: false)
         progress.stopAnimating()
         browser.isHidden = true
         status.text = message
@@ -86,6 +101,57 @@ final class AdminViewController: UIViewController {
         retry.isHidden = server == nil
         UIAccessibility.post(notification: .layoutChanged, argument: status)
     }
+
+    private func updateStatusBar(darkHeader: Bool) {
+        guard hasDarkHeader != darkHeader else { return }
+        hasDarkHeader = darkHeader
+        setNeedsStatusBarAppearanceUpdate()
+    }
+
+    private final class StatusBarListener: NSObject, WKScriptMessageHandler {
+        weak var owner: AdminViewController?
+
+        init(owner: AdminViewController) {
+            self.owner = owner
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard let owner, message.frameInfo.isMainFrame, let url = message.frameInfo.request.url,
+                  owner.server?.contains(url) == true, let dark = message.body as? Bool else { return }
+            owner.updateStatusBar(darkHeader: dark)
+        }
+    }
+
+    private static let edgeLayout = """
+    (() => {
+      const root = document.documentElement;
+      root.classList.add('hoan-iphone');
+      const style = document.createElement('style');
+      style.textContent = [
+        'html.hoan-iphone { --ios-top: env(safe-area-inset-top); --ios-right: env(safe-area-inset-right);',
+        '--ios-bottom: env(safe-area-inset-bottom); --ios-left: env(safe-area-inset-left); }',
+        '.hoan-iphone body:not(:has(.ma-app)) { padding: var(--ios-top) var(--ios-right) var(--ios-bottom) var(--ios-left); }',
+        '.hoan-iphone .ma-app { box-sizing: border-box; padding-bottom: calc(76px + var(--ios-bottom)); }',
+        '.hoan-iphone .ma-app > .ma-top { box-sizing: border-box; height: calc(66px + var(--ios-top));',
+        'padding: var(--ios-top) calc(16px + var(--ios-right)) 0 calc(16px + var(--ios-left)); }',
+        '.hoan-iphone .ma-app > .ma-main { width: auto; margin-right: var(--ios-right); margin-left: var(--ios-left); }',
+        '.hoan-iphone .ma-app > .ma-bottom { box-sizing: border-box; height: calc(67px + var(--ios-bottom));',
+        'padding: 0 var(--ios-right) var(--ios-bottom) var(--ios-left); }'
+      ].join(' ');
+      document.head.append(style);
+      let previous;
+      const updateStatusBar = () => {
+        const dark = Boolean(document.querySelector('.ma-app > .ma-top'));
+        if (dark === previous) return;
+        previous = dark;
+        window.webkit.messageHandlers.hoanStatusBar.postMessage(dark);
+      };
+      new MutationObserver(updateStatusBar).observe(document.querySelector('#app') || document.body, {
+        childList: true, subtree: true
+      });
+      updateStatusBar();
+    })();
+    """
 
     private func pageFailed(_ error: Error) {
         let failure = error as NSError
@@ -159,7 +225,7 @@ extension AdminViewController: WKNavigationDelegate {
         browser.isHidden = false
         #if DEBUG && targetEnvironment(simulator)
         if ProcessInfo.processInfo.environment["HOAN_IOS_TEST_LOOPBACK"] == "1" {
-            recordLoginViewport(webView)
+            recordViewport(webView)
         }
         #endif
     }
@@ -258,23 +324,50 @@ extension AdminViewController: WKDownloadDelegate {
 
 #if DEBUG && targetEnvironment(simulator)
 private extension AdminViewController {
-    func recordLoginViewport(_ webView: WKWebView, remaining: Int = 40) {
+    func recordViewport(_ webView: WKWebView, remaining: Int = 160) {
+        let key = ProcessInfo.processInfo.environment["HOAN_IOS_TEST_ADMIN_KEY"] ?? ""
+        let keyJSON = String(decoding: (try? JSONEncoder().encode(key)) ?? Data([34, 34]), as: UTF8.self)
         let script = """
         (() => {
-          const form = document.querySelector('#main input[type=password]');
+          if (!location.hash.startsWith('#/admin') || !document.documentElement.classList.contains('hoan-iphone')) return null;
+          const header = document.querySelector('.ma-app > .ma-top');
+          const tabs = document.querySelector('.ma-app > .ma-bottom');
+          const password = document.querySelector('#main input[type=password]');
+          const key = \(keyJSON);
+          if (key && !(header && tabs)) {
+            if (password?.form && !window.hoanSimulatorLoginSubmitted) {
+              window.hoanSimulatorLoginSubmitted = true;
+              password.value = key;
+              password.form.requestSubmit();
+            }
+            return null;
+          }
           const compact = window.HoanMobileAdmin?.matches();
-          if (!location.hash.startsWith('#/admin') || !form || typeof compact !== 'boolean') return null;
-          return JSON.stringify({width: innerWidth, documentWidth: document.documentElement.scrollWidth, compact, login: true});
+          if (typeof compact !== 'boolean' || !key && !password) return null;
+          return JSON.stringify({
+            width: innerWidth, height: innerHeight, documentWidth: document.documentElement.scrollWidth,
+            compact, login: Boolean(password), dashboard: Boolean(header && tabs),
+            headerTop: header?.getBoundingClientRect().top,
+            headerInset: header && parseFloat(getComputedStyle(header).paddingTop),
+            tabsBottom: tabs?.getBoundingClientRect().bottom,
+            tabsInset: tabs && parseFloat(getComputedStyle(tabs).paddingBottom)
+          });
         })();
         """
         webView.evaluateJavaScript(script) { [weak self, weak webView] result, _ in
-            guard let webView else { return }
+            guard let self, let webView else { return }
             if let json = result as? String,
+               var report = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
                let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
-                try? Data(json.utf8).write(to: directory.appendingPathComponent("hoan-login-viewport.json"), options: .atomic)
+                report["fillsWindow"] = webView.frame == self.view.bounds
+                report["safeTop"] = self.view.safeAreaInsets.top
+                report["safeBottom"] = self.view.safeAreaInsets.bottom
+                if let data = try? JSONSerialization.data(withJSONObject: report) {
+                    try? data.write(to: directory.appendingPathComponent("hoan-viewport.json"), options: .atomic)
+                }
             } else if remaining > 0 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    self?.recordLoginViewport(webView, remaining: remaining - 1)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self, weak webView] in
+                    if let webView { self?.recordViewport(webView, remaining: remaining - 1) }
                 }
             }
         }

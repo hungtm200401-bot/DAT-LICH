@@ -106,9 +106,11 @@ while IFS=$'\t' read -r profile model device_type runtime; do
   echo "Đang cài app trên $model"
   run_simctl 90 install "$id" "$app"
   container="$(run_simctl 30 get_app_container "$id" "$bundle_id" data)"
-  report="$container/Library/Caches/hoan-login-viewport.json"
+  report="$container/Library/Caches/hoan-viewport.json"
   echo "Đang mở app trên $model"
-  if ! SIMCTL_CHILD_HOAN_IOS_TEST_LOOPBACK=1 run_simctl 120 launch "$id" "$bundle_id"; then
+  test_key="${HOAN_IOS_TEST_ADMIN_KEY:-}"
+  if ! SIMCTL_CHILD_HOAN_IOS_TEST_LOOPBACK=1 SIMCTL_CHILD_HOAN_IOS_TEST_ADMIN_KEY="$test_key" \
+    run_simctl 120 launch "$id" "$bundle_id"; then
     run_simctl 30 io "$id" screenshot "$output/$profile-failed.png" || true
     exit 1
   fi
@@ -118,20 +120,28 @@ while IFS=$'\t' read -r profile model device_type runtime; do
   done
   if [[ ! -s "$report" ]]; then
     run_simctl 30 io "$id" screenshot "$output/$profile-failed.png"
-    echo "Không nhận được kết quả tải trang đăng nhập từ $model." >&2
+    echo "Không nhận được kết quả đo giao diện từ $model." >&2
     exit 1
   fi
-  python3 - "$report" "$output/$profile.json" "$model" "$runtime" <<'PY'
+  python3 - "$report" "$output/$profile.json" "$model" "$runtime" "${test_key:+1}" <<'PY'
 import json
 import sys
 
-source_path, output_path, model, runtime = sys.argv[1:]
+source_path, output_path, model, runtime, check_dashboard = sys.argv[1:]
 with open(source_path, encoding='utf-8') as source:
     report = json.load(source)
 report.update(model=model, runtime=runtime)
 print(json.dumps(report, ensure_ascii=False))
-if not (report['login'] and report['compact'] and 320 <= report['width'] <= 500
+if not (report['fillsWindow'] and report['compact'] and 320 <= report['width'] <= 500
         and report['documentWidth'] <= report['width'] + 1):
+    sys.exit('The web view did not fill the iPhone display')
+if check_dashboard:
+    if not (report['dashboard'] and abs(report['headerTop']) <= 1
+            and abs(report['tabsBottom'] - report['height']) <= 1
+            and report['headerInset'] >= report['safeTop'] - 1
+            and report['tabsInset'] >= report['safeBottom'] - 1):
+        sys.exit('The dashboard bars did not cover the edges and respect the safe area')
+elif not report['login']:
     sys.exit('Unexpected iPhone login layout')
 with open(output_path, 'w', encoding='utf-8') as output:
     json.dump(report, output, ensure_ascii=False, indent=2)
