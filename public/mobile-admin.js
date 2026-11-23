@@ -66,8 +66,9 @@
   }
 
   function top(title = '', back = '', home = false) {
-    if (home) return `<header class="ma-top ma-home"><a class="ma-brand" href="#/admin">HOÀN <small>ADMIN MOBILE</small></a>${notificationBell()}</header>`;
-    return `<header class="ma-top"><a class="ma-icon-btn" href="${back || '#/admin'}" aria-label="Quay lại">${icon('back')}</a><div class="ma-top-title">${esc(title)}</div>${notificationBell()}</header>`;
+    const tools = `<div class="ma-top-tools"><a class="ma-all-functions" href="#/admin/menu" aria-label="Tất cả chức năng">Tất cả</a>${notificationBell()}</div>`;
+    if (home) return `<header class="ma-top ma-home"><a class="ma-brand" href="#/admin">HOÀN <small>ADMIN MOBILE</small></a>${tools}</header>`;
+    return `<header class="ma-top"><a class="ma-icon-btn" href="${back || '#/admin'}" aria-label="Quay lại">${icon('back')}</a><div class="ma-top-title">${esc(title)}</div>${tools}</header>`;
   }
 
   function bottom(active = 'overview') {
@@ -82,7 +83,12 @@
   }
 
   function shell(content, options = {}) {
-    return `<div class="ma-app">${top(options.title, options.back, options.home)}<main id="main" class="ma-main ${options.flush ? 'ma-flush' : ''}">${content}</main>${options.nav === false ? '' : bottom(options.active)}</div>`;
+    const workspace = options.workspace || '';
+    return `<div class="ma-app${workspace ? ' admin-page ma-workspace' : ''}">${top(options.title, options.back, options.home)}<main id="main" class="ma-main ${options.flush ? 'ma-flush' : ''}${workspace ? ' admin-content' : ''}"${workspace ? ` data-admin-page="${esc(workspace)}"` : ''}>${content}</main>${options.nav === false ? '' : bottom(options.active)}</div>`;
+  }
+
+  function workspace(active, content) {
+    return shell(content, { home:true, workspace:active, active });
   }
 
   function button(label, href = '', kind = '', ico = '') {
@@ -441,12 +447,6 @@
     return `<div class="ma-login"><div class="ma-login-top"><span class="ma-brand">HOÀN</span></div><div class="ma-login-body"><div class="ma-alert">${icon('alert')}<span><b>Phiên đăng nhập đã hết hạn.</b><br>Vui lòng đăng nhập lại.</span></div><div class="ma-login-title"><h1>Đăng nhập quản trị</h1><p>HOÀN Admin Mobile</p></div><form novalidate class="ma-form" data-ma-form="login">${field('username','Tài khoản','text','',true,'Nhập tài khoản quản trị')}${field('password','Mật khẩu','password','',true,'Nhập mật khẩu')}<button class="ma-btn primary" type="submit">Đăng nhập</button></form><p style="text-align:center;color:#657083;margin-top:30px">${icon('lock')} &nbsp; Dành cho quản trị viên HOÀN</p></div></div>`;
   }
 
-  function utilityPage(path) {
-    const names={ promotions:'Mã ưu đãi', gallery:'Bộ sưu tập', content:'Nội dung website', reports:'Báo cáo', audit:'Nhật ký hoạt động', permissions:'Phân quyền', visitors:'Khách truy cập website' };
-    const key=path.split('/')[2], title=names[key] || 'Tài khoản & ứng dụng';
-    return shell(`<h1>${title}</h1><div class="ma-note">${icon('info')}<span>Mục này sử dụng bố cục quản trị rút gọn trên điện thoại. Bạn có thể tiếp tục thao tác ở bản desktop khi cần dữ liệu dạng bảng.</span></div>${settingsLink('bell','Trung tâm thông báo','/admin/notifications')}${settingsLink('calendar','Lịch hẹn','/admin/appointments')}${settingsLink('card','Tiền cọc','/admin/payments')}${settingsLink('sliders','Lịch làm việc','/admin/schedule')}${settingsLink('user','Tài khoản & ứng dụng','/admin/account')}`,{ title:'', back:'#/admin', active:'overview' });
-  }
-
   function notFound(title,back) { return shell(`<div class="ma-empty">${icon('info')}<h2>${title}</h2>${button('Quay lại',back,'primary')}</div>`,{ title:'', back:`#${back}`, nav:false }); }
 
   function render(raw) {
@@ -478,7 +478,7 @@
     if(path==='/admin/customers' || path==='/admin/requests') return customers(path==='/admin/requests' ? raw + (raw.includes('?') ? '&' : '?') + 'tab=support' : raw);
     if(parts[1]==='requests' && parts[2]) return requestDetail(decodeURIComponent(parts[2]));
     if(parts[1]==='customers' && parts[2]) return customerDetail(decodeURIComponent(parts[2]));
-    return utilityPage(path);
+    return '';
   }
 
   async function api(payload) {
@@ -616,5 +616,5 @@
   let mobile = isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches;
   window.addEventListener('resize',() => { const next=isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches; if(next!==mobile){ mobile=next; refresh(); } });
 
-  window.HoanMobileAdmin = { matches:() => isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches, render, refresh };
+  window.HoanMobileAdmin = { matches:() => isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches, render, refresh, workspace };
 })();

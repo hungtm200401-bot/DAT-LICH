@@ -8,8 +8,8 @@ export default function Home() {
       <div id="toast" className="toast" role="status" aria-live="polite" />
       <div id="modal-root" />
       <Script src="/scroll-enhancements.js?v=1.4" strategy="afterInteractive" />
-      <Script src="/mobile-admin.js?v=2.6" strategy="afterInteractive" />
-      <Script src="/app.js?v=189.9" strategy="afterInteractive" />
+      <Script src="/mobile-admin.js?v=2.7" strategy="afterInteractive" />
+      <Script src="/app.js?v=189.11" strategy="afterInteractive" />
     </>
   );
 }

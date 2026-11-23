@@ -262,6 +262,7 @@ export async function POST(request: Request) {
       "setScheduleSlot",
       "saveContent",
       "saveService",
+      "saveCustomer",
       "deleteService",
       "resolveRequest",
       "updateRequest",
@@ -716,6 +717,31 @@ export async function POST(request: Request) {
       await db.insert(siteContent).values({ key, value: JSON.stringify(payload.value) })
         .onConflictDoUpdate({ target: siteContent.key, set: { value: JSON.stringify(payload.value), updatedAt: new Date().toISOString() } });
       return Response.json({ ok: true });
+    }
+
+    if (action === "saveCustomer") {
+      const name = text(payload.name);
+      const note = text(payload.note);
+      const fields = payload.id === undefined ? contactErrors(payload, "name") : {};
+      if (!name) fields.name = "Vui lòng nhập họ và tên.";
+      else if (name.length > 120) fields.name = "Họ tên tối đa 120 ký tự.";
+      if (note.length > 1000) fields.note = "Ghi chú tối đa 1.000 ký tự.";
+      if (Object.keys(fields).length) return formError(fields);
+
+      const values = { name, note, updatedAt: new Date().toISOString() };
+      if (payload.id !== undefined) {
+        const id = Number(payload.id);
+        if (!Number.isSafeInteger(id) || id < 1) return formError({ name: "Hồ sơ khách hàng không hợp lệ." });
+        const [saved] = await db.update(customers).set(values).where(eq(customers.id, id)).returning();
+        if (!saved) return Response.json({ error: "Không tìm thấy khách hàng." }, { status: 404, headers: privateHeaders });
+        return Response.json({ customer: saved }, { headers: privateHeaders });
+      }
+
+      const [saved] = await db.insert(customers)
+        .values({ ...values, phone: normalizePhone(payload.phone), email: text(payload.email) })
+        .onConflictDoNothing({ target: customers.phone }).returning();
+      if (!saved) return formError({ phone: "Số điện thoại này đã có hồ sơ khách hàng." }, 409);
+      return Response.json({ customer: saved }, { status: 201, headers: privateHeaders });
     }
 
     if (action === "saveService") {

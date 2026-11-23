@@ -8,7 +8,7 @@
     // handlers to an already running legacy app. The version loader refreshes it.
     const existing = typeof document.getElementById === 'function' && document.getElementById('app');
     if (window.state && existing?.childElementCount) { window.__hoanAppBuild = 'legacy'; return; }
-    window.__hoanAppBuild = 'booking-location-2';
+    window.__hoanAppBuild = 'admin-web-app-parity-2';
   }
 
   // Guaranteed critical schedule styles injection (bulletproof against browser CSS caching)
@@ -485,6 +485,26 @@
       state.backendError = error.message;
       ensureScheduleSeedData();
       if (!silent && !isPreview) render();
+    }
+  }
+
+  let adminRefreshInProgress = false;
+  function adminIsEditing() {
+    const path = location.hash.split('?')[0];
+    return ['#/admin/content', '#/admin/content-pages', '#/admin/settings'].includes(path)
+      || Boolean(document.querySelector('#modal-root > *, .ma-modal-backdrop, #main [data-server-pending], #main form[data-admin-edited], #main :is(input, textarea, select, [contenteditable]):focus'));
+  }
+
+  async function refreshActiveAdmin(showStatus = false) {
+    if (!adminPath() || !state.adminAuthorized || document.hidden || adminIsEditing() || adminRefreshInProgress) return;
+    adminRefreshInProgress = true;
+    try {
+      await hydrateBackend(true);
+      if (!state.adminAuthorized || !adminPath() || adminIsEditing() || document.hidden) return;
+      if (!state.backendError) render();
+      if (showStatus) toast(state.backendError || 'Đã cập nhật dữ liệu quản trị.');
+    } finally {
+      adminRefreshInProgress = false;
     }
   }
 
@@ -2333,15 +2353,35 @@
     ['visitors','user','Khách truy cập website']
   ];
 
+  const adminGroups = [
+    ['VẬN HÀNH',['overview','appointments','schedule','requests']],
+    ['DỮ LIỆU',['services','customers','payments','promotions']],
+    ['NỘI DUNG',['gallery','content','notifications']],
+    ['HỆ THỐNG',['reports','permissions','audit','settings']],
+    ['KHÁCH TRUY CẬP',['visitors']]
+  ];
+
+  function adminLocalNotice() {
+    if (!['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) return '';
+    return '<p class="admin-local-notice">Bạn đang xem dữ liệu trên máy. <a href="https://hoan-makeup-artist.hoan-makeup.workers.dev/#/admin">Mở quản trị online dùng chung với app</a>.</p>';
+  }
+
+  function adminWorkspaceMenu() {
+    const menu = adminGroups.map(([title, keys]) => `<section><h2>${title}</h2><div class="ma-workspace-links">${keys.map(key => {
+      const [, symbol, label] = adminLinks.find(link => link[0] === key);
+      const href = key === 'overview' ? '#/admin' : '#/admin/' + key;
+      return `<a href="${href}">${icon(symbol)}<span>${label}</span></a>`;
+    }).join('')}</div></section>`).join('');
+    const search = `<label class="ma-search ma-workspace-search">${icon('search')}<input id="admin-global-search" type="search" aria-label="Tìm lịch hẹn, khách hàng hoặc giao dịch" placeholder="Tìm lịch, khách hoặc giao dịch" enterkeyhint="search"></label>`;
+    const footer = '<div class="ma-workspace-footer"><a class="btn btn-sm" href="#/">Xem website</a><button class="btn btn-sm" data-action="admin-logout">Đăng xuất</button></div>';
+    return adminShell('menu', `${search}<nav class="ma-workspace-menu" aria-label="Danh mục quản trị">${menu}</nav>${footer}`,
+      'Tất cả chức năng', '', '<button class="btn btn-sm" data-action="refresh-admin-data">Làm mới dữ liệu</button>');
+  }
+
   function adminShell(active, body, title, subtitle, actions = '') {
-    const groups = [
-      ['VẬN HÀNH',['overview','appointments','schedule','requests']],
-      ['DỮ LIỆU',['services','customers','payments','promotions']],
-      ['NỘI DUNG',['gallery','content','notifications']],
-      ['HỆ THỐNG',['reports','permissions','audit','settings']],
-      ['KHÁCH TRUY CẬP',['visitors']]
-    ];
-    const headHtml = active === 'schedule' ? '' : `<header class="admin-head"><div><h1>${title}</h1><p>${subtitle}</p></div><div class="admin-head-actions">${actions}</div></header>`;
+    const groups = adminGroups;
+    const headHtml = adminLocalNotice() + (active === 'schedule' ? '' : `<header class="admin-head"><div><h1>${title}</h1>${subtitle ? `<p>${subtitle}</p>` : ''}</div><div class="admin-head-actions">${actions}</div></header>`);
+    if (window.HoanMobileAdmin?.matches()) return window.HoanMobileAdmin.workspace(active, headHtml + body);
     const unreadNotifications = (state.notifications || []).filter(notification => notification.status === 'unread').length;
     const notificationBadge = unreadNotifications ? `<b>${unreadNotifications > 99 ? '99+' : unreadNotifications}</b>` : '';
     return `<div class="admin-page"><header class="admin-top"><a class="admin-brand" href="#/admin">HOÀN <small>QUẢN TRỊ VẬN HÀNH</small></a><label class="admin-search-wrap">${icon('search')}<input class="admin-search" id="admin-global-search" aria-label="Tìm lịch hẹn, khách hàng hoặc giao dịch" placeholder="Tìm lịch, khách, giao dịch… (Enter)"></label><div class="admin-user"><a class="admin-view-site-btn" href="#/" target="_blank" title="Xem website khách đặt lịch"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg><span>Xem website</span></a><button class="admin-notification" aria-label="Thông báo${unreadNotifications ? `, ${unreadNotifications} chưa đọc` : ''}" data-action="goto-notifications" title="${unreadNotifications ? `${unreadNotifications} thông báo chưa đọc` : 'Không có thông báo mới'}">${icon('bell')}${notificationBadge}</button><span class="admin-profile" data-action="goto-profile" title="Hoàn Nguyễn - Quản trị viên"><i>HN</i><span>Hoàn Nguyễn<small>Quản trị viên</small></span></span><button class="admin-logout-button" data-action="admin-logout">Đăng xuất</button></div></header><div class="admin-layout"><aside class="admin-sidebar">${groups.map(g=>`<div class="admin-group-title">${g[0]}</div>${g[1].map(key=>{const l=adminLinks.find(x=>x[0]===key);return `<a class="admin-link ${active===key?'active':''}" href="#/admin/${key==='overview'?'':key}">${icon(l[1],l[2])}<span>${l[2]}</span></a>`}).join('')}`).join('')}</aside><main id="main" class="admin-content" data-admin-page="${active}">${headHtml}${body}</main></div></div>`;
@@ -2896,6 +2936,16 @@
 
   function adminPayments() {
     return adminShell('payments', financeAdmin?.html() || '<p role="status">Đang tải sổ thu chi…</p>', 'Thanh toán', 'Quản lý tiền cọc, thu còn lại và hoàn tiền tại một nơi.');
+  }
+
+  function openCustomerForm(customer) {
+    modal(customer ? 'Chỉnh sửa khách hàng' : 'Thêm khách hàng', `
+      <div class="field"><label for="modal-customer-name">Họ tên</label><input id="modal-customer-name" name="name" value="${esc(customer?.name || '')}" autocomplete="name"></div>
+      ${customer ? '' : `
+        <div class="field"><label for="modal-customer-phone">Số điện thoại</label><input id="modal-customer-phone" name="phone" type="tel" autocomplete="tel"></div>
+        <div class="field"><label for="modal-customer-email">Email</label><input id="modal-customer-email" name="email" type="email" autocomplete="email"></div>`}
+      <div class="field"><label for="modal-customer-note">Ghi chú</label><textarea id="modal-customer-note" name="note">${esc(customer?.note || '')}</textarea></div>
+    `, customer ? 'Lưu' : 'Thêm', customer ? 'edit-customer:' + customer.id : 'add-customer');
   }
 
   function adminPromotions() {
@@ -3682,6 +3732,7 @@
           <div class="security-login-content">
             <h1 id="admin-login-title">Đăng nhập quản trị</h1>
             <p class="security-login-intro">Nhập khóa do chủ website cấp để vào trang quản trị.</p>
+            ${adminLocalNotice()}
             <form data-form="admin-login" novalidate>
               <label for="admin-access-key">Khóa quản trị</label>
               <div class="security-login-key">
@@ -4194,8 +4245,9 @@
       start: activeField.selectionStart,
       end: activeField.selectionEnd
     } : null;
-    const needsFullContentEditor = path === '/admin/content' || path === '/admin/content-pages';
-    let html = path.startsWith('/admin') && !needsFullContentEditor && window.HoanMobileAdmin?.matches()
+    const sharedAdminScreen = path === '/admin/menu' || path === '/admin/content-pages'
+      || adminLinks.some(([key]) => path === '/admin/' + key);
+    let html = path.startsWith('/admin') && !sharedAdminScreen && window.HoanMobileAdmin?.matches()
       ? window.HoanMobileAdmin.render(raw, state)
       : renderPathHtml(raw);
     if (!html) {
@@ -4219,6 +4271,7 @@
       else if (path === '/admin/permissions') html = adminPermissions();
       else if (path === '/admin/audit') html = adminAudit();
       else if (path === '/admin/settings') html = adminSettings();
+      else if (path === '/admin/menu') html = adminWorkspaceMenu();
       else html = `<div class="page">${publicHeader()}<main class="help-wrap"><h1>Không tìm thấy trang</h1><a class="btn btn-dark" href="#/">Về trang chủ</a></main></div>`;
     }
     bookingLocation?.beforeRender(path);
@@ -5132,6 +5185,9 @@
     if (action === 'admin-logout') {
       logoutAdmin(); return;
     }
+    if (action === 'refresh-admin-data') {
+      await refreshActiveAdmin(true); return;
+    }
     if (action === 'reload-overview') { location.reload(); }
     else if (action === 'reset-appointment-filter') { route('/admin/appointments'); render(); }
     else if (action === 'mobile-menu') {const on=$('#site-header')?.classList.toggle('menu-open');el.setAttribute('aria-expanded',String(!!on));}
@@ -5438,8 +5494,11 @@
       }), 'Thêm dịch vụ', 'add-service');
     }
     else if (action === 'delete-service') { if(state.services.length<=1)return toast('Cần giữ ít nhất một dịch vụ');try{await api({action:'deleteService',id:el.dataset.id});state.services=state.services.filter(s=>s.id!==el.dataset.id);toast('Đã xóa dịch vụ');render();}catch(error){toast(error.message)} }
-    else if (action === 'edit-customer') { const c=state.customers[Number(el.dataset.index)]; modal('Chỉnh sửa khách hàng',`<div class="field"><label>Họ tên</label><input id="modal-customer-name" value="${esc(c.name)}"></div><div class="field"><label>Ghi chú</label><textarea id="modal-customer-note">${esc(c.note)}</textarea></div>`,'Lưu','edit-customer:'+el.dataset.index); }
-    else if (action === 'add-customer') modal('Thêm khách hàng',`<div class="field"><label>Họ tên</label><input id="modal-customer-name"></div><div class="field"><label>Số điện thoại</label><input id="modal-customer-phone"></div><div class="field"><label>Email</label><input id="modal-customer-email" type="email"></div>`,'Thêm','add-customer');
+    else if (action === 'edit-customer') {
+      const customer = state.customers[Number(el.dataset.index)];
+      if (customer) openCustomerForm(customer);
+    }
+    else if (action === 'add-customer') openCustomerForm();
     else if (action === 'toggle-promo') { state.promotions[Number(el.dataset.index)].active=!state.promotions[Number(el.dataset.index)].active; saveState('Đã cập nhật mã ưu đãi'); render(); }
     else if (action === 'add-promo') modal('Tạo mã ưu đãi',`<div class="field"><label>Mã ưu đãi</label><input id="modal-promo-code" value="NEWCLIENT"></div><div class="field"><label>Giá trị</label><input id="modal-promo-value" value="100.000đ"></div>`,'Tạo mã','add-promo');
     else if (action === 'delete-promo') { state.promotions.splice(Number(el.dataset.index),1); saveState('Đã xóa mã ưu đãi'); render(); }
@@ -5806,10 +5865,28 @@
       const name=$('#modal-service-name').value.trim(); if(!name)return toast('Vui lòng nhập tên dịch vụ');
       try { const result=await api({action:'saveService',id:'service-'+Date.now(),name,duration:Number($('#modal-service-duration').value),price:Number($('#modal-service-price').value),description:$('#modal-service-desc').value,enabled:true,sortOrder:state.services.length+1});state.services.push(result.service);toast('Đã thêm dịch vụ'); }
       catch(error){toast(error.message);return;}
-    } else if (action.startsWith('edit-customer:')) {
-      const c=state.customers[Number(action.split(':')[1])]; c.name=$('#modal-customer-name').value; c.note=$('#modal-customer-note').value; saveState('Đã lưu khách hàng');
-    } else if (action === 'add-customer') {
-      state.customers.push({name:$('#modal-customer-name').value,phone:$('#modal-customer-phone').value,email:$('#modal-customer-email').value,visits:0,spent:0,note:''}); saveState('Đã thêm khách hàng');
+    } else if (action === 'add-customer' || action.startsWith('edit-customer:')) {
+      const dialog = $('.modal');
+      const button = dialog?.querySelector('[data-action="modal-confirm"]');
+      if (!button || button.disabled) return;
+      const editing = action.startsWith('edit-customer:');
+      const value = name => dialog.querySelector('[name="' + name + '"]')?.value || '';
+      const record = editing ? { id: Number(action.split(':')[1]) } : { phone: value('phone'), email: value('email') };
+      button.disabled = true;
+      clearFormFeedback(dialog);
+      try {
+        const { customer } = await api({ action: 'saveCustomer', ...record, name: value('name'), note: value('note') });
+        if (!state.adminAuthorized || !adminPath()) return;
+        state.customers = [customer, ...state.customers.filter(row => row.id !== customer.id)];
+        if (dialog.isConnected) closeModal();
+        toast(editing ? 'Đã lưu khách hàng.' : 'Đã thêm khách hàng.');
+        render();
+      } catch (error) {
+        showFormFeedback(dialog, error);
+      } finally {
+        button.disabled = false;
+      }
+      return;
     } else if (action === 'add-promo') {
       state.promotions.push({code:$('#modal-promo-code').value.toUpperCase(),type:'Giảm cố định',value:$('#modal-promo-value').value,used:0,limit:30,active:true}); saveState('Đã tạo mã ưu đãi');
     } else if (action === 'send-notification') {
@@ -5915,10 +5992,19 @@
       wasAdminPath = nextAdminPath;
       if (!nextAdminPath) clearAdminData();
       void hydrateBackend();
+    } else if (nextAdminPath && Date.now() - (Date.parse(state.backendUpdatedAt) || 0) > 10000) {
+      void refreshActiveAdmin();
     }
     if (location.hash.split('?')[0] !== '#/booking/time') bookingAvailability = null;
     render();
   });
+  document.addEventListener('input', event => {
+    if (adminPath() && event.target.form) event.target.form.dataset.adminEdited = '';
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void refreshActiveAdmin();
+  });
+  window.addEventListener('focus', () => void refreshActiveAdmin());
   window.addEventListener('storage', async (event) => {
     if (isPreview) return;
     if (event.key === adminLogoutSignal) {

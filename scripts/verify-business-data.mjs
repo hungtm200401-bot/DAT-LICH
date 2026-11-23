@@ -338,6 +338,79 @@ try {
     await context.close();
   }
   console.log('PASS Edge desktop/mobile: required booking email and inline backend errors, recovery, sign-in, archive/restore and sign-out.');
+
+  const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
+  const app = await browser.newContext({ viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+  const pages = await Promise.all([desktop, app].map(async context => {
+    await context.route('**/*', route => new URL(route.request().url()).origin === base ? route.continue() : route.abort());
+    await context.addInitScript(() => localStorage.setItem('hoanAnalyticsConsent', 'no'));
+    const login = await context.request.post(base + '/api/admin-session', { headers: { Origin: base }, data: { key: adminKey } });
+    assert.equal(login.status(), 200);
+    const page = await context.newPage();
+    page.setDefaultTimeout(12_000);
+    await page.goto(base + '/#/admin');
+    await page.locator('.overview-dashboard').waitFor();
+    return page;
+  }));
+  const [webPage, appPage] = pages;
+  const openMenu = () => appPage.getByRole('link', { name: 'Tất cả chức năng' }).click();
+  const normalizeAdminLink = href => href.replace(/\/$/, '');
+  const desktopLinks = (await webPage.locator('.admin-sidebar .admin-link').evaluateAll(links => links.map(link => link.getAttribute('href')))).map(normalizeAdminLink);
+  for (const width of [375, 440]) {
+    await appPage.setViewportSize({ width, height: width === 375 ? 667 : 956 });
+    await openMenu();
+    await appPage.locator('.ma-workspace-menu').waitFor();
+    const menuLinks = await appPage.locator('.ma-workspace-menu a').evaluateAll(links => links.map(link => link.getAttribute('href')));
+    assert.deepEqual(menuLinks.map(normalizeAdminLink), desktopLinks);
+    for (const href of menuLinks.filter(link => link !== '#/admin')) {
+      await appPage.locator('.ma-workspace-menu a[href="' + href + '"]').click();
+      const section = href.slice('#/admin/'.length);
+      await appPage.locator('#main.admin-content[data-admin-page="' + section + '"]').waitFor();
+      assert.doesNotMatch(await appPage.locator('#main').innerText(), /bố cục quản trị rút gọn/);
+      assert.equal(await appPage.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, href + ' at ' + width);
+      await openMenu();
+    }
+    await appPage.locator('.ma-workspace-menu a[href="#/admin"]').click();
+    await appPage.locator('.ma-app .overview-dashboard').waitFor();
+  }
+
+  await openMenu();
+  await appPage.locator('#admin-global-search').fill(first.code);
+  await appPage.locator('#admin-global-search').press('Enter');
+  await appPage.locator('.overview-search-results').getByText(first.code, { exact: false }).first().waitFor();
+  await appPage.getByRole('dialog').getByRole('button', { name: 'Đóng', exact: true }).click();
+  await appPage.getByRole('dialog').waitFor({ state: 'detached' });
+
+  await webPage.goto(base + '/#/admin/customers');
+  await webPage.locator('[data-action="add-customer"]').waitFor();
+  await appPage.locator('.ma-bottom [href="#/admin/customers"]').click();
+  await appPage.locator('[data-action="add-customer"]').click();
+  const confirm = appPage.locator('.modal [data-action="modal-confirm"]');
+  await confirm.click();
+  await appPage.locator('#modal-customer-phone[aria-invalid="true"]').waitFor();
+  await appPage.locator('#modal-customer-name').fill('Khách kiểm tra đồng bộ');
+  await appPage.locator('#modal-customer-phone').fill('0900002201');
+  await confirm.click();
+  const appCustomer = appPage.getByText('Khách kiểm tra đồng bộ', { exact: true });
+  await appCustomer.waitFor();
+
+  await webPage.bringToFront();
+  await webPage.evaluate(() => window.dispatchEvent(new Event('focus')));
+  const webCustomer = webPage.locator('tbody tr').filter({ hasText: 'Khách kiểm tra đồng bộ' });
+  await webCustomer.locator('[data-action="edit-customer"]').click();
+  await webPage.locator('#modal-customer-name').fill('Khách đã cập nhật từ web');
+  await webPage.locator('.modal [data-action="modal-confirm"]').click();
+  await webPage.getByText('Khách đã cập nhật từ web', { exact: true }).waitFor();
+
+  await appPage.bringToFront();
+  await appPage.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await appPage.getByText('Khách đã cập nhật từ web', { exact: true }).waitFor();
+  const exportFile = appPage.waitForEvent('download');
+  await appPage.locator('[data-action="export-customers"]').click();
+  assert.match((await exportFile).suggestedFilename(), /\.csv$/i);
+  assert.equal((await mutate({ action: 'saveCustomer', name: 'Ẩn danh', phone: '0900002299' })).response.status, 401);
+  await Promise.all([desktop.close(), app.close()]);
+  console.log('PASS desktop and iPhone-sized admin: shared menu, all 16 routes, customer changes across sessions, server errors, CSV export and authorization.');
 } finally {
   await browser?.close();
   await worker.dispose();
