@@ -8,14 +8,34 @@ fi
 
 ios_root="$(cd "$(dirname "$0")" && pwd)"
 output="${1:-$ios_root/../outputs/hoan-admin-app/ios/simulator}"
+profile_filter="${2:-all}"
+if [[ "$profile_filter" != all && "$profile_filter" != compact && "$profile_filter" != large ]]; then
+  echo 'Chọn compact, large hoặc all.' >&2
+  exit 1
+fi
 mkdir -p "$output"
 output="$(cd "$output" && pwd)"
 work_dir="$(mktemp -d "$output/.hoan-simulator.XXXXXXXX")"
+
+run_simctl() {
+  python3 - "$@" <<'PY'
+import subprocess
+import sys
+
+command = ['xcrun', 'simctl', *sys.argv[2:]]
+try:
+    result = subprocess.run(command, timeout=int(sys.argv[1]), stdin=subprocess.DEVNULL)
+except subprocess.TimeoutExpired:
+    sys.exit(f'Simulator timed out: {command[2]}')
+sys.exit(result.returncode)
+PY
+}
+
 cleanup() {
   if [[ -f "$work_dir/created-devices" ]]; then
     while read -r id; do
-      xcrun simctl shutdown "$id" >/dev/null 2>&1 || true
-      xcrun simctl delete "$id" >/dev/null 2>&1 || true
+      run_simctl 20 shutdown "$id" >/dev/null 2>&1 || true
+      run_simctl 20 delete "$id" >/dev/null 2>&1 || true
     done < "$work_dir/created-devices"
   fi
   rm -rf -- "$work_dir"
@@ -46,16 +66,18 @@ xcodebuild -project "$ios_root/HoanAdmin.xcodeproj" -scheme HoanAdmin \
 
 app="$work_dir/DerivedData/Build/Products/Debug-iphonesimulator/HoanAdmin.app"
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
-xcrun simctl list devices available -j > "$work_dir/devices.json"
-python3 - "$work_dir/devices.json" > "$work_dir/profiles.tsv" <<'PY'
+run_simctl 30 list devices available -j > "$work_dir/devices.json"
+sdk="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+python3 - "$work_dir/devices.json" "$sdk" "$profile_filter" > "$work_dir/profiles.tsv" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], encoding='utf-8') as source:
     devices = json.load(source)['devices']
+preferred_runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-' + sys.argv[2].replace('.', '-')
 runtimes = sorted(
     (key for key in devices if '.iOS-' in key),
-    key=lambda key: tuple(int(value) for value in key.rsplit('.iOS-', 1)[1].split('-')),
+    key=lambda key: (key == preferred_runtime, tuple(int(value) for value in key.rsplit('.iOS-', 1)[1].split('-'))),
     reverse=True,
 )
 profiles = {
@@ -63,9 +85,11 @@ profiles = {
     'large': ('iPhone 17 Pro Max', 'iPhone 16 Pro Max', 'iPhone 15 Pro Max', 'iPhone 16 Plus'),
 }
 for profile, models in profiles.items():
+    if sys.argv[3] not in ('all', profile):
+        continue
     candidates = (
         (model, device['deviceTypeIdentifier'], runtime)
-        for model in models for runtime in runtimes for device in devices[runtime]
+        for runtime in runtimes for model in models for device in devices[runtime]
         if device['name'] == model and device.get('isAvailable') and device.get('deviceTypeIdentifier')
     )
     match = next(candidates, None)
@@ -75,20 +99,21 @@ for profile, models in profiles.items():
 PY
 
 while IFS=$'\t' read -r profile model device_type runtime; do
-  id="$(xcrun simctl create "HOAN Admin $profile $$" "$device_type" "$runtime")"
+  id="$(run_simctl 45 create "HOAN Admin $profile $$" "$device_type" "$runtime")"
   printf '%s\n' "$id" >> "$work_dir/created-devices"
   echo "Đang kiểm tra $model ($runtime)"
-  xcrun simctl bootstatus "$id" -b
-  xcrun simctl install "$id" "$app"
-  SIMCTL_CHILD_HOAN_IOS_TEST_LOOPBACK=1 xcrun simctl launch "$id" "$bundle_id"
-  container="$(xcrun simctl get_app_container "$id" "$bundle_id" data)"
+  run_simctl 210 bootstatus "$id" -b
+  echo "Đang cài app trên $model"
+  run_simctl 90 install "$id" "$app"
+  SIMCTL_CHILD_HOAN_IOS_TEST_LOOPBACK=1 run_simctl 45 launch "$id" "$bundle_id"
+  container="$(run_simctl 30 get_app_container "$id" "$bundle_id" data)"
   report="$container/Library/Caches/hoan-login-viewport.json"
   for ((attempt=0; attempt<50; attempt++)); do
     [[ ! -s "$report" ]] || break
     sleep 1
   done
   if [[ ! -s "$report" ]]; then
-    xcrun simctl io "$id" screenshot "$output/$profile-failed.png"
+    run_simctl 30 io "$id" screenshot "$output/$profile-failed.png"
     echo "Không nhận được kết quả tải trang đăng nhập từ $model." >&2
     exit 1
   fi
@@ -108,10 +133,11 @@ with open(output_path, 'w', encoding='utf-8') as output:
     json.dump(report, output, ensure_ascii=False, indent=2)
     output.write('\n')
 PY
-  xcrun simctl io "$id" screenshot "$output/$profile.png"
-  xcrun simctl shutdown "$id"
+  run_simctl 30 io "$id" screenshot "$output/$profile.png"
+  run_simctl 30 shutdown "$id"
 done < "$work_dir/profiles.tsv"
 
+[[ "$profile_filter" == all ]] || exit 0
 python3 - "$output" <<'PY'
 import json
 import pathlib

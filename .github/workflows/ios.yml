@@ -41,12 +41,27 @@ jobs:
           path: outputs/hoan-admin-app/ios/HOAN-Admin-iPhone.ipa
           if-no-files-found: error
 
+  simulator:
+    runs-on: macos-15
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [compact, large]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
       - name: Prepare local test server
         run: |
           npm ci --include=dev
           npm run db:migrate:local
 
-      - name: Check two iPhone sizes
+      - name: Check iPhone layout
+        env:
+          HOAN_SIMULATOR_PROFILE: ${{ matrix.profile }}
         run: |
           mkdir -p outputs/hoan-admin-app/ios
           node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort > outputs/hoan-admin-app/ios/test-server.log 2>&1 &
@@ -61,13 +76,13 @@ jobs:
             tail -n 50 outputs/hoan-admin-app/ios/test-server.log
             exit 1
           fi
-          bash ios/check-simulator.sh
+          bash ios/check-simulator.sh outputs/hoan-admin-app/ios/simulator "$HOAN_SIMULATOR_PROFILE"
 
       - name: Upload Simulator results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: iPhone-Simulator
+          name: iPhone-Simulator-${{ matrix.profile }}
           path: |
             outputs/hoan-admin-app/ios/simulator/
             outputs/hoan-admin-app/ios/test-server.log
