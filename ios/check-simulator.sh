@@ -105,9 +105,13 @@ while IFS=$'\t' read -r profile model device_type runtime; do
   run_simctl 210 bootstatus "$id" -b
   echo "Đang cài app trên $model"
   run_simctl 90 install "$id" "$app"
-  SIMCTL_CHILD_HOAN_IOS_TEST_LOOPBACK=1 run_simctl 45 launch "$id" "$bundle_id"
   container="$(run_simctl 30 get_app_container "$id" "$bundle_id" data)"
   report="$container/Library/Caches/hoan-login-viewport.json"
+  echo "Đang mở app trên $model"
+  if ! SIMCTL_CHILD_HOAN_IOS_TEST_LOOPBACK=1 run_simctl 120 launch "$id" "$bundle_id"; then
+    run_simctl 30 io "$id" screenshot "$output/$profile-failed.png" || true
+    exit 1
+  fi
   for ((attempt=0; attempt<50; attempt++)); do
     [[ ! -s "$report" ]] || break
     sleep 1

@@ -76,6 +76,10 @@ jobs:
             tail -n 50 outputs/hoan-admin-app/ios/test-server.log
             exit 1
           fi
+          if ! curl -fsS --max-time 90 -o /dev/null http://127.0.0.1:5173/; then
+            tail -n 50 outputs/hoan-admin-app/ios/test-server.log
+            exit 1
+          fi
           bash ios/check-simulator.sh outputs/hoan-admin-app/ios/simulator "$HOAN_SIMULATOR_PROFILE"
 
       - name: Upload Simulator results
