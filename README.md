@@ -35,7 +35,7 @@ Sau đó chạy website (các lần sau chỉ cần lệnh này):
 npm run dev
 ```
 
-`npm run dev` chỉ khởi động Vite, không tự cài thư viện. Nếu gặp lỗi `'vite' is not recognized`, hãy chạy bước cài thư viện ở trên. Trên Windows cũng có thể mở `CHAY_DU_AN.bat` để cài thư viện, khởi tạo cơ sở dữ liệu local và chạy website.
+`npm run dev` khởi động Vite hoặc hiển thị địa chỉ nếu máy chủ HOÀN trong cùng thư mục đang chạy. Cài thư viện theo bước trên trước lần chạy đầu tiên. Trên Windows cũng có thể mở `CHAY_DU_AN.bat` để cài thư viện, khởi tạo cơ sở dữ liệu local và chạy website.
 
 Mở địa chỉ Vite hiển thị trong terminal, thường là `http://localhost:5173/`. Website dùng hash route; trang quản trị tại `/#/admin`, lịch làm việc tại `/#/admin/schedule`.
 
