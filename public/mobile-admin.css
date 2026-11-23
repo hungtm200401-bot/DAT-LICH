@@ -1,5 +1,5 @@
 /* HOÀN Admin Mobile — dedicated small-screen application shell */
-@media (max-width: 700px), (orientation: landscape) and (hover: none) and (pointer: coarse) {
+@media (max-width: 700px), (display-mode: standalone), (orientation: landscape) and (hover: none) and (pointer: coarse) {
   html, body {
     scroll-behavior: auto !important;
     -webkit-overflow-scrolling: touch !important;
@@ -208,7 +208,22 @@
 .ma-workspace-search { margin-bottom:18px; }
 .ma-workspace-footer { display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; }
 
-.hoan-iphone [hidden] { display:none!important; }
+:is(.hoan-iphone,.hoan-standalone) [hidden] { display:none!important; }
+.hoan-standalone body:not(:has(.ma-app)) { padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+.hoan-standalone .ma-app { padding-bottom:calc(76px + env(safe-area-inset-bottom)); }
+.hoan-standalone .ma-app > .ma-top {
+  height:calc(66px + env(safe-area-inset-top));
+  padding:env(safe-area-inset-top) calc(16px + env(safe-area-inset-right)) 0 calc(16px + env(safe-area-inset-left));
+}
+.hoan-standalone .ma-app > .ma-main { width:auto; margin-inline:env(safe-area-inset-left) env(safe-area-inset-right); }
+.hoan-standalone .ma-app > .ma-bottom {
+  height:calc(67px + env(safe-area-inset-bottom));
+  padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.ma-web-push-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:10px 0; }
+.ma-web-push-controls:empty { display:none; }
+.ma-web-push-controls .ma-btn { border-radius:8px; }
+.ma-push-status { color:#495362; font-size:13px; margin:0; }
 .ma-app .ma-quick-bottom { grid-template-columns:repeat(4,1fr); }
 .ma-app .ma-quick-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:6px 0 14px; }
 .ma-app .ma-quick-heading h1 { margin:0; font:650 27px/1.2 Inter,system-ui,sans-serif; }
@@ -239,7 +254,7 @@
 .ma-customer-history { padding-top:16px; }
 
 @media (min-width: 701px) {
-  html:not(.force-mobile):not(.hoan-iphone) body:not(.force-mobile) .ma-app,
+  html:not(.force-mobile):not(.hoan-iphone):not(.hoan-standalone) body:not(.force-mobile) .ma-app,
   html:not(.force-mobile) body:not(.force-mobile) .ma-login,
   html:not(.force-mobile) body:not(.force-mobile) .ma-modal-backdrop,
   html:not(.force-mobile) body:not(.force-mobile) .ma-toast { display:none!important; }

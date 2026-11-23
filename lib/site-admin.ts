@@ -1,5 +1,6 @@
 import { matchesAdminKey, sameOrigin } from './admin-authorization.mjs';
 import { keyedHash, protectionSettings } from './data-guards';
+import { pushInstallationId, pushInstallationSecret } from './admin-push-installation';
 export { sameOrigin } from './admin-authorization.mjs';
 
 const sessionSeconds = 8 * 60 * 60;
@@ -28,12 +29,16 @@ function sessionCookie(request: Request, value: string, maxAge: number) {
   return `${cookieName(request)}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`;
 }
 
-export async function siteAdmin(request: Request) {
+export async function adminSessionHash(request: Request) {
   const secret = protectionSettings.ADMIN_TOKEN;
-  if (!secret || !sameOrigin(request)) return false;
+  if (!secret || !sameOrigin(request) || !adminTransport(request)) return "";
   const value = sessionValue(request);
-  if (!value || !adminTransport(request)) return false;
-  const hash = await keyedHash(secret, "admin:" + value);
+  return value ? keyedHash(secret, "admin:" + value) : "";
+}
+
+export async function siteAdmin(request: Request) {
+  const hash = await adminSessionHash(request);
+  if (!hash) return false;
   return Boolean(await protectionSettings.DB.prepare(
     "SELECT token_hash FROM admin_sessions WHERE token_hash = ? AND expires_at > ?",
   ).bind(hash, Date.now()).first());
@@ -57,11 +62,13 @@ export async function startAdminSession(request: Request, candidate: string) {
 }
 
 export async function endAdminSession(request: Request) {
-  const value = sessionValue(request);
-  const secret = protectionSettings.ADMIN_TOKEN;
-  if (value && secret && adminTransport(request)) {
-    const hash = await keyedHash(secret, "admin:" + value);
-    await protectionSettings.DB.prepare("DELETE FROM admin_sessions WHERE token_hash = ?").bind(hash).run();
-  }
+  if (!adminTransport(request) || !sameOrigin(request)) return sessionCookie(request, "", 0);
+  const hash = await adminSessionHash(request);
+  const installation = await pushInstallationId(pushInstallationSecret(request));
+  const db = protectionSettings.DB;
+  const writes = [];
+  if (hash) writes.push(db.prepare("DELETE FROM admin_sessions WHERE token_hash = ?").bind(hash));
+  if (installation) writes.push(db.prepare("DELETE FROM admin_push_subscriptions WHERE id = ?").bind(installation));
+  if (writes.length) await db.batch(writes);
   return sessionCookie(request, "", 0);
 }

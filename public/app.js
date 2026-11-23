@@ -8,7 +8,7 @@
     // handlers to an already running legacy app. The version loader refreshes it.
     const existing = typeof document.getElementById === 'function' && document.getElementById('app');
     if (window.state && existing?.childElementCount) { window.__hoanAppBuild = 'legacy'; return; }
-    window.__hoanAppBuild = 'iphone-work-reminders-1';
+    window.__hoanAppBuild = 'admin-web-push-2';
   }
 
   // Guaranteed critical schedule styles injection (bulletproof against browser CSS caching)
@@ -481,6 +481,7 @@
       state.backendUpdatedAt = new Date().toISOString();
       state.backendError = '';
       if (state.adminAuthorized) window.HoanMobileAdmin?.syncWorkReminders?.(state.workReminders);
+      if (state.adminAuthorized) void window.HoanAdminWebPush?.load();
       if (!silent && !isPreview) render();
     } catch (error) {
       if (requestedAdmin !== adminPath() || generation !== adminSessionGeneration) return;
@@ -3775,6 +3776,7 @@
   }
 
   async function logoutAdmin() {
+    window.HoanAdminWebPush?.clearOnLogout();
     expireAdminView();
     try { localStorage.setItem(adminLogoutSignal, String(Date.now())); } catch { /* Browser storage can be disabled. */ }
     try {
@@ -4250,7 +4252,7 @@
     } : null;
     const sharedAdminScreen = path === '/admin/menu' || path === '/admin/content-pages'
       || adminLinks.some(([key]) => path === '/admin/' + key);
-    const iPhoneApp = path.startsWith('/admin') && window.HoanMobileAdmin?.isIPhoneApp?.();
+    const iPhoneApp = path.startsWith('/admin') && window.HoanMobileAdmin?.isAdminApp?.();
     let html = iPhoneApp ? window.HoanMobileAdmin.renderIPhone(raw)
       : path.startsWith('/admin') && !sharedAdminScreen && window.HoanMobileAdmin?.matches()
       ? window.HoanMobileAdmin.render(raw, state)
@@ -6029,6 +6031,16 @@
   });
   if (!location.hash) location.hash = '#/';
   if (typeof document.createElement === 'function' && location.origin) {
+    const homeScreen = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator?.standalone === true;
+    if (!isPreview && homeScreen && !document.documentElement.classList.contains('hoan-iphone') &&
+        window.isSecureContext && window.navigator?.serviceWorker && 'PushManager' in window && 'Notification' in window) {
+      import('/admin-web-push.js?v=1.0').then(({ createAdminWebPush }) => {
+        window.HoanAdminWebPush = createAdminWebPush({
+          isAuthorized: () => adminPath() && state.adminAuthorized, refresh: refreshActiveAdmin, toast,
+        });
+        void window.HoanAdminWebPush.load();
+      }).catch(() => {});
+    }
     import('/maps-settings.js?v=3.0').then(({ createMapsSettings }) => {
       mapsSettings = createMapsSettings({ getState: () => state, api, esc, toast });
       window.HoanMapSettings = mapsSettings; mapsSettings.mount();

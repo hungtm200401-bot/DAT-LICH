@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hoan-makeup-iphone-work-reminders-1';
+const CACHE_NAME = 'hoan-makeup-admin-web-push-2';
 const STATIC_ASSETS = [
   '/admin-security.css?v=1.2',
   '/admin-settings.js?v=1.0',
@@ -13,10 +13,11 @@ const STATIC_ASSETS = [
   '/fonts/tinos-Tinos-Regular.ttf',
   '/styles.css?v=2.5',
   '/couture.css?v=143.9',
-  '/mobile-admin.css?v=1.5',
+  '/mobile-admin.css?v=1.6',
   '/scroll-enhancements.js?v=1.4',
-  '/mobile-admin.js?v=2.8',
-  '/app.js?v=189.12',
+  '/mobile-admin.js?v=2.10',
+  '/admin-web-push.js?v=1.0',
+  '/app.js?v=189.14',
   '/client-bootstrap.js?v=5.23',
   '/app-version.json',
   '/maps-settings.js?v=3.0',
@@ -115,4 +116,48 @@ self.addEventListener('fetch', event => {
       });
     })
   );
+});
+
+function pushBookingCode(value) {
+  return typeof value === 'string' && /^[A-Z0-9-]{3,80}$/.test(value) ? value : '';
+}
+
+self.addEventListener('push', event => {
+  let message;
+  try { message = event.data?.json(); } catch { message = null; }
+  const kind = message?.kind;
+  const code = pushBookingCode(message?.code);
+  const title = kind === 'booking' ? 'Có lịch đặt mới'
+    : kind === 'reminder' ? 'Nhắc lịch làm'
+    : kind === 'test' ? 'Thông báo thử từ HOÀN' : 'Thông báo HOÀN';
+  const body = kind === 'reminder' ? 'Bạn có lịch làm trong 24 giờ tới.'
+    : kind === 'test' ? 'iPhone đã nhận được thông báo từ HOÀN.'
+    : 'Mở HOÀN để xem.';
+  const shown = self.registration.showNotification(title, {
+    body,
+    icon: '/assets/hoan-logo.png',
+    tag: 'hoan-admin-' + (kind === 'test' ? 'test' : (kind === 'booking' ? 'booking-' : 'reminder-') + code),
+    data: { code },
+  });
+  const refresh = self.clients.matchAll({ type: 'window' }).then(windows => {
+    windows.forEach(client => client.postMessage({ type: 'hoan:admin-push' }));
+  }).catch(() => {});
+  event.waitUntil(Promise.all([shown, refresh]));
+});
+
+self.addEventListener('notificationclick', event => {
+  if (!event.notification.tag.startsWith('hoan-admin-')) return;
+  event.notification.close();
+  const code = pushBookingCode(event.notification.data?.code);
+  const target = new URL(code ? '/#/admin/appointments?code=' + encodeURIComponent(code) : '/#/admin/notifications',
+    self.location.origin);
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const admin = windows.find(client => new URL(client.url).hash.startsWith('#/admin'));
+    if (admin) {
+      const opened = await admin.navigate(target.href).catch(() => null);
+      if (opened) return opened.focus();
+    }
+    return self.clients.openWindow(target.href);
+  })());
 });

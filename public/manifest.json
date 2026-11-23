@@ -1,7 +1,9 @@
 {
   "name": "HOÀN — Makeup Artist Admin",
   "short_name": "HOÀN Admin",
+  "id": "/",
   "start_url": "/#/admin",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#8b1538",

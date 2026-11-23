@@ -1,3 +1,4 @@
+import { waitUntil } from "cloudflare:workers";
 import { reverseGeocode } from "../../../lib/reverse-geocode.mjs";
 import { cleanBookingLocation } from "../../../public/location-utils.js";
 import { summarizePayments, validateMoneySettings, validatePayment, validateVndAmount } from "../../../public/finance-utils.js";
@@ -12,6 +13,7 @@ import { bookingTimeError, validBookingDateTime } from "../../../lib/booking-val
 import { approvedBookingPhone, bookingPhoneRequired, bookingSmsEnabled, handleBookingSms } from "../../../lib/booking-sms";
 import { bookingGoogleEnabled, handleBookingGoogle } from "../../../lib/booking-google";
 import { workReminders } from "../../../lib/work-reminders";
+import { pushNewBooking } from "../../../lib/admin-web-push";
 
 const initialServices = [
   { id: "personal", name: "Trang điểm cá nhân", duration: 60, price: 450000, description: "Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.", enabled: true, contact: false, sortOrder: 1 },
@@ -362,6 +364,9 @@ export async function POST(request: Request) {
           db.insert(siteContent).values(notification),
           ...verifiedPhoneWrites,
         ]);
+        waitUntil(pushNewBooking(code, notification.updatedAt).catch(() => {
+          console.warn("HOAN Web Push will retry the booking notice");
+        }));
         return Response.json({ appointment: created }, { status: 201, headers: privateHeaders });
       } catch (error) {
         const message = messageFor(error);

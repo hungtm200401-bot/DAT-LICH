@@ -3,6 +3,7 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 import { withSecurityHeaders } from "../lib/security-headers";
 import { bookingGoogleEnabled } from "../lib/booking-google";
+import { retryAdminPushAndRemind } from "../lib/admin-web-push";
 
 interface Env {
   ASSETS: Fetcher;
@@ -28,6 +29,10 @@ interface ExecutionContext {
 // const imageConfig: ImageConfig = { dangerouslyAllowSVG: true };
 
 const worker = {
+  scheduled() {
+    return retryAdminPushAndRemind();
+  },
+
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 

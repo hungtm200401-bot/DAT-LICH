@@ -2,7 +2,7 @@
   'use strict';
 
   const MAX_WIDTH = 700;
-  const ui = { pushEnabled: false, notificationRead: false };
+  const ui = { notificationRead: false };
   const $ = (selector, root = document) => root.querySelector(selector);
   const esc = (value = '') => String(value).replace(/[&<>'"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[char]);
   const money = value => new Intl.NumberFormat('vi-VN').format(Number(value || 0)) + 'đ';
@@ -62,6 +62,9 @@
   const icon = name => `<svg class="ma-ico" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.chevron}</svg>`;
 
   const isIPhoneApp = () => document.documentElement.classList.contains('hoan-iphone');
+  const isHomeScreenApp = () => matchMedia('(display-mode: standalone)').matches || window.navigator?.standalone === true;
+  const isAdminApp = () => isIPhoneApp() || isHomeScreenApp();
+  if (isHomeScreenApp()) document.documentElement.classList.add('hoan-standalone');
   const reminderBridge = () => window.webkit?.messageHandlers?.hoanWorkReminders;
   const vietnamDay = offset => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' })
     .format(new Date(Date.now() + offset * 86400000));
@@ -100,6 +103,10 @@
   }
 
   function reminderControl() {
+    if (!isIPhoneApp() && isHomeScreenApp()) {
+      return '<div class="ma-web-push-controls" data-hoan-push-controls>' +
+        (window.HoanAdminWebPush?.controls() || '') + '</div>';
+    }
     return reminderBridge() && reminderPermission !== 'granted'
       ? '<button class="ma-btn ma-reminder-opt-in" data-ma-action="enable-work-reminders">' +
         reminderButton(reminderPermission) + '</button>'
@@ -245,30 +252,33 @@
     const path = pathOf(raw);
     const detail = /^\/admin\/(appointments|payments)\/([^/]+)(?:\/reconcile)?$/.exec(path);
     if (detail) return quickAppointment(appointment(detail[2]), detail[1] === 'payments');
-    if (path === '/admin/appointments') return reviewQueue(false);
+    if (path === '/admin/appointments') {
+      const code = queryOf(raw).get('code');
+      return code ? quickAppointment(appointment(code), false) : reviewQueue(false);
+    }
     if (path === '/admin/payments') return reviewQueue(true);
     const customerPath = /^\/admin\/customers\/([^/]+)$/.exec(path);
     if (customerPath) return quickCustomer(customerPath[1]);
     if (path === '/admin/customers') return quickCustomers(raw);
-    if (path === '/admin/notifications' || path === '/admin/account') return workNotices();
+    if (path === '/admin/notifications' || path === '/admin/account' || path === '/admin/push') return workNotices();
     return workAgenda(raw);
   }
 
   function notificationBell() {
-    const rows = isIPhoneApp() ? quickNotices() : (state().notifications || []);
-    const unread = rows.filter(row => row.status === 'unread').length + (isIPhoneApp() ? dueReminders().length : 0);
+    const rows = isAdminApp() ? quickNotices() : (state().notifications || []);
+    const unread = rows.filter(row => row.status === 'unread').length + (isAdminApp() ? dueReminders().length : 0);
     return '<a class="ma-icon-btn ma-bell" href="#/admin/notifications" aria-label="Thông báo, '+unread+' chưa đọc">'+icon('bell')+(unread?'<b class="ma-notice-count">'+(unread>99?'99+':unread)+'</b>':'')+'</a>';
   }
 
   function top(title = '', back = '', home = false) {
-    const shortcut = isIPhoneApp() ? '' : '<a class="ma-all-functions" href="#/admin/menu" aria-label="Tất cả chức năng">Tất cả</a>';
+    const shortcut = isAdminApp() ? '' : '<a class="ma-all-functions" href="#/admin/menu" aria-label="Tất cả chức năng">Tất cả</a>';
     const tools = `<div class="ma-top-tools">${shortcut}${notificationBell()}</div>`;
-    if (home) return `<header class="ma-top ma-home"><a class="ma-brand" href="#/admin">HOÀN${isIPhoneApp() ? '' : ' <small>ADMIN MOBILE</small>'}</a>${tools}</header>`;
+    if (home) return `<header class="ma-top ma-home"><a class="ma-brand" href="#/admin">HOÀN${isAdminApp() ? '' : ' <small>ADMIN MOBILE</small>'}</a>${tools}</header>`;
     return `<header class="ma-top"><a class="ma-icon-btn" href="${back || '#/admin'}" aria-label="Quay lại">${icon('back')}</a><div class="ma-top-title">${esc(title)}</div>${tools}</header>`;
   }
 
   function bottom(active = 'overview') {
-    const links = isIPhoneApp() ? [
+    const links = isAdminApp() ? [
       ['schedule','calendar','Lịch làm','/admin'],
       ['appointments','check','Duyệt lịch','/admin/appointments'],
       ['payments','card','Duyệt cọc','/admin/payments'],
@@ -280,7 +290,7 @@
       ['schedule','calendar','Lịch làm việc','/admin/schedule'],
       ['customers','user','Khách','/admin/customers']
     ];
-    return `<nav class="ma-bottom${isIPhoneApp() ? ' ma-quick-bottom' : ''}" aria-label="Điều hướng quản trị">${links.map(([key,ico,label,path]) => `<a class="${active === key ? 'active' : ''}" href="#${path}">${icon(ico)}<span>${label}</span></a>`).join('')}</nav>`;
+    return `<nav class="ma-bottom${isAdminApp() ? ' ma-quick-bottom' : ''}" aria-label="Điều hướng quản trị">${links.map(([key,ico,label,path]) => `<a class="${active === key ? 'active' : ''}" href="#${path}">${icon(ico)}<span>${label}</span></a>`).join('')}</nav>`;
   }
 
   function shell(content, options = {}) {
@@ -461,13 +471,9 @@
 
   function notificationSettings() {
     return shell(`<a class="ma-link" href="#/admin/notifications">← Thông báo</a><h1 style="margin-top:12px">Tùy chọn nhận tin</h1>
-      ${!ui.pushEnabled ? `<div class="ma-alert">${icon('bell')}<span><b>Thông báo đẩy chưa bật</b><br>Bạn chưa cho phép nhận thông báo từ trình duyệt trên thiết bị này.</span></div><button class="ma-btn primary" data-ma-action="enable-push">Bật thông báo trên thiết bị</button><p style="text-align:center;color:#758093;font-size:10px">Bạn có thể thay đổi lựa chọn bất cứ lúc nào.</p>` : '<div class="ma-alert success">'+icon('check')+'<span>Thông báo đẩy đã được bật trên thiết bị này.</span></div>'}
       <div class="ma-section-title"><b>Thông báo trong app</b></div>
       ${toggleRow('calendar','Lịch hẹn mới',true)}${toggleRow('card','Báo cáo cọc',true)}${toggleRow('mail','Yêu cầu hỗ trợ',true)}
-      <div class="ma-section-title"><b>Thông báo đẩy</b></div>
-      <a class="ma-settings-link" href="#/admin/push">${icon('globe')}<span>Quyền trình duyệt</span><small>${ui.pushEnabled ? 'Đã cấp':'Chưa cấp'}</small>${icon('chevron')}</a>
-      <div class="ma-settings-link">${icon('device')}<span>Thiết bị này</span><small>${ui.pushEnabled ? 'Đã đăng ký':'Chưa đăng ký'}</small>${icon('chevron')}</div>
-      <div class="ma-note">${icon('info')}<span>Thông báo trong app vẫn xem được khi chưa bật thông báo đẩy.</span></div>
+      ${settingsLink('bell','Nhận thông báo trên Màn hình chính','/admin/push')}
     `,{ title:'', back:'#/admin/notifications', nav:false });
   }
 
@@ -600,7 +606,7 @@
   }
 
   function account() {
-    return shell(`<h1>Tài khoản & ứng dụng</h1><div class="ma-account"><span class="ma-account-avatar">HN</span><div><b>Hoàn Nguyễn</b><small style="display:block;color:#657083;margin-top:4px">Quản trị viên</small></div></div><div class="ma-summary" style="margin-top:12px">Vận hành studio</div>${settingsLink('sliders','Quản lý dịch vụ & giá niêm yết','/admin/services')}${settingsLink('card','Cài đặt tài khoản nhận cọc','/admin/settings')}${settingsLink('bell','Trung tâm thông báo','/admin/notifications')}${settingsLink('sliders','Tùy chọn nhận thông báo','/admin/notification-settings')}${settingsLink('device','Cài HOÀN Admin Mobile','/admin/install')}<div class="ma-summary" style="margin-top:12px">Thiết bị này</div>${settingsLink('download','Cài ứng dụng','/admin/install','Chưa kiểm tra')}${settingsLink('bell','Thông báo đẩy','/admin/push',ui.pushEnabled?'Đã bật':'Chưa bật')}<button class="ma-btn" style="width:100%;margin-top:16px" data-ma-action="logout">${icon('logout')}Đăng xuất</button><p style="text-align:center;color:#657083;font-size:11px">HOÀN · Quản trị vận hành</p>`,{ title:'', back:'#/admin', active:'customers' });
+    return shell(`<h1>Tài khoản & ứng dụng</h1><div class="ma-account"><span class="ma-account-avatar">HN</span><div><b>Hoàn Nguyễn</b><small style="display:block;color:#657083;margin-top:4px">Quản trị viên</small></div></div><div class="ma-summary" style="margin-top:12px">Vận hành studio</div>${settingsLink('sliders','Quản lý dịch vụ & giá niêm yết','/admin/services')}${settingsLink('card','Cài đặt tài khoản nhận cọc','/admin/settings')}${settingsLink('bell','Trung tâm thông báo','/admin/notifications')}${settingsLink('sliders','Tùy chọn nhận thông báo','/admin/notification-settings')}${settingsLink('device','Cài HOÀN Admin Mobile','/admin/install')}<div class="ma-summary" style="margin-top:12px">Thiết bị này</div>${settingsLink('download','Cài ứng dụng','/admin/install','Chưa kiểm tra')}${settingsLink('bell','Thông báo đẩy','/admin/push')}<button class="ma-btn" style="width:100%;margin-top:16px" data-ma-action="logout">${icon('logout')}Đăng xuất</button><p style="text-align:center;color:#657083;font-size:11px">HOÀN · Quản trị vận hành</p>`,{ title:'', back:'#/admin', active:'customers' });
   }
 
   function mobileServices() {
@@ -641,7 +647,7 @@
   }
 
   function pushPage() {
-    return shell(`<h1>Nhận thông báo</h1><div class="ma-empty" style="min-height:180px">${icon('bell')}<h2>Bạn muốn nhận thông báo trên điện thoại?</h2><p>Nhận thông báo về các hoạt động quan trọng ngay cả khi không mở app.</p></div><div class="ma-card">${settingsLink('calendar','Lịch hẹn mới','#')}${settingsLink('card','Báo cáo tiền cọc','#')}${settingsLink('help','Yêu cầu hỗ trợ','#')}${settingsLink('user','Khách tiềm năng mới','#')}</div><div class="ma-summary" style="margin-top:12px">Trạng thái: &nbsp; <b style="display:inline;color:var(--ma-wine)">${ui.pushEnabled?'Đã bật':'● Chưa bật'}</b></div><p style="font-size:11px;color:#657083">Sau khi tiếp tục, hãy chọn Cho phép trong yêu cầu của trình duyệt.</p><button class="ma-btn primary" style="width:100%" data-ma-action="enable-push">Tiếp tục bật thông báo</button>${button('Để sau','/admin/account')}<div class="ma-note">${icon('info')}<span>Bạn vẫn xem được thông báo trong app.</span></div>`,{ title:'', back:'#/admin/account', nav:false });
+    return shell(`<h1>Thông báo trên điện thoại</h1><p class="ma-summary">Mở HOÀN từ Màn hình chính và chọn Bật thông báo để nhận lịch mới và nhắc lịch làm.</p>${button('Cài HOÀN','/admin/install','primary')}`, { title:'', back:'#/admin/account', nav:false });
   }
 
   function loginPage() {
@@ -710,7 +716,7 @@
         reminderBridge()?.postMessage({ action: 'enable' });
         return;
       }
-      if (isIPhoneApp() && action === 'review-booking') {
+      if (isAdminApp() && action === 'review-booking') {
         const cancelled = el.dataset.status === 'cancelled';
         if (cancelled && !window.confirm('Từ chối lịch hẹn này?')) return;
         el.disabled = true;
@@ -730,7 +736,7 @@
         } finally { el.disabled = false; }
         return;
       }
-      if (isIPhoneApp() && action === 'open-work-notice') {
+      if (isAdminApp() && action === 'open-work-notice') {
         try {
           await window.HoanAdminAuth.request({ action: 'markNotificationsRead', id: el.dataset.id });
           await window.HoanAdminAuth.reload();
@@ -758,11 +764,6 @@
       }
       if(action==='complete'){
         const result=await api({action:'updateAppointment',code:el.dataset.code,status:'completed'}); Object.assign(appointment(el.dataset.code),result.appointment); toast('Đã đánh dấu hoàn thành'); refresh(); return;
-      }
-      if(action==='enable-push'){
-        if('Notification' in window){ const result=await Notification.requestPermission(); ui.pushEnabled=result==='granted'; }
-        else ui.pushEnabled=true;
-        toast(ui.pushEnabled?'Đã bật thông báo':'Trình duyệt chưa cấp quyền thông báo'); refresh(); return;
       }
       if(action==='install'){
         if(window.__hoanInstallPrompt){ window.__hoanInstallPrompt.prompt(); await window.__hoanInstallPrompt.userChoice; }
@@ -884,6 +885,6 @@
 
   window.HoanMobileAdmin = {
     matches:() => isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches,
-    render, refresh, workspace, isIPhoneApp, renderIPhone, syncWorkReminders, setReminderPermission
+    render, refresh, workspace, isIPhoneApp, isAdminApp, renderIPhone, syncWorkReminders, setReminderPermission
   };
 })();

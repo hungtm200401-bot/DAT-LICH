@@ -1,6 +1,7 @@
 import { limitSensitiveRequest, readBoundedObject } from "../../../lib/data-guards";
 import { adminTransport, endAdminSession, privateHeaders, sameOrigin, siteAdmin, startAdminSession } from "../../../lib/site-admin";
 import { formError } from "../../../lib/form-errors";
+import { pushInstallationCookie, pushInstallationSecret } from "../../../lib/admin-push-installation";
 
 const clearError = () => Response.json({ error: "Không thể xác minh phiên quản trị lúc này." }, { status: 503, headers: privateHeaders });
 
@@ -37,7 +38,10 @@ export async function DELETE(request: Request) {
   if (!sameOrigin(request)) return Response.json({ error: "Nguồn yêu cầu không hợp lệ." }, { status: 403, headers: privateHeaders });
   try {
     const cookie = await endAdminSession(request);
-    return Response.json({ ok: true }, { headers: { ...privateHeaders, "Set-Cookie": cookie } });
+    const headers = new Headers(privateHeaders);
+    headers.append("Set-Cookie", cookie);
+    if (pushInstallationSecret(request)) headers.append("Set-Cookie", pushInstallationCookie(request, "", 0));
+    return Response.json({ ok: true }, { headers });
   } catch {
     return clearError();
   }
