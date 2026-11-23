@@ -1,0 +1,74 @@
+name: HOAN Admin iPhone
+
+on:
+  workflow_dispatch:
+    inputs:
+      admin_origin:
+        description: HTTPS origin of the admin server
+        required: false
+        type: string
+  push:
+    paths:
+      - ios/**
+      - .github/workflows/ios.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hoan-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Build IPA
+        env:
+          HOAN_ADMIN_ORIGIN: ${{ inputs.admin_origin }}
+        run: bash ios/build-ipa.sh
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: HOAN-Admin-iPhone
+          path: outputs/hoan-admin-app/ios/HOAN-Admin-iPhone.ipa
+          if-no-files-found: error
+
+      - name: Prepare local test server
+        run: |
+          npm ci --include=dev
+          npm run db:migrate:local
+
+      - name: Check two iPhone sizes
+        run: |
+          mkdir -p outputs/hoan-admin-app/ios
+          node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort > outputs/hoan-admin-app/ios/test-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          for attempt in {1..60}; do
+            status=$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:5173/api/admin-session || true)
+            if [[ "$status" == 401 ]]; then break; fi
+            sleep 1
+          done
+          if [[ "$status" != 401 ]]; then
+            tail -n 50 outputs/hoan-admin-app/ios/test-server.log
+            exit 1
+          fi
+          bash ios/check-simulator.sh
+
+      - name: Upload Simulator results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: iPhone-Simulator
+          path: |
+            outputs/hoan-admin-app/ios/simulator/
+            outputs/hoan-admin-app/ios/test-server.log
+          if-no-files-found: ignore

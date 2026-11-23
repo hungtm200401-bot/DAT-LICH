@@ -61,6 +61,10 @@ npm.cmd run dev
 - `drizzle/`: migration cơ sở dữ liệu.
 - `.openai/hosting.json`: cấu hình triển khai Sites và D1.
 
+## Ứng dụng quản trị cho iPhone
+
+Mở dự án Xcode trong thư mục `ios/`. Cách xuất IPA và kiểm tra trên các khổ iPhone có trong [hướng dẫn iOS](ios/README.md).
+
 ## Địa chỉ đặt lịch
 
 Trang đặt lịch chỉ có **Dùng vị trí hiện tại** và bốn trường địa chỉ cũ, không
