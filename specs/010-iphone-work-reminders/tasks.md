@@ -4,7 +4,7 @@
 
 - [x] T001 [US1] Tính lịch nhắc từ lịch đã xác nhận trong `lib/work-reminders.ts` và `app/api/data/route.ts`.
 - [x] T002 [US1] Lên lịch và cập nhật thông báo iPhone trong `ios/HoanAdmin`.
-- [ ] T003 [US1] Kiểm tra cấp quyền và lịch nhắc với Simulator.
+- [x] T003 [US1] Kiểm tra lịch nhắc với quyền thông báo tạm thời trên iPhone SE và iPhone 16 Pro Max Simulator.
 
 ## US2
 
@@ -14,4 +14,4 @@
 
 ## Phát hành
 
-- [ ] T007 Cập nhật Worker đang dùng và xuất IPA ở `ios/build-ipa.sh`.
+- [x] T007 Cập nhật Worker đang dùng và xuất IPA ở `ios/build-ipa.sh`.
