@@ -8,7 +8,7 @@ Trong mục Lịch hẹn, dùng **Lưu trữ** để giữ lịch và chi tiết
 
 ## Sao lưu và kiểm tra trên máy
 
-Chạy từ thư mục dự án con `HOAN_Makeup_Web_Admin`.
+Chạy từ thư mục gốc dự án, nơi có `package.json`.
 
 ```powershell
 npm.cmd run db:backup:local

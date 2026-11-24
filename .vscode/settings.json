@@ -10,6 +10,17 @@
     "text-wrap",
     "print-color-adjust"
   ],
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/.next": true,
+    "**/.vinext": true,
+    "**/.sites-runtime": true,
+    "**/.wrangler": true,
+    "**/dist": true,
+    "**/outputs": true,
+    "**/*.tsbuildinfo": true,
+    "**/next-env.d.ts": true
+  },
   "files.watcherExclude": {
     "**/.git/objects/**": true,
     "**/node_modules/**": true,

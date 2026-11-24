@@ -1,78 +1,50 @@
-# HOÀN Makeup Artist — Website đặt lịch & quản trị
+# HOÀN Makeup — Đặt lịch và quản trị
 
-Project full-stack gồm website giới thiệu/đặt lịch và hệ thống quản trị vận hành theo phong cách luxury tối giản. Giao diện nền trắng, typography Didone + Inter, màu nhấn đỏ rượu `#7A1832`.
+Một dự án gồm website đặt lịch, API quản trị, dữ liệu D1 và ứng dụng iPhone. Mở trực tiếp thư mục `DAT-LICH-main` có file `package.json`; không còn thư mục dự án lồng bên trong.
 
-## Chức năng chính
+## Chạy trên Windows
 
-- Quy trình đặt lịch 6 bước: dịch vụ, thời gian, địa điểm, thông tin, đặt cọc và xác nhận.
-- Lịch hẹn được lưu vào Cloudflare D1, không dùng dữ liệu khách giả hoặc `localStorage` làm nguồn dữ liệu.
-- Khách hàng được tạo/cập nhật tự động khi có lịch mới.
-- Quản trị lịch hẹn, trạng thái, dịch vụ, khách hàng, tiền cọc, lịch làm việc, nội dung website và báo cáo.
-- Khung giờ khách đặt được kiểm tra trùng và phản ánh ngay trong trang “Lịch làm việc”.
-- Thống kê tổng quan, doanh thu và tỷ lệ dịch vụ được tính trực tiếp từ lịch thật.
+Cần Node.js từ 22.13. Mở `CHAY_DU_AN.bat`, hoặc chạy trong thư mục gốc:
 
-## Quy trình phát triển với Spec Kit
-
-Repo đã có skill Spec Kit cho Codex và nguyên tắc phát triển trong `AGENTS.md`.
-Các file này đi cùng code qua Git. Máy Windows muốn có công cụ dùng chung chỉ
-cần chạy `CAI_SPEC_KIT.bat` một lần; sau đó dùng `speckit-project "D:\Projects\DuAnKhac"`
-để áp dụng cho dự án khác. Xem [hướng dẫn Spec Kit](docs/SPEC_KIT.md).
-
-## Chạy trên máy tính
-
-Yêu cầu Node.js `>=22.13.0`.
-
-Mở terminal tại thư mục dự án, nơi có `package.json`. Lần đầu sau khi tải mã nguồn, cài thư viện và khởi tạo cơ sở dữ liệu local:
-
-```bash
-npm ci --include=dev
-npm run db:migrate:local
-```
-
-Sau đó chạy website (các lần sau chỉ cần lệnh này):
-
-```bash
-npm run dev
-```
-
-`npm run dev` khởi động Vite hoặc hiển thị địa chỉ nếu máy chủ HOÀN trong cùng thư mục đang chạy. Cài thư viện theo bước trên trước lần chạy đầu tiên. Trên Windows cũng có thể mở `CHAY_DU_AN.bat` để cài thư viện, khởi tạo cơ sở dữ liệu local và chạy website.
-
-Mở địa chỉ Vite hiển thị trong terminal, thường là `http://localhost:5173/`. Website dùng hash route; trang quản trị tại `/#/admin`, lịch làm việc tại `/#/admin/schedule`.
-
-Quản trị yêu cầu khóa thật ở cả localhost và LAN. Khởi tạo một lần bằng
-`node scripts/admin-key.mjs --init`, mở file `.dev.vars` trên máy để lấy giá trị
-`ADMIN_TOKEN`, khởi động lại dev rồi nhập khóa tại màn Đăng nhập quản trị.
-Trình duyệt nhận phiên có hạn 8 giờ. Bản local dùng loopback, bản online cần HTTPS.
-Giữ `.dev.vars` trên máy và đặt `ADMIN_TOKEN` online bằng secret của nền tảng.
-Xem [bảo vệ, sao lưu và khôi phục dữ liệu](docs/BAO_VE_DU_LIEU.md).
-
-Nếu PowerShell báo lỗi `npm.ps1 cannot be loaded`, dùng `npm.cmd` thay cho `npm` trong các lệnh trên, hoặc mở Command Prompt:
-
-```bash
+```powershell
+npm.cmd ci --include=dev
+npm.cmd run db:migrate:local
+node scripts/admin-key.mjs --init
 npm.cmd run dev
 ```
 
-## Cấu trúc quan trọng
+Các lần sau chỉ cần `npm.cmd run dev`. Website: `http://127.0.0.1:5173/`; quản trị: `http://127.0.0.1:5173/#/admin`. Khóa quản trị nằm trong `.dev.vars` trên máy. [Hướng dẫn sử dụng](docs/USER_GUIDE.md).
 
-- `public/app.js`: toàn bộ giao diện và tương tác website/quản trị.
-- `public/styles.css`: hệ thống thiết kế responsive.
-- `app/api/data/route.ts`: API dữ liệu thật.
-- `db/schema.ts`: schema D1/Drizzle.
-- `drizzle/`: migration cơ sở dữ liệu.
-- `.openai/hosting.json`: cấu hình triển khai Sites và D1.
+## Build và lấy IPA mới
 
-## Ứng dụng quản trị cho iPhone
+Commit và push nhánh cần build lên GitHub, rồi chạy:
 
-Mở dự án Xcode trong thư mục `ios/`. Cách xuất IPA và kiểm tra trên các khổ iPhone có trong [hướng dẫn iOS](ios/README.md).
+```powershell
+npm.cmd run ipa:build
+```
 
-## Địa chỉ đặt lịch
+Lệnh dùng đăng nhập GitHub đã lưu trong Git Credential Manager (hoặc `GH_TOKEN` trong môi trường), chạy workflow trên macOS, chờ build/Simulator đạt và tải IPA vào `IPA/`. Manifest kèm file xác minh commit, phiên bản/build và SHA-256. Bản cũ nằm trong `IPA/archive/`.
 
-Trang đặt lịch chỉ có **Dùng vị trí hiện tại** và bốn trường địa chỉ cũ, không
-hiển thị hoặc tải bản đồ. Khách có thể nhập hoàn toàn thủ công mà không cấp quyền GPS.
-GPS chỉ gợi ý địa chỉ khi dữ liệu đủ tin cậy; **Tiếp tục** xác nhận địa chỉ hiện tại.
-Sửa tỉnh/phường/đường sẽ hủy tọa độ cũ. Bản đồ quản trị vẫn giữ nguyên.
-Xem [hướng dẫn địa chỉ và GPS](docs/BOOKING_ADDRESS.md).
+Trên Mac có Xcode: `bash ios/build-ipa.sh`. Để nhận thông báo APNs khi đóng app, cần bản ký có quyền Push và cấu hình máy chủ. [Hướng dẫn iPhone](ios/README.md) · [Cấu hình APNs](docs/NATIVE_PUSH.md).
 
-## Lưu ý thanh toán
+## Cấu trúc
 
-Website ghi nhận yêu cầu đặt lịch và trạng thái chờ đối soát. Tiền cọc chỉ chuyển sang “Đã nhận” khi quản trị viên ghi nhận giao dịch thật. Muốn tự động xác minh VietQR/MoMo cần bổ sung webhook từ nhà cung cấp thanh toán.
+- `app/`, `public/`: trang web, giao diện khách/quản trị và API.
+- `lib/`, `db/`, `drizzle/`, `worker/`: nghiệp vụ, dữ liệu, migration và Worker.
+- `components/`, `hooks/`: các thành phần giao diện dùng chung.
+- `ios/`: mã nguồn iPhone và công cụ build Xcode.
+- `scripts/`, `tests/`, `build/`: công cụ vận hành, kiểm thử và tích hợp build.
+- `docs/`, `specs/`: hướng dẫn, thiết kế đã duyệt và đặc tả tính năng.
+- `IPA/`: các bản cài iPhone và thông tin kiểm chứng.
+
+[Xem cấu trúc và dữ liệu local](docs/PROJECT_STRUCTURE.md). Công cụ phụ Windows nằm trong `scripts/windows/`. Quy trình Codex theo `AGENTS.md`; [Spec Kit](docs/SPEC_KIT.md).
+
+## Kiểm tra
+
+```powershell
+npm.cmd test
+npm.cmd run verify:native-push
+node scripts/verify-admin-web-push.mjs
+```
+
+Lịch và giao dịch dùng D1; tiền cọc chỉ ghi nhận sau khi đối soát giao dịch thật. [Bảo vệ và sao lưu dữ liệu](docs/BAO_VE_DU_LIEU.md).

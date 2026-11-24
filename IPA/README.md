@@ -1,12 +1,18 @@
-# Các bản cài IPA
+# Bản cài iPhone HOÀN
 
-Các script build iPhone xuất file vào thư mục này, đặt tên theo phiên bản và build để giữ được các bản trước.
+File IPA mới nhất và manifest nằm ngay trong thư mục này. `archive/` giữ các phiên bản HOÀN trước đó.
 
-- `HOAN-Admin-iPhone-<version>-build<build>.ipa`: gói được build bởi Xcode, cần ký lại trước khi cài lên iPhone.
-- `HOAN-Admin-iPhone-<version>-build<build>-<environment>-signed.ipa`: gói đã ký bằng tài khoản Apple có quyền Push; script kiểm tra entitlement và môi trường trước khi xuất.
+- `HOAN-Admin-iPhone-<version>-build<build>.ipa`: build Xcode dùng chữ ký kiểm tra, cần ký lại để cài.
+- File cùng tên đuôi `.json`: commit, phiên bản/build, SHA-256, máy chủ và loại chữ ký.
+- `LATEST.json`: thông tin bản vừa lấy thành công từ GitHub Actions.
+- `*-<environment>-signed.ipa`: bản đã xuất với chữ ký Apple có quyền APNs, khi đã cung cấp tài khoản phù hợp.
 
-Build trên Mac: `bash ios/build-ipa.sh`. Build có chữ ký: `bash ios/build-ipa.sh --signed`, xem [cấu hình APNs](../docs/NATIVE_PUSH.md).
+## Lấy bản mới trên Windows
 
-GitHub Actions lưu artifact **HOAN-Admin-iPhone** từ `IPA/*.ipa`. Giải nén artifact vào thư mục này. Các file IPA, ZIP, danh sách nguồn và bản kiểm tra trên máy được bỏ qua trong Git; chỉ tài liệu này được lưu cùng mã nguồn.
+Commit/push mã cần build rồi chạy `npm.cmd run ipa:build` tại thư mục gốc. Công cụ dùng GitHub Actions trên macOS, chờ build/Simulator thành công và xác minh artifact đúng commit trước khi lưu vào đây. Đăng nhập GitHub được đọc từ Git Credential Manager hoặc biến môi trường `GH_TOKEN`; không ghi token vào file.
 
-Những IPA phiên bản cũ được gom từ máy giữ nguyên nội dung. Không đổi tên bản 1.2 thành 1.3 để giả làm bản mới; cần build lại mã nguồn 1.3 bằng Xcode.
+## Build trên Mac
+
+`bash ios/build-ipa.sh` xuất IPA thử. `bash ios/build-ipa.sh --signed` xuất bản có chữ ký sau khi cấu hình Apple Developer; xem [APNs](../docs/NATIVE_PUSH.md). Bản ký Apple ID miễn phí dùng để thử giao diện, không cấp quyền Push Notifications.
+
+IPA và dữ liệu build không được đưa lên Git. Chỉ tài liệu này thuộc mã nguồn.

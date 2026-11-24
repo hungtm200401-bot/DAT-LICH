@@ -24,6 +24,8 @@
     <string>$(HOAN_ADMIN_ORIGIN)</string>
     <key>HoanPushEnvironment</key>
     <string>$(HOAN_APNS_ENVIRONMENT)</string>
+    <key>HoanBuildCommit</key>
+    <string>$(HOAN_BUILD_COMMIT)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>NSCameraUsageDescription</key>

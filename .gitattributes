@@ -1,3 +1,9 @@
 # Preserve upstream Spec Kit file hashes across Windows and Unix checkouts.
 .agents/skills/speckit-*/SKILL.md text eol=lf
 .specify/** text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.swift text eol=lf
+*.xcconfig text eol=lf
+*.yml text eol=lf
+*.bat text eol=crlf

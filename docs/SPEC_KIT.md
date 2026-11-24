@@ -20,7 +20,7 @@ script PowerShell cần Windows PowerShell/PowerShell tương thích; repo hiệ
 buộc cài CLI lại chỉ để đọc hướng dẫn, tạo spec/plan/tasks và triển khai.
 Các lệnh quản lý integration/extension/workflow của `specify` vẫn cần CLI.
 
-Nếu muốn có CLI và lệnh dùng chung trên máy Windows mới, mở `CAI_SPEC_KIT.bat`
+Nếu muốn có CLI và lệnh dùng chung trên máy Windows mới, mở `scripts/windows/CAI_SPEC_KIT.bat`
 một lần, hoặc chạy từ thư mục gốc repo:
 
 ```powershell

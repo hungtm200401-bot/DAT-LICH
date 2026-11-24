@@ -6,8 +6,8 @@ echo    HOAN MAKEUP - CAP NHAT HE THONG LEN CLOUD CHAY 24/24
 echo =====================================================================
 echo.
 echo [1] Dang dong goi du an (Build Next/Vite)...
-cd /d "%~dp0"
-call npx vinext build
+cd /d "%~dp0..\.."
+call npm.cmd run build
 if errorlevel 1 (
     echo [Loi] Build that bai, vui long kiem tra code.
     pause
@@ -23,7 +23,7 @@ if errorlevel 1 (
 )
 echo.
 echo =====================================================================
-echo    DA CAP NHAT THANH CONG 100% LEN CLOUD!
+echo    DA TRIEN KHAI BAN BUILD LEN CLOUDFLARE.
 echo    Link website 24/24: https://hoan-makeup-artist.hoan-makeup.workers.dev/
 echo =====================================================================
 echo.

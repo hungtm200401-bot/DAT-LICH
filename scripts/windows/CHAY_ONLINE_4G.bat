@@ -14,6 +14,6 @@ echo - Dien thoai bat ky (dung 4G/5G hoac Wifi khac) co the truy cap ngay!
 echo.
 echo =====================================================================
 echo.
-cd /d "%~dp0"
+cd /d "%~dp0..\.."
 cloudflared.exe tunnel --url http://127.0.0.1:5173
 pause

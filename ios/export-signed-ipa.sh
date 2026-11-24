@@ -12,6 +12,7 @@ fi
 method="${HOAN_EXPORT_METHOD:-release-testing}"
 [[ "$method" == debugging || "$method" == release-testing || "$method" == app-store-connect ]]
 ios_root="$(cd "$(dirname "$0")" && pwd)"
+source_commit="$(git -C "$ios_root/.." rev-parse HEAD 2>/dev/null || printf 'unknown')"
 output_dir="$ios_root/../IPA"
 mkdir -p "$output_dir"
 build_dir="$(mktemp -d "$output_dir/.archive.XXXXXXXX")"
@@ -22,6 +23,7 @@ build_args=(
   -destination 'generic/platform=iOS' -archivePath "$build_dir/HoanAdmin.xcarchive"
   -allowProvisioningUpdates "DEVELOPMENT_TEAM=$HOAN_DEVELOPMENT_TEAM"
   "HOAN_APNS_ENVIRONMENT=$HOAN_APNS_ENVIRONMENT" CODE_SIGNING_ALLOWED=YES
+  "HOAN_BUILD_COMMIT=$source_commit"
 )
 if [[ -n "${HOAN_ADMIN_ORIGIN:-}" ]]; then
   [[ "$HOAN_ADMIN_ORIGIN" =~ ^https://[[:alnum:].-]+(:[0-9]+)?/?$ ]]
@@ -65,4 +67,5 @@ if [[ "$actual_environment" != "$HOAN_APNS_ENVIRONMENT" || "$actual_origin" != "
 fi
 signed_output="$output_dir/HOAN-Admin-iPhone-$version-build$build-$actual_environment-signed.ipa"
 cp "$ipa" "$signed_output"
+python3 "$ios_root/write-build-manifest.py" "$signed_output" "$app" "$source_commit" signed
 printf 'IPA có quyền APNs (%s): %s\n' "$actual_environment" "$signed_output"

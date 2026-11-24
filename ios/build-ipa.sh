@@ -11,6 +11,7 @@ if [[ "$(uname -s)" != Darwin ]] || ! command -v xcodebuild >/dev/null; then
 fi
 
 ios_root="$(cd "$(dirname "$0")" && pwd)"
+source_commit="$(git -C "$ios_root/.." rev-parse HEAD 2>/dev/null || printf 'unknown')"
 version="$(awk '$1 == "MARKETING_VERSION" {gsub("\r", "", $3); print $3}' "$ios_root/HoanAdmin.xcconfig")"
 build="$(awk '$1 == "CURRENT_PROJECT_VERSION" {gsub("\r", "", $3); print $3}' "$ios_root/HoanAdmin.xcconfig")"
 [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ && "$build" =~ ^[0-9]+$ ]]
@@ -26,6 +27,7 @@ build_args=(
   -project "$ios_root/HoanAdmin.xcodeproj" -scheme HoanAdmin
   -configuration Release -sdk iphoneos -destination 'generic/platform=iOS'
   -derivedDataPath "$build_dir/DerivedData" CODE_SIGNING_ALLOWED=NO
+  "HOAN_BUILD_COMMIT=$source_commit"
 )
 if [[ -n "${HOAN_ADMIN_ORIGIN:-}" ]]; then
   if [[ ! "$HOAN_ADMIN_ORIGIN" =~ ^https://[[:alnum:].-]+(:[0-9]+)?/?$ ]]; then
@@ -52,4 +54,5 @@ codesign --force --sign - --timestamp=none "$staged_app"
 codesign --verify --strict "$staged_app"
 (cd "$build_dir" && /usr/bin/zip -qry "$build_dir/HOAN-Admin-iPhone.ipa" Payload)
 mv -f "$build_dir/HOAN-Admin-iPhone.ipa" "$output"
+python3 "$ios_root/write-build-manifest.py" "$output" "$staged_app" "$source_commit" ad-hoc
 printf 'IPA đã sẵn sàng để ký và cài thử tại %s\n' "$output"

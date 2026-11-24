@@ -3,6 +3,7 @@ CODE_SIGN_STYLE = Automatic
 CURRENT_PROJECT_VERSION = 4
 CODE_SIGN_ENTITLEMENTS = HoanAdmin/HoanAdmin.entitlements
 HOAN_APNS_ENVIRONMENT = production
+HOAN_BUILD_COMMIT = development
 GENERATE_INFOPLIST_FILE = NO
 HOAN_ADMIN_ORIGIN = https:/$()/hoan-makeup-artist.hoan-makeup.workers.dev
 INFOPLIST_FILE = HoanAdmin/Info.plist
