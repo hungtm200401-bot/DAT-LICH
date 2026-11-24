@@ -60,3 +60,4 @@ if (!scheduleSchema[0]?.results?.some(column => column.name === 'end_time')) {
 execute(['--file', 'drizzle/0009_booking_sms_verification.sql']);
 execute(['--file', 'drizzle/0010_booking_google_recovery.sql']);
 execute(['--file', 'drizzle/0011_admin_web_push.sql']);
+execute(['--file', 'drizzle/0012_admin_apns.sql']);

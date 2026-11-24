@@ -2,6 +2,7 @@ import { limitSensitiveRequest, readBoundedObject } from "../../../lib/data-guar
 import { adminTransport, endAdminSession, privateHeaders, sameOrigin, siteAdmin, startAdminSession } from "../../../lib/site-admin";
 import { formError } from "../../../lib/form-errors";
 import { pushInstallationCookie, pushInstallationSecret } from "../../../lib/admin-push-installation";
+import { nativeInstallationCookie, nativeInstallationSecret } from '../../../lib/native-push-installation';
 
 const clearError = () => Response.json({ error: "Không thể xác minh phiên quản trị lúc này." }, { status: 503, headers: privateHeaders });
 
@@ -41,6 +42,7 @@ export async function DELETE(request: Request) {
     const headers = new Headers(privateHeaders);
     headers.append("Set-Cookie", cookie);
     if (pushInstallationSecret(request)) headers.append("Set-Cookie", pushInstallationCookie(request, "", 0));
+    if (nativeInstallationSecret(request)) headers.append('Set-Cookie', nativeInstallationCookie(request, '', 0));
     return Response.json({ ok: true }, { headers });
   } catch {
     return clearError();

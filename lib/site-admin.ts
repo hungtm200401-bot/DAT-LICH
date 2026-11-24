@@ -1,6 +1,7 @@
 import { matchesAdminKey, sameOrigin } from './admin-authorization.mjs';
 import { keyedHash, protectionSettings } from './data-guards';
 import { pushInstallationId, pushInstallationSecret } from './admin-push-installation';
+import { nativeInstallationSecret } from './native-push-installation';
 export { sameOrigin } from './admin-authorization.mjs';
 
 const sessionSeconds = 8 * 60 * 60;
@@ -65,10 +66,13 @@ export async function endAdminSession(request: Request) {
   if (!adminTransport(request) || !sameOrigin(request)) return sessionCookie(request, "", 0);
   const hash = await adminSessionHash(request);
   const installation = await pushInstallationId(pushInstallationSecret(request));
+  const nativeInstallation = await pushInstallationId(nativeInstallationSecret(request));
   const db = protectionSettings.DB;
   const writes = [];
   if (hash) writes.push(db.prepare("DELETE FROM admin_sessions WHERE token_hash = ?").bind(hash));
+  if (hash) writes.push(db.prepare('DELETE FROM admin_apns_installations WHERE session_hash = ?').bind(hash));
   if (installation) writes.push(db.prepare("DELETE FROM admin_push_subscriptions WHERE id = ?").bind(installation));
+  if (nativeInstallation) writes.push(db.prepare('DELETE FROM admin_apns_installations WHERE id = ?').bind(nativeInstallation));
   if (writes.length) await db.batch(writes);
   return sessionCookie(request, "", 0);
 }

@@ -4,6 +4,8 @@
 
 App có **Lịch làm**, **Duyệt lịch**, **Duyệt cọc** và **Khách**. Bấm **Bật nhắc lịch** và cấp quyền thông báo trên iPhone. Lịch đã xác nhận và đồng bộ được nhắc trước 24 giờ theo giờ Việt Nam. Khi lịch đổi hoặc bị hủy trên web, app cập nhật nhắc ở lần đồng bộ kế tiếp.
 
+Bản 1.3 bổ sung **Bật báo lịch mới**, **Gửi thử** và **Tắt báo lịch mới** trực tiếp trong IPA. Nhận thông báo lúc đóng app cần cấu hình APNs trên máy chủ và chữ ký Apple có Push Notifications. Xem [cấu hình, xuất IPA đã ký và kiểm tra](../docs/NATIVE_PUSH.md). Apple ID miễn phí qua Sideloadly vẫn dùng được app nhưng không cấp quyền APNs.
+
 ## Build IPA
 
 Mở `HoanAdmin.xcodeproj` bằng Xcode trên Mac hoặc chạy lệnh ở thư mục gốc của dự án.
@@ -12,7 +14,7 @@ Mở `HoanAdmin.xcodeproj` bằng Xcode trên Mac hoặc chạy lệnh ở thư 
 bash ios/build-ipa.sh
 ```
 
-Tệp xuất nằm tại `outputs/hoan-admin-app/ios/HOAN-Admin-iPhone.ipa`. GitHub Actions lưu tệp trong artifact **HOAN-Admin-iPhone**. Tệp đóng gói sử dụng chữ ký kiểm tra của macOS và cần ký bằng thông tin Apple phù hợp để cài trên iPhone thật.
+Tệp xuất nằm tại `IPA/HOAN-Admin-iPhone-1.3-build4.ipa`, tên tự lấy từ phiên bản/build trong cấu hình. Tất cả bản cài được giữ chung tại `IPA/`. GitHub Actions lưu tệp trong artifact **HOAN-Admin-iPhone** từ `IPA/*.ipa`. Tệp đóng gói sử dụng chữ ký kiểm tra của macOS và cần ký bằng thông tin Apple phù hợp để cài trên iPhone thật.
 
 Trên Xcode, chọn Team ở **Signing & Capabilities** và chạy thẳng trên iPhone đã kết nối để thử. Để xuất bản cài đã ký cho thiết bị đăng ký, chọn **Product → Archive**, rồi chọn **Distribute App → Debugging** trong Organizer. [Hướng dẫn của Apple](https://developer.apple.com/documentation/xcode/distributing-apps-to-your-development-devices)
 

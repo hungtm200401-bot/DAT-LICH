@@ -6,6 +6,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A0000000000000000000001E /* NativePushCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001D /* NativePushCoordinator.swift */; };
 		A0000000000000000000000C /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000008 /* AppDelegate.swift */; };
 		A0000000000000000000000D /* AdminServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000009 /* AdminServer.swift */; };
 		A0000000000000000000000E /* AdminViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000A /* AdminViewController.swift */; };
@@ -14,6 +15,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A0000000000000000000001D /* NativePushCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePushCoordinator.swift; sourceTree = "<group>"; };
+		A0000000000000000000001F /* HoanAdmin.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HoanAdmin.entitlements; sourceTree = "<group>"; };
 		A00000000000000000000006 /* HoanAdmin.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = HoanAdmin.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A00000000000000000000008 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -52,6 +55,8 @@
 		A00000000000000000000004 /* HoanAdmin */ = {
 			isa = PBXGroup;
 			children = (
+				A0000000000000000000001D /* NativePushCoordinator.swift */,
+				A0000000000000000000001F /* HoanAdmin.entitlements */,
 				A00000000000000000000008 /* AppDelegate.swift */,
 				A00000000000000000000009 /* AdminServer.swift */,
 				A0000000000000000000000A /* AdminViewController.swift */,
@@ -89,6 +94,11 @@
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1600;
 				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					A00000000000000000000005 = {
+						SystemCapabilities = {com.apple.Push = {enabled = 1; }; };
+					};
+				};
 			};
 			buildConfigurationList = A00000000000000000000013 /* Build configuration list for PBXProject "HoanAdmin" */;
 			compatibilityVersion = "Xcode 14.0";
@@ -117,6 +127,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A0000000000000000000001E /* NativePushCoordinator.swift in Sources */,
 				A0000000000000000000000C /* AppDelegate.swift in Sources */,
 				A0000000000000000000000D /* AdminServer.swift in Sources */,
 				A0000000000000000000000E /* AdminViewController.swift in Sources */,

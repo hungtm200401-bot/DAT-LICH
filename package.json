@@ -13,6 +13,7 @@
     "test": "npm run build && node --test tests/project.test.mjs tests/cms.test.mjs tests/location.test.mjs tests/device-position.test.mjs tests/address-details.test.mjs tests/finance.test.mjs tests/overview.test.mjs tests/maps-config.test.mjs tests/address-search.test.mjs tests/admin-location.test.mjs tests/map-tiles.test.mjs tests/public-routes.test.mjs tests/vietnam-date.test.mjs tests/security.test.mjs tests/visitor-session-codes.test.mjs",
     "test:overview": "node --test tests/overview.test.mjs",
     "verify:business-data": "node scripts/verify-business-data.mjs",
+    "verify:native-push": "node scripts/verify-admin-apns.mjs",
     "verify:booking-otp": "node scripts/verify-booking-otp.mjs",
     "verify:booking-google": "node scripts/verify-booking-google.mjs",
     "preview:booking-otp": "node scripts/verify-booking-otp.mjs --preview",

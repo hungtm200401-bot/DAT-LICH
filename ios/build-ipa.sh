@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" == --signed ]]; then
+  exec bash "$(dirname "$0")/export-signed-ipa.sh"
+fi
+
 if [[ "$(uname -s)" != Darwin ]] || ! command -v xcodebuild >/dev/null; then
   echo "Cần macOS và Xcode để build IPA." >&2
   exit 1
 fi
 
 ios_root="$(cd "$(dirname "$0")" && pwd)"
-default_output="$ios_root/../outputs/hoan-admin-app/ios/HOAN-Admin-iPhone.ipa"
+version="$(awk '$1 == "MARKETING_VERSION" {gsub("\r", "", $3); print $3}' "$ios_root/HoanAdmin.xcconfig")"
+build="$(awk '$1 == "CURRENT_PROJECT_VERSION" {gsub("\r", "", $3); print $3}' "$ios_root/HoanAdmin.xcconfig")"
+[[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ && "$build" =~ ^[0-9]+$ ]]
+default_output="$ios_root/../IPA/HOAN-Admin-iPhone-$version-build$build.ipa"
 output="${1:-$default_output}"
 mkdir -p "$(dirname "$output")"
 output_dir="$(cd "$(dirname "$output")" && pwd)"

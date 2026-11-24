@@ -9,6 +9,7 @@ export const protectionSettings = env as unknown as {
 const rateRules = {
   "admin-login": { count: 8, duration: 15 * 60 },
   "admin-push-test": { count: 4, duration: 60 },
+  "admin-native-push-test": { count: 4, duration: 60 },
   "appointment-access": { count: 18, duration: 5 * 60 },
   "appointment-create": { count: 12, duration: 10 * 60 },
   "availability": { count: 90, duration: 60 },

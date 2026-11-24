@@ -22,6 +22,8 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>HoanAdminOrigin</key>
     <string>$(HOAN_ADMIN_ORIGIN)</string>
+    <key>HoanPushEnvironment</key>
+    <string>$(HOAN_APNS_ENVIRONMENT)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>NSCameraUsageDescription</key>

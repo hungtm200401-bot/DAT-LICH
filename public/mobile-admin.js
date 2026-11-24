@@ -66,6 +66,29 @@
   const isAdminApp = () => isIPhoneApp() || isHomeScreenApp();
   if (isHomeScreenApp()) document.documentElement.classList.add('hoan-standalone');
   const reminderBridge = () => window.webkit?.messageHandlers?.hoanWorkReminders;
+  const nativePushBridge = () => window.webkit?.messageHandlers?.hoanNativePush;
+  let nativePushState = { state: 'loading', message: 'Đang kiểm tra thông báo iPhone…', busy: false };
+
+  function nativePushControls() {
+    const { state, message, busy } = nativePushState;
+    const disabled = busy || state === 'registering' ? ' disabled' : '';
+    const controls = state === 'enabled'
+      ? '<button class="ma-btn" data-ma-action="native-push-test"'+disabled+'>Gửi thử</button>' +
+        '<button class="ma-btn ghost" data-ma-action="native-push-disable"'+disabled+'>Tắt báo lịch mới</button>'
+      : '<button class="ma-btn" data-ma-action="native-push-enable"'+disabled+'>'+(state === 'denied' ? 'Mở cài đặt thông báo' : 'Bật báo lịch mới')+'</button>' +
+        (['error','denied'].includes(state) ? '<button class="ma-btn ghost" data-ma-action="native-push-disable"'+disabled+'>Tắt báo lịch mới</button>' : '');
+    return '<p class="ma-push-status" role="status">'+esc(message)+'</p>'+controls;
+  }
+
+  function setNativePushStatus(value) {
+    if (!value || typeof value.state !== 'string' || typeof value.message !== 'string') return;
+    nativePushState = { state: value.state, message: value.message, busy: value.busy === true };
+    document.querySelectorAll('[data-native-push-controls]').forEach(element => { element.innerHTML = nativePushControls(); });
+  }
+
+  function clearNativePush() {
+    if (isIPhoneApp()) nativePushBridge()?.postMessage({ action: 'logout' });
+  }
   const vietnamDay = offset => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' })
     .format(new Date(Date.now() + offset * 86400000));
   const dueReminders = () => (state().workReminders || []).filter(row => row.remindAt <= Date.now() && row.startsAt > Date.now());
@@ -86,6 +109,7 @@
 
   function syncWorkReminders(reminders) {
     if (!isIPhoneApp()) return;
+    nativePushBridge()?.postMessage({ action: reminders === null ? 'unauthenticated' : 'sync' });
     if (reminders === null) reminderBridge()?.postMessage({ action: 'clear' });
     else {
       const upcoming = reminders.filter(row => row.remindAt > Date.now()).slice(0, 60);
@@ -103,14 +127,16 @@
   }
 
   function reminderControl() {
+    const native = isIPhoneApp() && nativePushBridge()
+      ? '<div class="ma-web-push-controls" data-native-push-controls>'+nativePushControls()+'</div>' : '';
     if (!isIPhoneApp() && isHomeScreenApp()) {
       return '<div class="ma-web-push-controls" data-hoan-push-controls>' +
         (window.HoanAdminWebPush?.controls() || '') + '</div>';
     }
-    return reminderBridge() && reminderPermission !== 'granted'
+    return native + (reminderBridge() && reminderPermission !== 'granted'
       ? '<button class="ma-btn ma-reminder-opt-in" data-ma-action="enable-work-reminders">' +
         reminderButton(reminderPermission) + '</button>'
-      : '';
+      : '');
   }
 
   function quickTitle(title, action = '') {
@@ -711,6 +737,10 @@
     const el=event.target.closest('[data-ma-action]'); if(!el) return;
     const action=el.dataset.maAction; event.preventDefault();
     try {
+      if (isIPhoneApp() && action.startsWith('native-push-')) {
+        nativePushBridge()?.postMessage({ action: action.slice('native-push-'.length) });
+        return;
+      }
       if(action==='finance-record'){go('/admin/payments?q='+encodeURIComponent(el.dataset.code||''));return;}
       if (isIPhoneApp() && action === 'enable-work-reminders') {
         reminderBridge()?.postMessage({ action: 'enable' });
@@ -885,6 +915,6 @@
 
   window.HoanMobileAdmin = {
     matches:() => isForcedMobile() || matchMedia(`(max-width:${MAX_WIDTH}px)`).matches,
-    render, refresh, workspace, isIPhoneApp, isAdminApp, renderIPhone, syncWorkReminders, setReminderPermission
+    render, refresh, workspace, isIPhoneApp, isAdminApp, renderIPhone, syncWorkReminders, setReminderPermission, setNativePushStatus, clearNativePush
   };
 })();

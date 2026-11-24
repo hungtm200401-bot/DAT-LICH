@@ -11,6 +11,7 @@ final class AdminViewController: UIViewController {
                                            forMainFrameOnly: true, in: .defaultClient))
         scripts.add(StatusBarListener(owner: self), contentWorld: .defaultClient, name: "hoanStatusBar")
         scripts.add(WorkReminderListener(owner: self), contentWorld: .page, name: "hoanWorkReminders")
+        scripts.add(NativePushListener(owner: self), contentWorld: .page, name: "hoanNativePush")
         return WKWebView(frame: .zero, configuration: configuration)
     }()
     private let progress = UIActivityIndicatorView(style: .large)
@@ -34,6 +35,7 @@ final class AdminViewController: UIViewController {
         browser.translatesAutoresizingMaskIntoConstraints = false
         browser.navigationDelegate = self
         browser.uiDelegate = self
+        NativePushCoordinator.shared.attach(browser, server: server)
         browser.allowsBackForwardNavigationGestures = true
         browser.scrollView.contentInsetAdjustmentBehavior = .never
         view.addSubview(browser)
@@ -124,6 +126,19 @@ final class AdminViewController: UIViewController {
             guard let owner, message.frameInfo.isMainFrame, let url = message.frameInfo.request.url,
                   owner.server?.contains(url) == true, let dark = message.body as? Bool else { return }
             owner.updateStatusBar(darkHeader: dark)
+        }
+    }
+
+    private final class NativePushListener: NSObject, WKScriptMessageHandler {
+        weak var owner: AdminViewController?
+        init(owner: AdminViewController) { self.owner = owner }
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard let owner, message.frameInfo.isMainFrame, message.webView === owner.browser,
+                  let frameURL = message.frameInfo.request.url, owner.server?.contains(frameURL) == true,
+                  let route = owner.browser.url?.fragment?.split(separator: "?").first,
+                  route == "/admin" || route.hasPrefix("/admin/"),
+                  let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
+            NativePushCoordinator.shared.receive(action)
         }
     }
 

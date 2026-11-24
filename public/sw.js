@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hoan-makeup-admin-web-push-2';
+const CACHE_NAME = 'hoan-makeup-native-apns-1';
 const STATIC_ASSETS = [
   '/admin-security.css?v=1.2',
   '/admin-settings.js?v=1.0',
@@ -15,9 +15,9 @@ const STATIC_ASSETS = [
   '/couture.css?v=143.9',
   '/mobile-admin.css?v=1.6',
   '/scroll-enhancements.js?v=1.4',
-  '/mobile-admin.js?v=2.10',
+  '/mobile-admin.js?v=2.11',
   '/admin-web-push.js?v=1.0',
-  '/app.js?v=189.14',
+  '/app.js?v=189.15',
   '/client-bootstrap.js?v=5.23',
   '/app-version.json',
   '/maps-settings.js?v=3.0',

@@ -8,7 +8,7 @@
     // handlers to an already running legacy app. The version loader refreshes it.
     const existing = typeof document.getElementById === 'function' && document.getElementById('app');
     if (window.state && existing?.childElementCount) { window.__hoanAppBuild = 'legacy'; return; }
-    window.__hoanAppBuild = 'admin-web-push-2';
+    window.__hoanAppBuild = 'native-apns-1';
   }
 
   // Guaranteed critical schedule styles injection (bulletproof against browser CSS caching)
@@ -3777,6 +3777,7 @@
 
   async function logoutAdmin() {
     window.HoanAdminWebPush?.clearOnLogout();
+    window.HoanMobileAdmin?.clearNativePush?.();
     expireAdminView();
     try { localStorage.setItem(adminLogoutSignal, String(Date.now())); } catch { /* Browser storage can be disabled. */ }
     try {
@@ -3784,7 +3785,7 @@
       if (!response.ok) throw new Error('Chưa thu hồi được phiên ở máy chủ.');
     } catch { toast('Chưa thu hồi được phiên ở máy chủ. Hãy thử đăng xuất lại khi có kết nối.'); }
   }
-  window.HoanAdminAuth = { signIn: signInAdmin, loginHtml: adminLogin, request: api, reload: () => hydrateBackend(true) };
+  window.HoanAdminAuth = { signIn: signInAdmin, loginHtml: adminLogin, request: api, reload: () => hydrateBackend(true), isAuthorized: () => state.adminAuthorized };
   document.addEventListener('click', event => {
     const toggle = event.target.closest('[data-login-toggle]');
     if (!toggle) return;

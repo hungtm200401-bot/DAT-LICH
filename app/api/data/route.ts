@@ -14,6 +14,7 @@ import { approvedBookingPhone, bookingPhoneRequired, bookingSmsEnabled, handleBo
 import { bookingGoogleEnabled, handleBookingGoogle } from "../../../lib/booking-google";
 import { workReminders } from "../../../lib/work-reminders";
 import { pushNewBooking } from "../../../lib/admin-web-push";
+import { pushNewNativeBooking } from "../../../lib/admin-apns";
 
 const initialServices = [
   { id: "personal", name: "Trang điểm cá nhân", duration: 60, price: 450000, description: "Tươi sáng, tự nhiên và phù hợp với phong cách hằng ngày.", enabled: true, contact: false, sortOrder: 1 },
@@ -366,6 +367,9 @@ export async function POST(request: Request) {
         ]);
         waitUntil(pushNewBooking(code, notification.updatedAt).catch(() => {
           console.warn("HOAN Web Push will retry the booking notice");
+        }));
+        waitUntil(pushNewNativeBooking(code, notification.updatedAt).catch(() => {
+          console.warn('HOAN APNs will retry the booking notice');
         }));
         return Response.json({ appointment: created }, { status: 201, headers: privateHeaders });
       } catch (error) {

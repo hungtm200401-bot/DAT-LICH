@@ -18,6 +18,20 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationC
     ) {
         completionHandler([.banner, .sound])
     }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        NativePushCoordinator.shared.didRegister(deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        NativePushCoordinator.shared.didFailRegistration()
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        NativePushCoordinator.shared.openNotification(response)
+        completionHandler()
+    }
 }
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
@@ -33,5 +47,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.rootViewController = AdminViewController()
         self.window = window
         window.makeKeyAndVisible()
+        if let response = connectionOptions.notificationResponse {
+            NativePushCoordinator.shared.openNotification(response)
+        }
     }
 }

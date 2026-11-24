@@ -28,7 +28,7 @@ export default function RootLayout({
     <html lang="vi" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
-        <meta name="hoan-build" content="admin-web-push-2" />
+        <meta name="hoan-build" content="native-apns-1" />
         <script src="/client-bootstrap.js?v=5.23" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
         <meta name="apple-mobile-web-app-capable" content="yes" />

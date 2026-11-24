@@ -4,6 +4,7 @@ import handler from "vinext/server/app-router-entry";
 import { withSecurityHeaders } from "../lib/security-headers";
 import { bookingGoogleEnabled } from "../lib/booking-google";
 import { retryAdminPushAndRemind } from "../lib/admin-web-push";
+import { retryNativePush } from "../lib/admin-apns";
 
 interface Env {
   ASSETS: Fetcher;
@@ -30,7 +31,7 @@ interface ExecutionContext {
 
 const worker = {
   scheduled() {
-    return retryAdminPushAndRemind();
+    return Promise.allSettled([retryAdminPushAndRemind(), retryNativePush()]);
   },
 
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
