@@ -114,7 +114,7 @@ final class NativePushCoordinator: NSObject {
     private func publish() {
         guard authenticated, let browser = webView, let url = browser.url, server?.contains(url) == true else { return }
         browser.callAsyncJavaScript("window.HoanMobileAdmin?.setNativePushStatus?.(state)",
-            arguments: ["state": ["state": state, "message": message, "busy": busy]], in: nil, contentWorld: .page) { _ in }
+            arguments: ["state": ["state": state, "message": message, "busy": busy]], in: nil, in: .page) { _ in }
     }
 
     private func configuration() async throws -> [String: Any] {
@@ -277,7 +277,7 @@ final class NativePushCoordinator: NSObject {
                 guard current == revision else { return }
                 if (error as NSError).code == 401 {
                     authenticated = false
-                    browser.callAsyncJavaScript("await window.HoanAdminAuth?.reload?.();", arguments: [:], in: nil, contentWorld: .page) { _ in }
+                    browser.callAsyncJavaScript("await window.HoanAdminAuth?.reload?.();", arguments: [:], in: nil, in: .page) { _ in }
                 }
             }
         }
