@@ -32,6 +32,23 @@ PY
 }
 
 cleanup() {
+  result=$?
+  if [[ "$result" != 0 && -n "${id:-}" ]]; then
+    run_simctl 30 io "$id" screenshot "$output/${profile:-unknown}-failed.png" || true
+    run_simctl 45 spawn "$id" log show --last 5m --style compact \
+      --predicate 'process == "HoanAdmin" OR eventMessage CONTAINS "vn.hoanmakeup.admin"' \
+      > "$output/${profile:-unknown}-device.log" 2>&1 || true
+    python3 - "$output" "${profile:-unknown}" <<'PY'
+import pathlib
+import shutil
+import sys
+
+destination = pathlib.Path(sys.argv[1])
+for source in (pathlib.Path.home() / 'Library/Logs/DiagnosticReports').glob('HoanAdmin*'):
+    if source.is_file():
+        shutil.copy2(source, destination / (sys.argv[2] + '-' + source.name))
+PY
+  fi
   if [[ -f "$work_dir/created-devices" ]]; then
     while read -r id; do
       run_simctl 20 shutdown "$id" >/dev/null 2>&1 || true
@@ -102,10 +119,10 @@ while IFS=$'\t' read -r profile model device_type runtime; do
   id="$(run_simctl 45 create "HOAN Admin $profile $$" "$device_type" "$runtime")"
   printf '%s\n' "$id" >> "$work_dir/created-devices"
   echo "Đang kiểm tra $model ($runtime)"
-  run_simctl 210 bootstatus "$id" -b
+  run_simctl 360 bootstatus "$id" -b
   echo "Đang cài app trên $model"
-  run_simctl 150 install "$id" "$app"
-  container="$(run_simctl 30 get_app_container "$id" "$bundle_id" data)"
+  run_simctl 240 install "$id" "$app"
+  container="$(run_simctl 90 get_app_container "$id" "$bundle_id" data)"
   report="$container/Library/Caches/hoan-viewport.json"
   echo "Đang mở app trên $model"
   test_key="${HOAN_IOS_TEST_ADMIN_KEY:-}"
@@ -115,7 +132,7 @@ while IFS=$'\t' read -r profile model device_type runtime; do
     run_simctl 30 io "$id" screenshot "$output/$profile-failed.png" || true
     exit 1
   fi
-  for ((attempt=0; attempt<50; attempt++)); do
+  for ((attempt=0; attempt<120; attempt++)); do
     [[ ! -s "$report" ]] || break
     sleep 1
   done
