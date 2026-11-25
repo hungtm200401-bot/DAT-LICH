@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url';
 
 const project = new URL('../', import.meta.url);
 
+console.log('Bản phát triển LOCAL: dữ liệu riêng trên máy, không phải dữ liệu app iPhone.');
+console.log('Quản trị online cùng app: https://hoan-makeup-artist.hoan-makeup.workers.dev/#/admin');
+
 function normalizePath(path) {
   const absolute = resolve(path);
   return process.platform === 'win32' ? absolute.toLowerCase() : absolute;

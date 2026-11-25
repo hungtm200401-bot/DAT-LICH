@@ -2,9 +2,15 @@
 
 Một dự án gồm website đặt lịch, API quản trị, dữ liệu D1 và ứng dụng iPhone. Mở trực tiếp thư mục `DAT-LICH-main` có file `package.json`; không còn thư mục dự án lồng bên trong.
 
-## Chạy trên Windows
+## Dùng website và app chung dữ liệu
 
-Cần Node.js từ 22.13. Mở `CHAY_DU_AN.bat`, hoặc chạy trong thư mục gốc:
+Mở `CHAY_DU_AN.bat` để vào [quản trị online](https://hoan-makeup-artist.hoan-makeup.workers.dev/#/admin). Website khách và app iPhone cùng dùng máy chủ này, chung cơ sở dữ liệu D1 và mật khẩu quản trị online. Đặt lịch trên website online rồi mở/làm mới app để xem cùng lịch.
+
+`localhost:5173` là bản phát triển có dữ liệu và mật khẩu riêng trên máy; không tự sao chép lịch vào hệ thống online. Không dùng khóa `.dev.vars` để đăng nhập app hoặc quản trị online.
+
+## Chạy bản thử nghiệm trên Windows
+
+Cần Node.js từ 22.13. Mở `scripts/windows/CHAY_LOCAL.bat`, hoặc chạy trong thư mục gốc:
 
 ```powershell
 npm.cmd ci --include=dev

@@ -8,7 +8,7 @@ Repo Git, `package.json` và mã nguồn cùng nằm ở thư mục gốc `DAT-L
 
 ## Tài liệu và công cụ
 
-Hướng dẫn ở `docs/`, thiết kế đã duyệt ở `docs/design/`, đặc tả các tính năng ở `specs/`. Một launcher chính `CHAY_DU_AN.bat`; các công cụ Windows còn lại ở `scripts/windows/`. `AGENTS.md`, `.agents` và `.specify` chứa hướng dẫn phát triển của repo.
+Hướng dẫn ở `docs/`, thiết kế đã duyệt ở `docs/design/`, đặc tả các tính năng ở `specs/`. Launcher chính `CHAY_DU_AN.bat` mở quản trị online dùng chung dữ liệu với app iPhone. Chạy thử local qua `scripts/windows/CHAY_LOCAL.bat`; các công cụ Windows còn lại cũng ở `scripts/windows/`. `AGENTS.md`, `.agents` và `.specify` chứa hướng dẫn phát triển của repo.
 
 ## File tạo trên máy
 
