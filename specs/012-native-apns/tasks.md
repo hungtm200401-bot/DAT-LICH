@@ -25,7 +25,7 @@
 - [x] T009 Cấu hình entitlement, version và xuất IPA đã ký trong ios/HoanAdmin.xcodeproj/project.pbxproj, ios/export-signed-ipa.sh.
 - [x] T010 Ghi hướng dẫn cài đặt/triển khai trong docs/NATIVE_PUSH.md và ios/README.md.
 - [x] T011 Chạy build/core suite, APNs integration, Web Push regression; ghi kết quả thật trong specs/012-native-apns/quickstart.md.
-- [ ] T012 Build Xcode và xác minh iPhone thật bằng bản ký có Push; phụ thuộc macOS, tài khoản và credential do chủ app cung cấp.
+- [ ] T012 Xác minh iPhone thật bằng bản ký có Push; còn phụ thuộc tài khoản và credential do chủ app cung cấp. Xcode ARM64 và hai Simulator đã đạt qua CI ngày 25/11/2026, xem quickstart.md.
 
 ## Dependencies & execution
 T001 → T002 → US1 → US2 → US3 → T009–T012. Viết test trước implementation. Backend và Swift có thể được thực hiện độc lập sau hợp đồng; không có file chung khi làm song song. MVP là đăng ký/gửi thử, sau đó giao thông báo lịch mới và thu hồi. Không coi task/checklist là chứng cứ runtime.
