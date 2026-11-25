@@ -50,4 +50,6 @@ next-env.d.ts
 /scratch/
 *.tsbuildinfo
 *.exe
+__pycache__/
+*.py[cod]
 

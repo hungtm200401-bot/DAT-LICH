@@ -31,6 +31,8 @@ npm.cmd run ipa:build
 
 Lệnh dùng đăng nhập GitHub đã lưu trong Git Credential Manager (hoặc `GH_TOKEN` trong môi trường), chạy workflow trên macOS, chờ build/Simulator đạt và tải IPA vào `IPA/`. Manifest kèm file xác minh commit, phiên bản/build và SHA-256. Bản cũ nằm trong `IPA/archive/`.
 
+Có thể mở `scripts/windows/TAO_IPA.bat` để chạy cùng quy trình. `npm.cmd run ipa:check` kiểm tra nguồn và công cụ đóng gói trước khi build. [Hướng dẫn build, log và các kiểm tra bundle](docs/IPA_BUILD.md).
+
 Trên Mac có Xcode: `bash ios/build-ipa.sh`. Để nhận thông báo APNs khi đóng app, cần bản ký có quyền Push và cấu hình máy chủ. [Hướng dẫn iPhone](ios/README.md) · [Cấu hình APNs](docs/NATIVE_PUSH.md).
 
 ## Cấu trúc

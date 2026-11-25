@@ -16,6 +16,7 @@
     "verify:business-data": "node scripts/verify-business-data.mjs",
     "verify:native-push": "node scripts/verify-admin-apns.mjs",
     "ipa:build": "node scripts/build-ios-github.mjs",
+    "ipa:check": "node scripts/check-ios-build.mjs",
     "verify:booking-otp": "node scripts/verify-booking-otp.mjs",
     "verify:booking-google": "node scripts/verify-booking-google.mjs",
     "preview:booking-otp": "node scripts/verify-booking-otp.mjs --preview",

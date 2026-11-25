@@ -10,6 +10,8 @@ on:
   push:
     paths:
       - ios/**
+      - scripts/check-ios-build.mjs
+      - tests/test_ipa_bundle.py
       - .github/workflows/ios.yml
 
 permissions:
@@ -29,10 +31,21 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check iPhone build tools
+        run: node scripts/check-ios-build.mjs
+
       - name: Build IPA
         env:
           HOAN_ADMIN_ORIGIN: ${{ inputs.admin_origin }}
         run: bash ios/build-ipa.sh
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: iPhone-Build-Diagnostics
+          path: outputs/hoan-admin-app/ios/build/
+          if-no-files-found: ignore
 
       - name: Upload IPA
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

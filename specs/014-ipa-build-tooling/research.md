@@ -1,0 +1,6 @@
+# Research
+Decision: áp dụng quy trình kiểm tra trước đóng gói, build tạm, dấu nguồn, ký bên trong ra ngoài và output hoàn chỉnh từ [Husk package script](https://github.com/Leviidev/Husk/blob/29abb512d81bf8cc08babcbe7f7007cb557208ef/scripts/package_ipa.sh). Viết Python/Node riêng phù hợp HOÀN; không sao chép script hoặc runtime Husk (repo có LICENSE GPLv2).
+Rationale: HOÀN đã có mktemp + set-e, CI macOS và manifest; phần cần bổ sung là metadata/binary/ZIP kiểm chứng trước publish, source membership, ký code nhúng và log giữ sau thất bại.
+Alternatives: nhập toàn repo gây phụ thuộc QEMU/JIT không liên quan; thêm XcodeGen không cần cho target 5 Swift; grep BUILD SUCCEEDED như Husk kém trực tiếp hơn pipefail + vùng build riêng hiện có.
+Research agent review: ARM64 không đủ phân biệt Simulator, phải kiểm tra LC_BUILD_VERSION. /usr/lib/ và /System/Library là system dependencies; weak load không bắt buộc. Ký code con trước, app cuối; không ký --deep. JSON/IPA không phải một transaction atomic, consumer vẫn kiểm hash. Trước publication đối chiếu bytes sau ký trong ZIP. Nguồn Apple: [Mach-O loader](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h).
+All material unknowns resolved. Xcode/signature runtime sẽ xác minh qua CI; chưa có profile Apple có Push để kiểm tra signed export thực.

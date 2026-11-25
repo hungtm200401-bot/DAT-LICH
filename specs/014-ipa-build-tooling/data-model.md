@@ -1,0 +1,2 @@
+# Data model
+Không có D1/schema change. Bundle identity: version/build/bundleId/minimumOS/device family/platform/commit. Mach-O ARM64 device platform=2; dependency weak/system khác dependency nhúng bắt buộc. Manifest giữ hợp đồng hiện có, field file dùng basename cuối, apnsEntitlementVerified chỉ true ở signed export đã kiểm entitlement khớp. Source dirty được đánh dấu suffix -dirty. Log/validation JSON không chứa credentials. File IPA cũ giữ nguyên nếu validator/manifest thất bại trước publish; output IPA thay nguyên file, đọc cùng manifest cần so hash.

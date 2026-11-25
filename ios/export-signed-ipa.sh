@@ -13,10 +13,15 @@ method="${HOAN_EXPORT_METHOD:-release-testing}"
 [[ "$method" == debugging || "$method" == release-testing || "$method" == app-store-connect ]]
 ios_root="$(cd "$(dirname "$0")" && pwd)"
 source_commit="$(git -C "$ios_root/.." rev-parse HEAD 2>/dev/null || printf 'unknown')"
+if [[ -n "$(git -C "$ios_root/.." status --porcelain 2>/dev/null || true)" ]]; then source_commit="$source_commit-dirty"; fi
 output_dir="$ios_root/../IPA"
 mkdir -p "$output_dir"
 build_dir="$(mktemp -d "$output_dir/.archive.XXXXXXXX")"
 trap 'rm -rf -- "$build_dir"' EXIT
+log_dir="${HOAN_BUILD_LOG_DIR:-$ios_root/../outputs/hoan-admin-app/ios/build/signed}"
+mkdir -p "$log_dir"
+python3 "$ios_root/ipa_bundle.py" sources "$ios_root" > "$log_dir/source-validation.json"
+xcodebuild -version > "$log_dir/toolchain.txt"
 
 build_args=(
   -project "$ios_root/HoanAdmin.xcodeproj" -scheme HoanAdmin -configuration Release
@@ -33,7 +38,7 @@ if [[ -n "${HOAN_APP_BUNDLE_ID:-}" ]]; then
   [[ "$HOAN_APP_BUNDLE_ID" =~ ^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]]
   build_args+=("PRODUCT_BUNDLE_IDENTIFIER=$HOAN_APP_BUNDLE_ID")
 fi
-xcodebuild "${build_args[@]}" archive
+xcodebuild "${build_args[@]}" archive 2>&1 | tee "$log_dir/archive.log"
 
 cat > "$build_dir/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -47,7 +52,7 @@ cat > "$build_dir/ExportOptions.plist" <<PLIST
 </dict></plist>
 PLIST
 xcodebuild -exportArchive -archivePath "$build_dir/HoanAdmin.xcarchive" \
-  -exportOptionsPlist "$build_dir/ExportOptions.plist" -exportPath "$build_dir/export" -allowProvisioningUpdates
+  -exportOptionsPlist "$build_dir/ExportOptions.plist" -exportPath "$build_dir/export" -allowProvisioningUpdates 2>&1 | tee "$log_dir/export.log"
 ipa="$build_dir/export/HoanAdmin.ipa"
 [[ -f "$ipa" ]]
 mkdir "$build_dir/inspect"
@@ -66,6 +71,6 @@ if [[ "$actual_environment" != "$HOAN_APNS_ENVIRONMENT" || "$actual_origin" != "
   exit 1
 fi
 signed_output="$output_dir/HOAN-Admin-iPhone-$version-build$build-$actual_environment-signed.ipa"
-cp "$ipa" "$signed_output"
-python3 "$ios_root/write-build-manifest.py" "$signed_output" "$app" "$source_commit" signed
+python3 "$ios_root/ipa_bundle.py" validate "$app" --commit "$source_commit" > "$log_dir/bundle-validation.json"
+python3 "$ios_root/write-build-manifest.py" "$ipa" "$app" "$source_commit" signed --entitlements "$build_dir/entitlements.plist" --publish "$signed_output"
 printf 'IPA có quyền APNs (%s): %s\n' "$actual_environment" "$signed_output"

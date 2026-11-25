@@ -5,6 +5,7 @@ import { basename, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'fflate';
+import { checkIOSBuild } from './check-ios-build.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -12,6 +13,12 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const exists = async path => { try { return await readFile(path); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
 
 async function main() {
+  if (process.argv.includes('--help')) {
+    console.log('npm.cmd run ipa:build\nCommit và push nhánh cần build trước khi chạy.\nCông cụ kiểm tra nguồn, chờ Xcode/Simulator trên GitHub, xác minh và lưu IPA vào IPA/.\nKiểm tra riêng trên máy: npm.cmd run ipa:check (Python 3.9+).\nHướng dẫn: docs/IPA_BUILD.md');
+    return;
+  }
+  if (process.argv.length > 2) throw new Error('Tham số không hợp lệ. Dùng --help để xem hướng dẫn.');
+  checkIOSBuild({ allowMissingPython: true });
   if (git(['status', '--porcelain'])) throw new Error('Commit các thay đổi trước khi build IPA để xác định đúng mã nguồn.');
   const commit = git(['rev-parse', 'HEAD']);
   const branch = git(['branch', '--show-current']);
@@ -91,10 +98,14 @@ async function main() {
   const configuration = await readFile(resolve(root, 'ios/HoanAdmin.xcconfig'), 'utf8');
   const version = configuration.match(/^MARKETING_VERSION\s*=\s*(\S+)/m)?.[1];
   const build = configuration.match(/^CURRENT_PROJECT_VERSION\s*=\s*(\S+)/m)?.[1];
+  const expectedOrigin = configuration.match(/^HOAN_ADMIN_ORIGIN\s*=\s*(\S+)/m)?.[1].replaceAll('$()', '');
+  const expectedBundle = configuration.match(/^PRODUCT_BUNDLE_IDENTIFIER\s*=\s*(\S+)/m)?.[1];
   if (metadata.sourceCommit !== commit || metadata.version !== version || metadata.build !== build || metadata.file !== name || metadata.sha256 !== hash(files[name])) throw new Error('IPA không khớp commit, phiên bản, build hoặc SHA-256 yêu cầu.');
+  if (metadata.origin !== expectedOrigin || metadata.bundleId !== expectedBundle || metadata.signing !== 'ad-hoc' || metadata.apnsEntitlementVerified !== false) throw new Error('Máy chủ, bundle ID hoặc loại chữ ký của IPA không khớp cấu hình yêu cầu.');
   const payload = unzipSync(files[name], { filter: file => /^Payload\/HoanAdmin\.app\/(?:Info\.plist|HoanAdmin)$/.test(file.name) });
   const executable = payload['Payload/HoanAdmin.app/HoanAdmin'];
   if (!payload['Payload/HoanAdmin.app/Info.plist'] || !executable || !['cffaedfe','feedfacf','cafebabe','bebafeca'].includes(Buffer.from(executable.subarray(0, 4)).toString('hex'))) throw new Error('IPA thiếu app iPhone hoặc executable Mach-O.');
+  if (git(['rev-parse', 'HEAD']) !== commit || git(['status', '--porcelain'])) throw new Error('Mã nguồn đã thay đổi trong lúc build. IPA vẫn ở GitHub; commit/push mã mới rồi build lại để giữ đúng nguồn.');
   const outputDirectory = resolve(root, 'IPA');
   await mkdir(outputDirectory, { recursive: true });
   const destination = resolve(outputDirectory, name);

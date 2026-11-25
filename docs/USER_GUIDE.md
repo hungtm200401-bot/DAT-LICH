@@ -26,6 +26,7 @@ File IPA mới nằm ngay trong `IPA/`; bản trước nằm trong `IPA/archive/
 
 ## Công cụ phụ
 
+- `scripts/windows/TAO_IPA.bat`: build, kiểm tra và tải IPA từ GitHub vào `IPA/`.
 - `scripts/windows/CAP_NHAT_LEN_CLOUD.bat`: build và triển khai Worker bằng quyền Cloudflare đã cấu hình.
 - `scripts/windows/CHAY_LOCAL.bat`: chạy bản thử nghiệm với dữ liệu riêng trên máy.
 - `scripts/windows/CHAY_ONLINE_4G.bat`: mở tunnel cho server local khi có cloudflared.

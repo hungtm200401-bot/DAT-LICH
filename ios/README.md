@@ -8,6 +8,8 @@ Bản 1.3 bổ sung **Bật báo lịch mới**, **Gửi thử** và **Tắt bá
 
 ## Build IPA
 
+Trên Windows: mở `scripts/windows/TAO_IPA.bat` hoặc chạy `npm.cmd run ipa:build`. Kiểm tra riêng bằng `npm.cmd run ipa:check`. [Quy trình, log và nguồn tham khảo](../docs/IPA_BUILD.md).
+
 Mở `HoanAdmin.xcodeproj` bằng Xcode trên Mac hoặc chạy lệnh ở thư mục gốc của dự án.
 
 ```bash
