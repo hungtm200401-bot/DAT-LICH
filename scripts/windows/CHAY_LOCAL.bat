@@ -16,7 +16,7 @@ call node scripts\admin-key.mjs --init
 if errorlevel 1 goto error
 echo Dang khoi dong website thu nghiem...
 start "" http://127.0.0.1:5173/#/
-call npm.cmd run dev
+call npm.cmd run dev:local
 goto end
 :error
 echo Co loi xay ra. Vui long kiem tra Node.js phien ban 22.13 tro len.

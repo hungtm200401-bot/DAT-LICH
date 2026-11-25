@@ -4,9 +4,9 @@ Một dự án gồm website đặt lịch, API quản trị, dữ liệu D1 và
 
 ## Dùng website và app chung dữ liệu
 
-Mở `CHAY_DU_AN.bat` để vào [quản trị online](https://hoan-makeup-artist.hoan-makeup.workers.dev/#/admin). Website khách và app iPhone cùng dùng máy chủ này, chung cơ sở dữ liệu D1 và mật khẩu quản trị online. Đặt lịch trên website online rồi mở/làm mới app để xem cùng lịch.
+Mở `CHAY_DU_AN.bat` hoặc chạy `npm.cmd run dev` để mở giao diện tại `http://127.0.0.1:5173/`, quản trị thêm `/#/admin`. Mặc định, mọi API dữ liệu/đăng nhập/ảnh được chuyển tới [máy chủ online chung với app](https://hoan-makeup-artist.hoan-makeup.workers.dev). Dùng mật khẩu quản trị **online**; lịch mới lưu cùng D1 mà web online và IPA đang đọc.
 
-`localhost:5173` là bản phát triển có dữ liệu và mật khẩu riêng trên máy; không tự sao chép lịch vào hệ thống online. Không dùng khóa `.dev.vars` để đăng nhập app hoặc quản trị online.
+Chế độ chung cần Internet, chỉ mở trên chính máy và không tự chuyển sang dữ liệu riêng khi mạng lỗi. Các lịch local có sẵn được giữ nguyên, không tự nhập vào online. Không dùng khóa `.dev.vars` để đăng nhập chế độ chung; khóa đó dành cho bản thử nghiệm cô lập.
 
 ## Chạy bản thử nghiệm trên Windows
 
@@ -16,10 +16,10 @@ Cần Node.js từ 22.13. Mở `scripts/windows/CHAY_LOCAL.bat`, hoặc chạy t
 npm.cmd ci --include=dev
 npm.cmd run db:migrate:local
 node scripts/admin-key.mjs --init
-npm.cmd run dev
+npm.cmd run dev:local
 ```
 
-Các lần sau chỉ cần `npm.cmd run dev`. Website: `http://127.0.0.1:5173/`; quản trị: `http://127.0.0.1:5173/#/admin`. Khóa quản trị nằm trong `.dev.vars` trên máy. [Hướng dẫn sử dụng](docs/USER_GUIDE.md).
+Các lần sau dùng `npm.cmd run dev:local` để thử trên dữ liệu riêng. Khóa local nằm trong `.dev.vars`. Dừng server trước khi đổi giữa `dev` và `dev:local`; dòng trạng thái và nhãn quản trị cho biết nguồn đang dùng. Chạy Vite trực tiếp phục vụ kiểm thử vẫn mặc định local. [Hướng dẫn sử dụng](docs/USER_GUIDE.md).
 
 ## Build và lấy IPA mới
 

@@ -8,9 +8,10 @@
   "scripts": {
     "install:ci": "bash scripts/install-ci.sh",
     "dev": "node scripts/dev.mjs",
+    "dev:local": "node scripts/dev.mjs --local",
     "build": "node scripts/build-verified.mjs",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/project.test.mjs tests/cms.test.mjs tests/location.test.mjs tests/device-position.test.mjs tests/address-details.test.mjs tests/finance.test.mjs tests/overview.test.mjs tests/maps-config.test.mjs tests/address-search.test.mjs tests/admin-location.test.mjs tests/map-tiles.test.mjs tests/public-routes.test.mjs tests/vietnam-date.test.mjs tests/security.test.mjs tests/visitor-session-codes.test.mjs",
+    "test": "npm run build && node --test tests/project.test.mjs tests/cms.test.mjs tests/location.test.mjs tests/device-position.test.mjs tests/address-details.test.mjs tests/finance.test.mjs tests/overview.test.mjs tests/maps-config.test.mjs tests/address-search.test.mjs tests/admin-location.test.mjs tests/map-tiles.test.mjs tests/public-routes.test.mjs tests/vietnam-date.test.mjs tests/security.test.mjs tests/visitor-session-codes.test.mjs tests/shared-online-data.test.mjs",
     "test:overview": "node --test tests/overview.test.mjs",
     "verify:business-data": "node scripts/verify-business-data.mjs",
     "verify:native-push": "node scripts/verify-admin-apns.mjs",

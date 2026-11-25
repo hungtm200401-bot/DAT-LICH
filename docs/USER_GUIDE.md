@@ -2,15 +2,17 @@
 
 ## Mở dự án
 
-Dự án nằm trong một thư mục gốc duy nhất, nơi có `package.json`. Mở `CHAY_DU_AN.bat` để dùng quản trị online chung dữ liệu với app iPhone.
+Dự án nằm trong một thư mục gốc duy nhất, nơi có `package.json`. Mở `CHAY_DU_AN.bat` hoặc chạy `npm.cmd run dev`: giao diện tại `http://127.0.0.1:5173` đọc và lưu dữ liệu trực tiếp qua máy chủ online chung với app iPhone. Quản trị tại `/#/admin` dùng mật khẩu online.
 
-Khi cần thử sửa code, chạy `npm.cmd run dev` hoặc mở `scripts/windows/CHAY_LOCAL.bat`. Lần đầu dùng máy mới: `npm.cmd ci --include=dev`, `npm.cmd run db:migrate:local`, `node scripts/admin-key.mjs --init`, rồi khởi động dev. Khóa quản trị thử nghiệm được lưu trong `.dev.vars`; khóa này chỉ dùng cho bản local. Giữ file này riêng, không đưa lên Git.
+Khi cần thử với dữ liệu riêng, chạy `npm.cmd run dev:local` hoặc mở `scripts/windows/CHAY_LOCAL.bat`. Lần đầu dùng máy mới: `npm.cmd ci --include=dev`, `npm.cmd run db:migrate:local`, `node scripts/admin-key.mjs --init`, rồi khởi động `dev:local`. Khóa quản trị thử nghiệm nằm trong `.dev.vars`; không dùng khóa này cho chế độ chung hoặc app. Giữ file này riêng, không đưa lên Git. Dừng server trước khi đổi chế độ.
 
 ## Website và dữ liệu
 
 Website dùng thật: `https://hoan-makeup-artist.hoan-makeup.workers.dev`; quản trị thêm `/#/admin`. IPA hiện tại kết nối đến đúng máy chủ này: lịch khách đặt trên web online, lịch quản trị trên máy tính và lịch trong app cùng nằm trong D1 online, dùng chung mật khẩu quản trị online. Mở hoặc làm mới app sau khi web có thay đổi.
 
-Bản thử nghiệm local: `http://127.0.0.1:5173/`; quản trị thêm `/#/admin`. Dữ liệu local nằm trong `.wrangler/`, tách biệt dữ liệu online. Đặt lịch thử ở localhost không xuất hiện trong app đang kết nối online. Chuyển dữ liệu giữa hai môi trường cần đối soát/sao lưu riêng; không ghi đè dữ liệu vận hành bằng bản thử nghiệm.
+Địa chỉ localhost có thể chạy hai chế độ: `dev` dùng dữ liệu online chung, `dev:local` dùng dữ liệu riêng trong `.wrangler/`. Xem nhãn nguồn trên trang đăng nhập/quản trị. Lịch gửi khi chạy `dev` xuất hiện khi mở/làm mới app; lịch thử khi chạy `dev:local` chỉ nằm trên máy.
+
+Chế độ chung chỉ chạy trên loopback, không mở LAN/tunnel và cần Internet. Nếu mạng ngắt lúc lưu, kiểm tra lại lịch/giao dịch trước khi gửi lại; hệ thống không tự gửi lại hoặc lưu sang local. Dữ liệu local cũ giữ nguyên trong `.wrangler/` và đã có công cụ sao lưu; cần đối soát riêng trước khi nhập vào online. Google đăng nhập, nếu đã bật, cần khai báo origin localhost trong cấu hình Google; thông báo Web Push của website vẫn dùng bản online có service worker.
 
 Trong Cài đặt, nhập liên hệ và tài khoản nhận cọc thật. Trong Dịch vụ, kiểm tra giá/thời lượng. Trong Lịch làm việc, mở/chặn ca nhận khách.
 

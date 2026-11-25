@@ -32,6 +32,13 @@
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+  let developmentDataSource = 'unknown';
+  function observeDataSource(response) {
+    const mode = response.headers?.get?.('X-Hoan-Data-Source') === 'online' ? 'online' : 'local';
+    if (developmentDataSource === mode) return;
+    developmentDataSource = mode;
+    for (const notice of document.querySelectorAll?.('.admin-local-notice') || []) notice.outerHTML = adminLocalNotice();
+  }
   const money = (value) => new Intl.NumberFormat('vi-VN').format(value) + 'đ';
   const route = (path) => { location.hash = path.startsWith('#') ? path : '#' + path; };
   const img = (name, alt = '') => `<img src="./assets/${name}" alt="${alt}" loading="eager">`;
@@ -380,6 +387,7 @@
     const options = { cache: 'no-store', credentials: admin ? 'same-origin' : 'omit' };
     if (payload) Object.assign(options, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const response = await fetch(!payload && admin ? '/api/data?admin=1' : '/api/data', options);
+    observeDataSource(response);
     if (response.status === 401 && admin && adminPath() && generation === adminSessionGeneration && state.adminAuthorized) expireAdminView();
     const data = await response.json();
     if (!response.ok) throw serverError(response, data);
@@ -2367,6 +2375,8 @@
 
   function adminLocalNotice() {
     if (!['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) return '';
+    if (developmentDataSource === 'online') return '<p class="admin-local-notice">Dữ liệu online — dùng chung với website và app iPhone. Đăng nhập bằng mật khẩu quản trị online.</p>';
+    if (developmentDataSource === 'unknown') return '<p class="admin-local-notice">Đang kiểm tra nguồn dữ liệu…</p>';
     return '<p class="admin-local-notice">Bạn đang xem dữ liệu trên máy. <a href="https://hoan-makeup-artist.hoan-makeup.workers.dev/#/admin">Mở quản trị online dùng chung với app</a>.</p>';
   }
 
@@ -3758,6 +3768,7 @@
       method: 'POST', cache: 'no-store', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
     });
+    observeDataSource(response);
     const result = await response.json();
     if (!response.ok) throw serverError(response, result);
     adminSessionGeneration++;

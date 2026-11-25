@@ -5,6 +5,7 @@ import { defineConfig, type UserConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json" with { type: "json" };
 import { sites } from "./build/sites-vite-plugin.ts";
 import { devServiceWorker } from "./build/dev-service-worker.ts";
+import { dataSourceMode, sharedOnlineData } from "./build/shared-online-data.mjs";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   "00000000-0000-4000-8000-000000000000";
@@ -19,9 +20,9 @@ const checkoutCacheKey = createHash("sha256")
   .update(fileURLToPath(new URL(".", import.meta.url)))
   .digest("hex").slice(0, 12);
 
-const getBindingConfig = (command: string) => ({
+const getBindingConfig = (command: string, sharedData: boolean) => ({
   main: "./worker/index.ts",
-  d1_databases: d1
+  d1_databases: d1 && !sharedData
     ? [
         {
           binding: d1,
@@ -30,7 +31,7 @@ const getBindingConfig = (command: string) => ({
         },
       ]
     : [],
-  r2_buckets: r2
+  r2_buckets: r2 && !sharedData
     ? [
         {
           binding: r2,
@@ -41,6 +42,8 @@ const getBindingConfig = (command: string) => ({
 });
 
 export default defineConfig(async ({ command }): Promise<UserConfig> => {
+  const dataMode = dataSourceMode(process.env.HOAN_DATA_SOURCE);
+  const sharedData = command === 'serve' && dataMode === 'online';
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
@@ -63,13 +66,14 @@ export default defineConfig(async ({ command }): Promise<UserConfig> => {
         : {}),
     },
     plugins: [
+      sharedOnlineData(dataMode),
       devServiceWorker(),
       vinext(),
       sites(),
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         inspectorPort: false,
-        config: { ...getBindingConfig(command), vars: { HOAN_LOCAL_DEV: command === 'serve' ? '1' : '0' } },
+        config: { ...getBindingConfig(command, sharedData), vars: { HOAN_LOCAL_DEV: command === 'serve' ? '1' : '0' } },
       }),
     ],
   };
