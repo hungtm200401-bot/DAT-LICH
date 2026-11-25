@@ -12,6 +12,11 @@ on:
         required: false
         type: boolean
         default: false
+      use_xtool:
+        description: Run isolated Xtool trial (does not certify Push delivery)
+        required: false
+        type: boolean
+        default: false
       apns_environment:
         description: Match the Apple profile and online APNs environment
         type: choice
@@ -37,7 +42,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.event_name != 'workflow_dispatch' || !inputs.sign_with_apple
+    if: github.event_name != 'workflow_dispatch' || (!inputs.sign_with_apple && !inputs.use_xtool)
     runs-on: macos-15
     timeout-minutes: 20
     steps:
@@ -72,7 +77,7 @@ jobs:
           if-no-files-found: error
 
   simulator:
-    if: github.event_name != 'workflow_dispatch' || !inputs.sign_with_apple
+    if: github.event_name != 'workflow_dispatch' || (!inputs.sign_with_apple && !inputs.use_xtool)
     runs-on: macos-15
     timeout-minutes: 20
     strategy:
@@ -132,7 +137,7 @@ jobs:
           if-no-files-found: ignore
 
   apple-signed:
-    if: github.event_name == 'workflow_dispatch' && inputs.sign_with_apple
+    if: github.event_name == 'workflow_dispatch' && inputs.sign_with_apple && !inputs.use_xtool
     uses: ./.github/workflows/ios-signed.yml
     with:
       apns_environment: ${{ inputs.apns_environment }}
@@ -142,3 +147,7 @@ jobs:
       IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
       IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
       IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+
+  xtool:
+    if: github.event_name == 'workflow_dispatch' && inputs.use_xtool
+    uses: ./.github/workflows/ios-xtool.yml

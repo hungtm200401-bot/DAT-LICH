@@ -13,6 +13,7 @@ final class NativePushCoordinator: NSObject {
     private var busy = false
     private var token: String?
     private var pendingCode: String?
+    private var pendingKind: String?
     private var openingBooking = false
     private var lastSync = Date.distantPast
     private var registrationAttempt: UUID?
@@ -249,8 +250,10 @@ final class NativePushCoordinator: NSObject {
     func openNotification(_ response: UNNotificationResponse) {
         let data = response.notification.request.content.userInfo
         guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-              data["kind"] as? String == "booking", let code = data["code"] as? String,
+              let kind = data["kind"] as? String, ["booking", "payment"].contains(kind),
+              let code = data["code"] as? String,
               code.range(of: #"^[A-Z0-9-]{3,80}$"#, options: .regularExpression) != nil else { return }
+        pendingKind = kind
         pendingCode = code
         openPendingBooking()
     }
@@ -258,6 +261,7 @@ final class NativePushCoordinator: NSObject {
     private func openPendingBooking() {
         guard authenticated, !openingBooking, let code = pendingCode, let browser = webView,
               let url = browser.url, server?.contains(url) == true else { return }
+        let kind = pendingKind ?? "booking"
         openingBooking = true
         let current = revision
         Task {
@@ -269,9 +273,15 @@ final class NativePushCoordinator: NSObject {
             do {
                 _ = try await request() // Recheck the session before consuming a cold-start/deferred route.
                 guard current == revision, authenticated, pendingCode == code else { return }
-                let opened = try await browser.callAsyncJavaScript("await window.HoanAdminAuth?.reload?.(); if (!window.HoanAdminAuth?.isAuthorized?.()) return false; location.hash='/admin/appointments/'+code; return true;",
+                let script = kind == "payment"
+                    ? "await window.HoanAdminAuth?.reload?.(); if (!window.HoanAdminAuth?.isAuthorized?.()) return false; location.hash='/admin/payments?q='+encodeURIComponent(code); return true;"
+                    : "await window.HoanAdminAuth?.reload?.(); if (!window.HoanAdminAuth?.isAuthorized?.()) return false; location.hash='/admin/appointments/'+code; return true;"
+                let opened = try await browser.callAsyncJavaScript(script,
                     arguments: ["code": code], in: nil, contentWorld: .page)
-                if opened as? Bool == true, current == revision, authenticated, pendingCode == code { pendingCode = nil }
+                if opened as? Bool == true, current == revision, authenticated, pendingCode == code {
+                    pendingCode = nil
+                    pendingKind = nil
+                }
             } catch {
                 // Keep the code across session expiry or a temporary outage; the next authenticated sync retries.
                 guard current == revision else { return }

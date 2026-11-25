@@ -1,0 +1,29 @@
+name: HOAN iPhone - Xtool Trial
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  trial:
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Run Xtool build and real signing attempt
+        run: python3 ios/xtool-trial.py
+      - name: Upload diagnostic evidence only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Xtool-Trial-Diagnostics
+          path: |
+            outputs/xtool-trial/*.log
+            outputs/xtool-trial/report.json
+            outputs/xtool-trial/HOAN-Xtool-DIAGNOSTIC-NO-PUSH.ipa
+          if-no-files-found: error
