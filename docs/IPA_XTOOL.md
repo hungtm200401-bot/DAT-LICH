@@ -17,7 +17,27 @@ Workflow trả thất bại khi chưa đạt điều kiện Push, kể cả biê
 Artifact Xtool-Trial-Diagnostics là bằng chứng thử nghiệm; không thay IPA/LATEST.json.
 
 ## Kết quả và giới hạn
-Chưa có lần chạy macOS của feature này. Kết quả sẽ cập nhật sau khi có log thực tế.
+Đã chạy thật trên macOS ngày 2026-11-25:
+- Run: https://github.com/hungtm200401-bot/DAT-LICH/actions/runs/45579801031
+- Nguồn: 3880152829b16a7201126c28cbbe889c38b2a345, cùng nội dung 5 file Swift
+  với thư mục làm việc tại thời điểm thử.
+- Xcode 26.6, Swift 6.3.3, iOS SDK 26.5.
+- ZIP Xtool khớp checksum, CLI khởi chạy được.
+- Build và đóng gói: PASS, exit 0, ứng dụng arm64 cho iPhone, giữ đúng định danh,
+  máy chủ, phiên bản 1.3/build 4 và commit trong Info.plist.
+- Ký thật bằng --sign: exit 1, báo `requires logging in with xtool auth`.
+- Không có embedded.mobileprovision; apnsEntitlementVerified=false,
+  pushReady=false và deviceReceiptVerified=false.
+- Run tổng thể FAILURE (exit 2 có chủ ý): chưa đạt điều kiện Push; không phải lỗi
+  biên dịch. Artifact chẩn đoán vẫn được tải lên thành công.
+- IPA thử: IPA/experimental/HOAN-Xtool-1.3-build4-3880152-NO-PUSH.ipa,
+  406862 bytes, SHA-256 2a5897556335ffd85ead7659c0bebb74126c9e9a548366639273ede74db46209.
+- Đã xác minh SHA-256 ZIP artifact và checksum IPA; validator bundle hiện có đạt.
+  IPA cũ giữ SHA-256 1c75143de011b0fae144392103e85bbd7b1267dc341c8adfc8a54891a334f9cd.
+- Check cục bộ: Python compile PASS, actionlint PASS; check-ios-build có 39 PASS,
+  2 skip cần macOS. Không chạy lại test nghiệp vụ vì không đổi API/DB/web.
+
+Đây chưa phải IPA đã ký Apple hoặc kiểm chứng nhận thông báo trên điện thoại.
 Repo GitHub chưa có bộ khóa Apple ở lần kiểm tra 2026-11-25.
 
 Mã Xtool beta.1 cho thấy bước tự ký:

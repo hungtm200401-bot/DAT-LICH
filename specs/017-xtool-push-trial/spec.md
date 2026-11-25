@@ -2,7 +2,7 @@
 
 **Feature Branch**: codex/xtool-push-trial
 **Created**: 2026-11-25
-**Status**: Specified; implementation pending
+**Status**: Build trial verified; Apple signing and physical-device Push acceptance pending
 **Input**: Thử build ký qua Xtool, phải nhận thông báo khi tắt hoặc vuốt bỏ app.
 
 ## User Scenarios & Testing
