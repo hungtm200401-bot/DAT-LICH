@@ -14,7 +14,7 @@
 - [x] T006 [US3] Cleanup cả lỗi/hủy job trong ios/ci_signed_build.py; nối preflight scripts/check-ios-build.mjs.
 - [x] T007 [US3] Viết docs/IPA_SIGNED_GITHUB.md và nối từ docs/IPA_BUILD.md.
 ## Verification
-- [ ] T008 Chạy unit/syntax/actionlint và job kiểm tra macOS; ghi specs/016-ios-signed-ci/quickstart.md.
+- [x] T008 Chạy unit/syntax/actionlint và job kiểm tra macOS; ghi specs/016-ios-signed-ci/quickstart.md.
 - [ ] T009 Khi có bộ ký Apple: build signed thật và thử nhận trên iPhone, ghi specs/016-ios-signed-ci/quickstart.md.
 
 ## Dependencies & Strategy

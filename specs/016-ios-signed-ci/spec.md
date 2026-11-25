@@ -1,7 +1,7 @@
 # Feature Specification: Build IPA có quyền Push trên GitHub
 **Feature Branch**: `codex/ios-signed-ci`
 **Created**: 2026-11-25
-**Status**: Tooling implemented; macOS verification pending
+**Status**: Tooling verified; Apple-signed export and iPhone acceptance pending external credentials
 **Input**: Tận dụng công cụ nguồn mở để build phù hợp HOÀN; giữ IPA, iOS 26.6.1 và mục tiêu nhận thông báo cả khi vuốt tắt app.
 
 ## User Scenarios & Testing
