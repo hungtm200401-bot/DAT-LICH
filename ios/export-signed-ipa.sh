@@ -77,7 +77,7 @@ if [[ "$actual_environment" != "$HOAN_APNS_ENVIRONMENT" || "$actual_origin" != "
 fi
 signed_output="$output_dir/HOAN-Admin-iPhone-$version-build$build-$actual_environment-signed.ipa"
 if [[ -n "$profile_uuid" ]]; then
-  codesign -d --extract-certificates "$build_dir/signature-cert" "$app" 2>/dev/null
+  codesign -d --extract-certificates="$build_dir/signature-cert" "$app" 2>/dev/null
   python3 "$ios_root/ios_signing.py" verify-export "$app" "$build_dir/entitlements.plist" \
     "$profile_uuid" "$HOAN_DEVELOPMENT_TEAM" "$HOAN_APNS_ENVIRONMENT" "$HOAN_APP_BUNDLE_ID" "$identity" "$build_dir/signature-cert0" \
     > "$log_dir/signing-validation.json"

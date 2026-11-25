@@ -204,6 +204,20 @@ class SecretTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'darwin', 'Needs real macOS security/keychain tools')
 class MacKeychainTests(unittest.TestCase):
+    def test_codesign_extracts_leaf_certificate_with_prefix(self):
+        import subprocess
+        # Read Xcode's public signature to verify the real codesign CLI syntax.
+        # This does not reuse Apple's identity to sign HOAN.
+        developer = Path(subprocess.check_output(['xcode-select', '-p']).decode().strip())
+        xcode = developer.parent.parent
+        self.assertEqual(xcode.suffix, '.app')
+        with tempfile.TemporaryDirectory(prefix='hoan-cert-test-') as folder:
+            prefix = str(Path(folder) / 'signature-cert')
+            result = subprocess.run(['codesign', '-d', '--extract-certificates=' + prefix, str(xcode)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(result.returncode, 0, 'Could not extract Xcode public signing certificate')
+            self.assertTrue(Path(prefix + '0').read_bytes().startswith(b'\x30'))
+
     def test_bad_p12_restores_search_list_and_removes_keychain(self):
         import base64
         import subprocess
