@@ -1,7 +1,7 @@
 # Feature Specification: Bộ công cụ build IPA dễ dùng
 **Feature Branch**: `codex/ipa-build-tooling`
 **Created**: 2026-11-25
-**Status**: Ready for implementation
+**Status**: Implemented and verified
 **Input**: Lấy các phần phù hợp từ cách build Husk để các lần build HOÀN sau dễ hơn.
 
 ## User Scenarios & Testing
