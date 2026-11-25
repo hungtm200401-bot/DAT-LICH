@@ -84,6 +84,7 @@ xcodebuild -project "$ios_root/HoanAdmin.xcodeproj" -scheme HoanAdmin \
 app="$work_dir/DerivedData/Build/Products/Debug-iphonesimulator/HoanAdmin.app"
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
 run_simctl 30 list devices available -j > "$work_dir/devices.json"
+run_simctl 30 list runtimes -j > "$work_dir/runtimes.json"
 sdk="$(xcrun --sdk iphonesimulator --show-sdk-version)"
 python3 - "$work_dir/devices.json" "$sdk" "$profile_filter" > "$work_dir/profiles.tsv" <<'PY'
 import json
@@ -124,9 +125,27 @@ while IFS=$'\t' read -r profile model device_type runtime; do
   run_simctl 240 install "$id" "$app"
   container="$(run_simctl 90 get_app_container "$id" "$bundle_id" data)"
   report="$container/Library/Caches/hoan-viewport.json"
+  # Xcode 16.4's iOS 18.5 runtime misplaced the Swift WebKit overlay.
+  # Use WebKit's simulator-only workaround without changing the app's iOS 16 target.
+  # https://bugs.webkit.org/show_bug.cgi?id=293831#c2
+  swift_runtime_path="$(python3 - "$work_dir/runtimes.json" "$runtime" <<'PY'
+import json
+import pathlib
+import sys
+
+with open(sys.argv[1], encoding='utf-8') as source:
+    runtime = next(value for value in json.load(source)['runtimes'] if value['identifier'] == sys.argv[2])
+if runtime['version'] == '18.5':
+    directory = pathlib.Path(runtime['bundlePath']) / 'Contents/Resources/RuntimeRoot/System/Cryptexes/OS/usr/lib/swift'
+    if not (directory / 'libswiftWebKit.dylib').is_file():
+        sys.exit('The iOS 18.5 runtime is missing its Swift WebKit library')
+    print(directory)
+PY
+)"
   echo "Đang mở app trên $model"
   test_key="${HOAN_IOS_TEST_ADMIN_KEY:-}"
   if ! SIMCTL_CHILD_HOAN_IOS_TEST_LOOPBACK=1 SIMCTL_CHILD_HOAN_IOS_TEST_ADMIN_KEY="$test_key" \
+    SIMCTL_CHILD_DYLD_FALLBACK_LIBRARY_PATH="$swift_runtime_path" \
     SIMCTL_CHILD_HOAN_IOS_TEST_WORK_REMINDER="${HOAN_IOS_TEST_WORK_REMINDER:-}" \
     run_simctl 120 launch "$id" "$bundle_id"; then
     run_simctl 30 io "$id" screenshot "$output/$profile-failed.png" || true
