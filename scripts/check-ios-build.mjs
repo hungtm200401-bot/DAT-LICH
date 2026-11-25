@@ -15,7 +15,7 @@ export function checkIOSBuild({ allowMissingPython = false } = {}) {
   }
   const options = { cwd: root, stdio: 'inherit', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } };
   execFileSync(python, ['-X', 'utf8', 'ios/ipa_bundle.py', 'sources', 'ios'], options);
-  execFileSync(python, ['-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_ipa_bundle.py'], options);
+  execFileSync(python, ['-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_ipa_*.py'], options);
   let bash = 'bash';
   if (process.platform === 'win32') {
     const gitPath = execFileSync('git', ['--exec-path'], { cwd: root, encoding: 'utf8' }).trim();

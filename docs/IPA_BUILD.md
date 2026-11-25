@@ -29,6 +29,8 @@ bash ios/build-ipa.sh IPA/HOAN-test.ipa
 
 Build trực tiếp có thay đổi chưa commit sẽ được đóng dấu nguồn với hậu tố `-dirty`; CI dùng commit đầy đủ. Build có chữ ký Apple vẫn qua `bash ios/build-ipa.sh --signed`, theo [hướng dẫn APNs](NATIVE_PUSH.md). Nhánh ký Apple giữ chữ ký do Xcode xuất, kiểm tra Team ID/môi trường/quyền Push trước khi ghi manifest.
 
+Để ký bằng bộ certificate/profile được cấp phép trên GitHub, dùng [luồng Apple Signed](IPA_SIGNED_GITHUB.md). Trong **HOAN Admin iPhone → Run workflow**, bật `sign_with_apple`. Luồng này kiểm tra profile và chữ ký thực, không chuyển sang IPA ký thử khi thiếu bộ ký.
+
 ## Các bước kiểm tra được dùng chung
 
 - `ios/ipa_bundle.py`: đối chiếu file Swift với Sources của target HoanAdmin, kiểm tra metadata không còn biến Xcode chưa mở rộng, executable trong bundle, ARM64 đúng nền tảng iPhone và các dependency bắt buộc được tham chiếu trực tiếp. Thư viện hệ thống và dependency weak được xử lý riêng.

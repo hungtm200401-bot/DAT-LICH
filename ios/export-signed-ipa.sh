@@ -26,10 +26,22 @@ xcodebuild -version > "$log_dir/toolchain.txt"
 build_args=(
   -project "$ios_root/HoanAdmin.xcodeproj" -scheme HoanAdmin -configuration Release
   -destination 'generic/platform=iOS' -archivePath "$build_dir/HoanAdmin.xcarchive"
-  -allowProvisioningUpdates "DEVELOPMENT_TEAM=$HOAN_DEVELOPMENT_TEAM"
+  "DEVELOPMENT_TEAM=$HOAN_DEVELOPMENT_TEAM"
   "HOAN_APNS_ENVIRONMENT=$HOAN_APNS_ENVIRONMENT" CODE_SIGNING_ALLOWED=YES
   "HOAN_BUILD_COMMIT=$source_commit"
 )
+profile_uuid="${HOAN_PROVISIONING_PROFILE_UUID:-}"
+identity="${HOAN_SIGNING_CERTIFICATE_SHA1:-}"
+if [[ -n "$profile_uuid" || -n "$identity" ]]; then
+  [[ "$profile_uuid" =~ ^[A-F0-9]{8}(-[A-F0-9]{4}){3}-[A-F0-9]{12}$ ]]
+  [[ "$identity" =~ ^[A-F0-9]{40}$ ]]
+  : "${HOAN_APP_BUNDLE_ID:?Manual signing needs the exact profile bundle ID.}"
+  build_args+=(CODE_SIGN_STYLE=Manual "PROVISIONING_PROFILE_SPECIFIER=$profile_uuid" "CODE_SIGN_IDENTITY=$identity")
+  export_args=()
+else
+  build_args+=(-allowProvisioningUpdates)
+  export_args=(-allowProvisioningUpdates)
+fi
 if [[ -n "${HOAN_ADMIN_ORIGIN:-}" ]]; then
   [[ "$HOAN_ADMIN_ORIGIN" =~ ^https://[[:alnum:].-]+(:[0-9]+)?/?$ ]]
   build_args+=("HOAN_ADMIN_ORIGIN=$HOAN_ADMIN_ORIGIN")
@@ -40,19 +52,12 @@ if [[ -n "${HOAN_APP_BUNDLE_ID:-}" ]]; then
 fi
 xcodebuild "${build_args[@]}" archive 2>&1 | tee "$log_dir/archive.log"
 
-cat > "$build_dir/ExportOptions.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>method</key><string>$method</string>
-<key>teamID</key><string>$HOAN_DEVELOPMENT_TEAM</string>
-<key>signingStyle</key><string>automatic</string>
-<key>destination</key><string>export</string>
-<key>manageAppVersionAndBuildNumber</key><false/>
-</dict></plist>
-PLIST
+manual_bundle=""
+[[ -z "$profile_uuid" ]] || manual_bundle="$HOAN_APP_BUNDLE_ID"
+python3 "$ios_root/ios_signing.py" export-options "$build_dir/ExportOptions.plist" "$method" \
+  "$HOAN_DEVELOPMENT_TEAM" "$profile_uuid" "$manual_bundle" "$identity"
 xcodebuild -exportArchive -archivePath "$build_dir/HoanAdmin.xcarchive" \
-  -exportOptionsPlist "$build_dir/ExportOptions.plist" -exportPath "$build_dir/export" -allowProvisioningUpdates 2>&1 | tee "$log_dir/export.log"
+  -exportOptionsPlist "$build_dir/ExportOptions.plist" -exportPath "$build_dir/export" "${export_args[@]}" 2>&1 | tee "$log_dir/export.log"
 ipa="$build_dir/export/HoanAdmin.ipa"
 [[ -f "$ipa" ]]
 mkdir "$build_dir/inspect"
@@ -71,6 +76,12 @@ if [[ "$actual_environment" != "$HOAN_APNS_ENVIRONMENT" || "$actual_origin" != "
   exit 1
 fi
 signed_output="$output_dir/HOAN-Admin-iPhone-$version-build$build-$actual_environment-signed.ipa"
+if [[ -n "$profile_uuid" ]]; then
+  codesign -d --extract-certificates "$build_dir/signature-cert" "$app" 2>/dev/null
+  python3 "$ios_root/ios_signing.py" verify-export "$app" "$build_dir/entitlements.plist" \
+    "$profile_uuid" "$HOAN_DEVELOPMENT_TEAM" "$HOAN_APNS_ENVIRONMENT" "$HOAN_APP_BUNDLE_ID" "$identity" "$build_dir/signature-cert0" \
+    > "$log_dir/signing-validation.json"
+fi
 python3 "$ios_root/ipa_bundle.py" validate "$app" --commit "$source_commit" > "$log_dir/bundle-validation.json"
 python3 "$ios_root/write-build-manifest.py" "$ipa" "$app" "$source_commit" signed --entitlements "$build_dir/entitlements.plist" --publish "$signed_output"
 printf 'IPA có quyền APNs (%s): %s\n' "$actual_environment" "$signed_output"

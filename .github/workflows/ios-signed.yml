@@ -1,0 +1,86 @@
+name: HOAN iPhone - Apple Signed
+
+on:
+  push:
+    paths:
+      - ios/ios_signing.py
+      - ios/ci_signed_build.py
+      - ios/export-signed-ipa.sh
+      - tests/test_ipa_signing.py
+      - scripts/check-ios-build.mjs
+      - .github/workflows/ios-signed.yml
+  workflow_call:
+    inputs:
+      apns_environment:
+        type: string
+        default: production
+      bundle_id:
+        type: string
+        default: vn.hoanmakeup.admin
+      admin_origin:
+        type: string
+        default: ''
+    secrets:
+      IOS_CERTIFICATE_BASE64:
+        required: false
+      IOS_CERTIFICATE_PASSWORD:
+        required: false
+      IOS_PROVISIONING_PROFILE_BASE64:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hoan-ios-signed-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate tools and keychain cleanup
+        run: node scripts/check-ios-build.mjs
+
+  signed:
+    if: github.event_name == 'workflow_dispatch'
+    needs: checks
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      HOAN_APNS_ENVIRONMENT: ${{ inputs.apns_environment }}
+      HOAN_APP_BUNDLE_ID: ${{ inputs.bundle_id }}
+      HOAN_ADMIN_ORIGIN: ${{ inputs.admin_origin }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check authorized Apple signing inputs
+        env:
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: python3 ios/ci_signed_build.py --check-secrets
+      - name: Import, validate, sign and export IPA
+        env:
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: python3 ios/ci_signed_build.py
+      - name: Remove temporary signing identity and profile
+        if: always()
+        run: python3 ios/ci_signed_build.py --cleanup
+      - name: Upload verified signed IPA only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: HOAN-Admin-iPhone-Signed
+          path: |
+            IPA/*-signed.ipa
+            IPA/*-signed.json
+          if-no-files-found: error
