@@ -29,8 +29,10 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationC
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
-        NativePushCoordinator.shared.openNotification(response)
-        completionHandler()
+        Task { @MainActor in
+            NativePushCoordinator.shared.openNotification(response)
+            completionHandler()
+        }
     }
 }
 
